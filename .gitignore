@@ -9,3 +9,4 @@ target
 .cargo
 logs/
 tools/__pycache__/**
+.threadbridge/
