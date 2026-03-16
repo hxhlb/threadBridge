@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tokio::fs;
 
 pub const THREADBRIDGE_RUNTIME_DIR: &str = ".threadbridge";
@@ -65,6 +65,12 @@ fn sync_managed_appendix(existing: &str, appendix: &str) -> String {
     format!("{}\n\n{}", existing.trim_end(), block)
 }
 
+async fn write_text_file(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, contents)
+        .await
+        .map_err(|error| anyhow!("failed to write {}: {}", path.display(), error))
+}
+
 pub async fn ensure_workspace_runtime(
     repo_root: &Path,
     seed_template_path: &Path,
@@ -91,18 +97,19 @@ pub async fn ensure_workspace_runtime(
         Ok(existing) => {
             let updated = sync_managed_appendix(&existing, &appendix);
             if updated != existing {
-                fs::write(&agents_path, updated)
-                    .await
-                    .with_context(|| format!("failed to write {}", agents_path.display()))?;
+                write_text_file(&agents_path, &updated).await?;
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::write(&agents_path, managed_appendix_block(&appendix))
-                .await
-                .with_context(|| format!("failed to write {}", agents_path.display()))?;
+            let initial_content = managed_appendix_block(&appendix);
+            write_text_file(&agents_path, &initial_content).await?;
         }
         Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", agents_path.display()));
+            return Err(anyhow!(
+                "failed to read {}: {}",
+                agents_path.display(),
+                error
+            ));
         }
     }
 
@@ -120,9 +127,8 @@ pub async fn ensure_workspace_runtime(
         ("send_telegram_media.py", "send_telegram_media"),
     ] {
         let wrapper_path = bin_dir.join(filename);
-        fs::write(&wrapper_path, build_wrapper_script(tool, repo_root))
-            .await
-            .with_context(|| format!("failed to write wrapper: {}", wrapper_path.display()))?;
+        let wrapper = build_wrapper_script(tool, repo_root);
+        write_text_file(&wrapper_path, &wrapper).await?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -216,5 +222,25 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_runtime_creates_agents_file_when_missing() {
+        let root = temp_path();
+        let workspace = root.join("workspace");
+        let template = root.join("template.md");
+        fs::create_dir_all(&workspace).await.unwrap();
+        fs::write(&template, "runtime appendix\n").await.unwrap();
+
+        ensure_workspace_runtime(Path::new("/repo"), &template, &workspace)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(workspace.join("AGENTS.md"))
+            .await
+            .unwrap();
+        assert!(content.contains(THREADBRIDGE_RUNTIME_START));
+        assert!(content.contains("runtime appendix"));
+        assert!(content.contains(THREADBRIDGE_RUNTIME_END));
     }
 }
