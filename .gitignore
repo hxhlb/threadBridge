@@ -1,0 +1,11 @@
+.env
+.env.local
+data
+coverage
+.DS_Store
+**/__pycache__/**
+*.pyc
+target
+.cargo
+logs/
+tools/__pycache__/**

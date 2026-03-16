@@ -1,0 +1,860 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use tokio::fs;
+use uuid::Uuid;
+
+use crate::image_artifacts::{ImageAnalysisArtifact, PendingImageBatch, PendingImageBatchEntry};
+
+const MAIN_WORKSPACE_ID: &str = "main-thread";
+const SESSION_BINDING_FILE_NAME: &str = "session-binding.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationScope {
+    Main,
+    Thread,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStatus {
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMetadata {
+    pub archived_at: Option<String>,
+    pub chat_id: i64,
+    pub codex_session_id: Option<String>,
+    pub created_at: String,
+    pub last_codex_turn_at: Option<String>,
+    pub last_summary_at: Option<String>,
+    pub message_thread_id: Option<i32>,
+    pub previous_message_thread_ids: Vec<i32>,
+    pub scope: ConversationScope,
+    pub session_broken: bool,
+    pub session_broken_at: Option<String>,
+    pub session_broken_reason: Option<String>,
+    pub status: ConversationStatus,
+    pub title: Option<String>,
+    pub updated_at: String,
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBindingSource {
+    CodexHomeV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBinding {
+    pub schema_version: u32,
+    pub codex_session_id: Option<String>,
+    pub source: Option<SessionBindingSource>,
+    pub session_title: Option<String>,
+    pub workspace_cwd: Option<String>,
+    pub bound_at: Option<String>,
+    pub last_verified_at: Option<String>,
+    pub session_broken: bool,
+    pub session_broken_at: Option<String>,
+    pub session_broken_reason: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogDirection {
+    User,
+    Assistant,
+    System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationLogEntry {
+    pub timestamp: String,
+    pub chat_id: i64,
+    pub codex_session_id: Option<String>,
+    pub scope: ConversationScope,
+    pub message_thread_id: Option<i32>,
+    pub direction: LogDirection,
+    pub text: String,
+    pub user_id: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversationRecord {
+    pub conversation_key: String,
+    pub folder_name: String,
+    pub folder_path: PathBuf,
+    pub log_path: PathBuf,
+    pub metadata: ConversationMetadata,
+    pub metadata_path: PathBuf,
+    pub summary_path: PathBuf,
+}
+
+impl ConversationRecord {
+    pub fn workspace_link_path(&self) -> PathBuf {
+        self.folder_path.join("workspace")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversationRepository {
+    data_root_path: PathBuf,
+}
+
+fn now_iso() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn folder_name_for(scope: &ConversationScope, workspace_id: &str) -> String {
+    match scope {
+        ConversationScope::Main => MAIN_WORKSPACE_ID.to_owned(),
+        ConversationScope::Thread => workspace_id.to_owned(),
+    }
+}
+
+fn conversation_key_for(scope: &ConversationScope, workspace_id: &str) -> String {
+    match scope {
+        ConversationScope::Main => MAIN_WORKSPACE_ID.to_owned(),
+        ConversationScope::Thread => format!("workspace:{workspace_id}"),
+    }
+}
+
+impl ConversationRepository {
+    pub async fn open(data_root_path: impl AsRef<Path>) -> Result<Self> {
+        let data_root_path = data_root_path.as_ref().to_path_buf();
+        fs::create_dir_all(&data_root_path).await?;
+        Ok(Self { data_root_path })
+    }
+
+    pub async fn get_main_thread(&self, chat_id: i64) -> Result<ConversationRecord> {
+        self.get_or_create(
+            chat_id,
+            ConversationScope::Main,
+            None,
+            None,
+            MAIN_WORKSPACE_ID.to_owned(),
+        )
+        .await
+    }
+
+    pub async fn get_thread(
+        &self,
+        chat_id: i64,
+        message_thread_id: i32,
+    ) -> Result<ConversationRecord> {
+        if let Some(record) = self
+            .find_thread_by_message_thread_id(chat_id, message_thread_id)
+            .await?
+        {
+            return Ok(record);
+        }
+        self.get_or_create(
+            chat_id,
+            ConversationScope::Thread,
+            Some(message_thread_id),
+            None,
+            Uuid::new_v4().to_string(),
+        )
+        .await
+    }
+
+    pub async fn create_thread(
+        &self,
+        chat_id: i64,
+        message_thread_id: i32,
+        title: String,
+    ) -> Result<ConversationRecord> {
+        if let Some(record) = self
+            .find_thread_by_message_thread_id(chat_id, message_thread_id)
+            .await?
+        {
+            return self
+                .update_metadata(ConversationRecord {
+                    metadata: ConversationMetadata {
+                        title: Some(title),
+                        ..record.metadata.clone()
+                    },
+                    ..record
+                })
+                .await;
+        }
+
+        self.get_or_create(
+            chat_id,
+            ConversationScope::Thread,
+            Some(message_thread_id),
+            Some(title),
+            Uuid::new_v4().to_string(),
+        )
+        .await
+    }
+
+    pub async fn append_log(
+        &self,
+        record: &ConversationRecord,
+        direction: LogDirection,
+        text: impl Into<String>,
+        user_id: Option<i64>,
+    ) -> Result<()> {
+        let entry = ConversationLogEntry {
+            timestamp: now_iso(),
+            chat_id: record.metadata.chat_id,
+            codex_session_id: record.metadata.codex_session_id.clone(),
+            scope: record.metadata.scope.clone(),
+            message_thread_id: record.metadata.message_thread_id,
+            direction,
+            text: text.into(),
+            user_id,
+        };
+        let line = format!("{}\n", serde_json::to_string(&entry)?);
+        let mut existing = String::new();
+        if let Ok(content) = fs::read_to_string(&record.log_path).await {
+            existing = content;
+        }
+        existing.push_str(&line);
+        fs::write(&record.log_path, existing).await?;
+        Ok(())
+    }
+
+    pub async fn read_pending_image_batch(
+        &self,
+        record: &ConversationRecord,
+    ) -> Result<Option<PendingImageBatch>> {
+        let path = record.folder_path.join("pending-image-batch.json");
+        if !fs::try_exists(&path).await? {
+            return Ok(None);
+        }
+        let batch = serde_json::from_str(&fs::read_to_string(&path).await?)?;
+        Ok(Some(batch))
+    }
+
+    pub async fn get_or_create_pending_image_batch(
+        &self,
+        record: &ConversationRecord,
+    ) -> Result<PendingImageBatch> {
+        if let Some(batch) = self.read_pending_image_batch(record).await? {
+            return Ok(batch);
+        }
+        let created_at = now_iso();
+        let batch = PendingImageBatch {
+            batch_id: format!(
+                "batch-{}-{}",
+                created_at.replace(['-', ':', '.'], ""),
+                &Uuid::new_v4().to_string()[..8]
+            ),
+            control_message_id: None,
+            created_at: created_at.clone(),
+            images: Vec::new(),
+            latest_caption: None,
+            updated_at: created_at,
+        };
+        self.save_pending_image_batch(record, &batch).await?;
+        Ok(batch)
+    }
+
+    pub async fn append_image_to_pending_batch(
+        &self,
+        record: &ConversationRecord,
+        batch: PendingImageBatch,
+        input: AppendPendingImageInput,
+    ) -> Result<PendingImageBatch> {
+        let batch_dir = record
+            .folder_path
+            .join("images")
+            .join("source")
+            .join(&batch.batch_id);
+        fs::create_dir_all(&batch_dir).await?;
+        let file_path = batch_dir.join(&input.file_name);
+        fs::write(&file_path, input.data).await?;
+        let entry = PendingImageBatchEntry {
+            added_at: now_iso(),
+            caption: input.caption.clone(),
+            file_name: input.file_name,
+            mime_type: input.mime_type,
+            relative_path: file_path
+                .strip_prefix(&record.folder_path)
+                .unwrap_or(&file_path)
+                .to_string_lossy()
+                .to_string(),
+            source_message_id: input.source_message_id,
+            telegram_file_id: input.telegram_file_id,
+        };
+        let updated = PendingImageBatch {
+            control_message_id: batch.control_message_id,
+            batch_id: batch.batch_id,
+            created_at: batch.created_at,
+            images: {
+                let mut images = batch.images;
+                images.push(entry);
+                images
+            },
+            latest_caption: input.caption.or(batch.latest_caption),
+            updated_at: now_iso(),
+        };
+        self.save_pending_image_batch(record, &updated).await?;
+        Ok(updated)
+    }
+
+    pub async fn set_pending_image_batch_control_message_id(
+        &self,
+        record: &ConversationRecord,
+        batch: PendingImageBatch,
+        control_message_id: i32,
+    ) -> Result<PendingImageBatch> {
+        let updated = PendingImageBatch {
+            control_message_id: Some(control_message_id),
+            updated_at: now_iso(),
+            ..batch
+        };
+        self.save_pending_image_batch(record, &updated).await?;
+        Ok(updated)
+    }
+
+    pub async fn clear_pending_image_batch(&self, record: &ConversationRecord) -> Result<()> {
+        let path = record.folder_path.join("pending-image-batch.json");
+        if fs::try_exists(&path).await? {
+            fs::remove_file(path).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn write_image_analysis(
+        &self,
+        record: &ConversationRecord,
+        artifact: &ImageAnalysisArtifact,
+    ) -> Result<()> {
+        let path = record
+            .folder_path
+            .join("images")
+            .join("analysis")
+            .join(format!("{}.json", artifact.batch_id));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(
+            path,
+            format!("{}\n", serde_json::to_string_pretty(artifact)?),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn read_recent_transcript(
+        &self,
+        record: &ConversationRecord,
+        limit: usize,
+    ) -> Result<Vec<ConversationLogEntry>> {
+        let content = match fs::read_to_string(&record.log_path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read {}", record.log_path.display()));
+            }
+        };
+        let mut entries = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let entry: ConversationLogEntry = serde_json::from_str(trimmed)?;
+            match entry.direction {
+                LogDirection::User | LogDirection::Assistant => entries.push(entry),
+                LogDirection::System => {}
+            }
+        }
+        if entries.len() <= limit {
+            return Ok(entries);
+        }
+        Ok(entries.split_off(entries.len() - limit))
+    }
+
+    pub async fn write_summary(
+        &self,
+        record: ConversationRecord,
+        summary: impl Into<String>,
+    ) -> Result<ConversationRecord> {
+        fs::write(&record.summary_path, format!("{}\n", summary.into().trim())).await?;
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                last_summary_at: Some(now_iso()),
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn read_session_binding(
+        &self,
+        record: &ConversationRecord,
+    ) -> Result<Option<SessionBinding>> {
+        let path = self.session_binding_path(record);
+        match fs::read_to_string(&path).await {
+            Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+        }
+    }
+
+    pub async fn bind_session(
+        &self,
+        record: ConversationRecord,
+        codex_session_id: String,
+        session_title: Option<String>,
+        workspace_cwd: String,
+    ) -> Result<ConversationRecord> {
+        let now = now_iso();
+        let session = SessionBinding {
+            schema_version: 1,
+            codex_session_id: Some(codex_session_id.clone()),
+            source: Some(SessionBindingSource::CodexHomeV1),
+            session_title,
+            workspace_cwd: Some(workspace_cwd),
+            bound_at: Some(now.clone()),
+            last_verified_at: Some(now.clone()),
+            session_broken: false,
+            session_broken_at: None,
+            session_broken_reason: None,
+            updated_at: now.clone(),
+        };
+        self.write_session_binding(&record, &session).await?;
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                codex_session_id: Some(codex_session_id),
+                last_codex_turn_at: Some(now),
+                session_broken: false,
+                session_broken_at: None,
+                session_broken_reason: None,
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn mark_session_binding_verified(
+        &self,
+        record: ConversationRecord,
+    ) -> Result<ConversationRecord> {
+        let mut session = self
+            .read_session_binding(&record)
+            .await?
+            .context("session binding is missing")?;
+        let now = now_iso();
+        session.last_verified_at = Some(now.clone());
+        session.session_broken = false;
+        session.session_broken_at = None;
+        session.session_broken_reason = None;
+        session.updated_at = now.clone();
+        self.write_session_binding(&record, &session).await?;
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                codex_session_id: session.codex_session_id.clone(),
+                last_codex_turn_at: Some(now),
+                session_broken: false,
+                session_broken_at: None,
+                session_broken_reason: None,
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn mark_session_binding_broken(
+        &self,
+        record: ConversationRecord,
+        reason: impl Into<String>,
+    ) -> Result<ConversationRecord> {
+        let reason = reason.into();
+        let now = now_iso();
+        let mut session = self
+            .read_session_binding(&record)
+            .await?
+            .unwrap_or(SessionBinding {
+                schema_version: 1,
+                codex_session_id: None,
+                source: Some(SessionBindingSource::CodexHomeV1),
+                session_title: None,
+                workspace_cwd: None,
+                bound_at: None,
+                last_verified_at: None,
+                session_broken: true,
+                session_broken_at: Some(now.clone()),
+                session_broken_reason: Some(reason.clone()),
+                updated_at: now.clone(),
+            });
+        session.session_broken = true;
+        session.session_broken_at = Some(now.clone());
+        session.session_broken_reason = Some(reason.clone());
+        session.updated_at = now.clone();
+        self.write_session_binding(&record, &session).await?;
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                codex_session_id: session.codex_session_id.clone(),
+                session_broken: true,
+                session_broken_at: Some(now),
+                session_broken_reason: Some(reason),
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn archive_thread(&self, record: ConversationRecord) -> Result<ConversationRecord> {
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                archived_at: Some(now_iso()),
+                status: ConversationStatus::Archived,
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn restore_thread(
+        &self,
+        record: ConversationRecord,
+        message_thread_id: i32,
+        title: String,
+    ) -> Result<ConversationRecord> {
+        let mut previous = record.metadata.previous_message_thread_ids.clone();
+        if let Some(current) = record.metadata.message_thread_id {
+            if current != message_thread_id && !previous.contains(&current) {
+                previous.push(current);
+            }
+        }
+        self.update_metadata(ConversationRecord {
+            metadata: ConversationMetadata {
+                archived_at: None,
+                message_thread_id: Some(message_thread_id),
+                previous_message_thread_ids: previous,
+                status: ConversationStatus::Active,
+                title: Some(title),
+                ..record.metadata.clone()
+            },
+            ..record
+        })
+        .await
+    }
+
+    pub async fn list_archived_threads(&self, chat_id: i64) -> Result<Vec<ConversationRecord>> {
+        let mut dir = fs::read_dir(&self.data_root_path).await?;
+        let mut records = Vec::new();
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let metadata_path = path.join("metadata.json");
+            if !fs::try_exists(&metadata_path).await? {
+                continue;
+            }
+            let metadata: ConversationMetadata =
+                serde_json::from_str(&fs::read_to_string(&metadata_path).await?)?;
+            if matches!(metadata.scope, ConversationScope::Thread)
+                && metadata.chat_id == chat_id
+                && matches!(metadata.status, ConversationStatus::Archived)
+            {
+                records.push(
+                    self.build_record(entry.file_name().to_string_lossy().to_string(), metadata),
+                );
+            }
+        }
+        records.sort_by(|a, b| b.metadata.archived_at.cmp(&a.metadata.archived_at));
+        Ok(records)
+    }
+
+    pub async fn get_workspace_by_id(
+        &self,
+        chat_id: i64,
+        workspace_id: &str,
+    ) -> Result<Option<ConversationRecord>> {
+        let folder_name = folder_name_for(&ConversationScope::Thread, workspace_id);
+        let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
+        if !fs::try_exists(&metadata_path).await? {
+            return Ok(None);
+        }
+        let metadata: ConversationMetadata =
+            serde_json::from_str(&fs::read_to_string(&metadata_path).await?)?;
+        if metadata.chat_id != chat_id {
+            return Ok(None);
+        }
+        Ok(Some(self.build_record(folder_name, metadata)))
+    }
+
+    async fn get_or_create(
+        &self,
+        chat_id: i64,
+        scope: ConversationScope,
+        message_thread_id: Option<i32>,
+        title: Option<String>,
+        workspace_id: String,
+    ) -> Result<ConversationRecord> {
+        let folder_name = folder_name_for(&scope, &workspace_id);
+        let folder_path = self.data_root_path.join(&folder_name);
+        let metadata_path = folder_path.join("metadata.json");
+        if fs::try_exists(&metadata_path).await? {
+            return self.load_record(folder_name).await;
+        }
+
+        fs::create_dir_all(&folder_path).await?;
+        let created_at = now_iso();
+        let metadata = ConversationMetadata {
+            archived_at: None,
+            chat_id,
+            codex_session_id: None,
+            created_at: created_at.clone(),
+            last_codex_turn_at: None,
+            last_summary_at: None,
+            message_thread_id,
+            previous_message_thread_ids: Vec::new(),
+            scope: scope.clone(),
+            session_broken: false,
+            session_broken_at: None,
+            session_broken_reason: None,
+            status: ConversationStatus::Active,
+            title,
+            updated_at: created_at,
+            workspace_id: workspace_id.clone(),
+        };
+        let record = self.build_record(folder_name, metadata);
+        fs::write(
+            &record.metadata_path,
+            format!("{}\n", serde_json::to_string_pretty(&record.metadata)?),
+        )
+        .await?;
+        fs::write(&record.log_path, "").await?;
+        fs::write(&record.summary_path, "").await?;
+        fs::create_dir_all(folder_path.join("images").join("source")).await?;
+        fs::create_dir_all(folder_path.join("images").join("analysis")).await?;
+        Ok(record)
+    }
+
+    async fn save_pending_image_batch(
+        &self,
+        record: &ConversationRecord,
+        batch: &PendingImageBatch,
+    ) -> Result<()> {
+        let path = record.folder_path.join("pending-image-batch.json");
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(batch)?)).await?;
+        Ok(())
+    }
+
+    async fn write_session_binding(
+        &self,
+        record: &ConversationRecord,
+        session: &SessionBinding,
+    ) -> Result<()> {
+        let path = self.session_binding_path(record);
+        fs::write(
+            path,
+            format!("{}\n", serde_json::to_string_pretty(session)?),
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn session_binding_path(&self, record: &ConversationRecord) -> PathBuf {
+        record.folder_path.join(SESSION_BINDING_FILE_NAME)
+    }
+
+    pub async fn update_metadata(&self, record: ConversationRecord) -> Result<ConversationRecord> {
+        let updated = ConversationMetadata {
+            updated_at: now_iso(),
+            ..record.metadata.clone()
+        };
+        fs::write(
+            &record.metadata_path,
+            format!("{}\n", serde_json::to_string_pretty(&updated)?),
+        )
+        .await?;
+        Ok(ConversationRecord {
+            metadata: updated,
+            ..record
+        })
+    }
+
+    async fn find_thread_by_message_thread_id(
+        &self,
+        chat_id: i64,
+        message_thread_id: i32,
+    ) -> Result<Option<ConversationRecord>> {
+        let mut dir = fs::read_dir(&self.data_root_path).await?;
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let metadata_path = path.join("metadata.json");
+            if !fs::try_exists(&metadata_path).await? {
+                continue;
+            }
+            let metadata: ConversationMetadata = serde_json::from_str(
+                &fs::read_to_string(&metadata_path)
+                    .await
+                    .with_context(|| format!("failed to read {}", metadata_path.display()))?,
+            )?;
+            if matches!(metadata.scope, ConversationScope::Thread)
+                && metadata.chat_id == chat_id
+                && metadata.message_thread_id == Some(message_thread_id)
+            {
+                return Ok(Some(self.build_record(
+                    entry.file_name().to_string_lossy().to_string(),
+                    metadata,
+                )));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn load_record(&self, folder_name: String) -> Result<ConversationRecord> {
+        let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
+        let metadata: ConversationMetadata = serde_json::from_str(
+            &fs::read_to_string(&metadata_path)
+                .await
+                .with_context(|| format!("failed to read {}", metadata_path.display()))?,
+        )?;
+        Ok(self.build_record(folder_name, metadata))
+    }
+
+    fn build_record(
+        &self,
+        folder_name: String,
+        metadata: ConversationMetadata,
+    ) -> ConversationRecord {
+        let folder_path = self.data_root_path.join(&folder_name);
+        ConversationRecord {
+            conversation_key: conversation_key_for(&metadata.scope, &metadata.workspace_id),
+            folder_name,
+            folder_path: folder_path.clone(),
+            log_path: folder_path.join("conversations.jsonl"),
+            metadata,
+            metadata_path: folder_path.join("metadata.json"),
+            summary_path: folder_path.join("summary.md"),
+        }
+    }
+}
+
+pub struct AppendPendingImageInput {
+    pub caption: Option<String>,
+    pub data: Vec<u8>,
+    pub file_name: String,
+    pub mime_type: String,
+    pub source_message_id: i32,
+    pub telegram_file_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppendPendingImageInput, ConversationRepository, ConversationScope, LogDirection};
+    use uuid::Uuid;
+
+    fn temp_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("artbot-rust-test-{}", Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn creates_thread_workspace_and_appends_log() {
+        let root = temp_path();
+        let repo = ConversationRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(42, 1001, "Title".to_owned())
+            .await
+            .unwrap();
+        assert!(matches!(record.metadata.scope, ConversationScope::Thread));
+        assert_eq!(record.metadata.message_thread_id, Some(1001));
+        repo.append_log(&record, LogDirection::User, "hello", Some(7))
+            .await
+            .unwrap();
+        let transcript = repo.read_recent_transcript(&record, 10).await.unwrap();
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(transcript[0].text, "hello");
+    }
+
+    #[tokio::test]
+    async fn pending_image_batch_roundtrip() {
+        let root = temp_path();
+        let repo = ConversationRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(42, 1002, "Images".to_owned())
+            .await
+            .unwrap();
+        let batch = repo
+            .get_or_create_pending_image_batch(&record)
+            .await
+            .unwrap();
+        let updated = repo
+            .append_image_to_pending_batch(
+                &record,
+                batch,
+                AppendPendingImageInput {
+                    caption: Some("hint".to_owned()),
+                    data: b"abc".to_vec(),
+                    file_name: "0001.png".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                    source_message_id: 12,
+                    telegram_file_id: "file-1".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.images.len(), 1);
+        assert_eq!(updated.latest_caption.as_deref(), Some("hint"));
+        let persisted = repo
+            .read_pending_image_batch(&record)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.images.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_binding_roundtrip_and_state_updates() {
+        let root = temp_path();
+        let repo = ConversationRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(42, 1003, "Session".to_owned())
+            .await
+            .unwrap();
+
+        let record = repo
+            .bind_session(
+                record,
+                "session-123".to_owned(),
+                Some("Bound session".to_owned()),
+                "/tmp/workspace".to_owned(),
+            )
+            .await
+            .unwrap();
+        let session = repo.read_session_binding(&record).await.unwrap().unwrap();
+        assert_eq!(session.codex_session_id.as_deref(), Some("session-123"));
+        assert!(!session.session_broken);
+        assert_eq!(session.workspace_cwd.as_deref(), Some("/tmp/workspace"));
+
+        let record = repo
+            .mark_session_binding_broken(record, "boom")
+            .await
+            .unwrap();
+        let session = repo.read_session_binding(&record).await.unwrap().unwrap();
+        assert!(session.session_broken);
+        assert_eq!(session.session_broken_reason.as_deref(), Some("boom"));
+        assert_eq!(session.codex_session_id.as_deref(), Some("session-123"));
+
+        let record = repo.mark_session_binding_verified(record).await.unwrap();
+        let session = repo.read_session_binding(&record).await.unwrap().unwrap();
+        assert!(!session.session_broken);
+        assert_eq!(session.codex_session_id.as_deref(), Some("session-123"));
+    }
+}
