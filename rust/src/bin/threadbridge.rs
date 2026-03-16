@@ -22,8 +22,8 @@ use threadbridge_rust::image_artifacts::{
 };
 use threadbridge_rust::logging::init_json_logs;
 use threadbridge_rust::repository::{
-    AppendPendingImageInput, ConversationRecord, ConversationRepository, ConversationStatus,
-    LogDirection, SessionBinding,
+    AppendPendingImageInput, LogDirection, SessionBinding, ThreadRecord, ThreadRepository,
+    ThreadStatus,
 };
 use threadbridge_rust::tool_results::{
     TelegramOutboxItem, parse_build_prompt_config_tool_result, parse_generate_image_tool_result,
@@ -65,7 +65,7 @@ enum Command {
 #[derive(Clone)]
 struct AppState {
     config: AppConfig,
-    repository: ConversationRepository,
+    repository: ThreadRepository,
     codex: CodexRunner,
     codex_home: CodexHome,
     seed_template_path: PathBuf,
@@ -470,7 +470,7 @@ impl TurnPreviewController {
 async fn main() -> Result<()> {
     let config = load_app_config()?;
     let _guard = init_json_logs(&config.runtime.debug_log_path)?;
-    let repository = ConversationRepository::open(&config.runtime.data_root_path).await?;
+    let repository = ThreadRepository::open(&config.runtime.data_root_path).await?;
     let codex_home = CodexHome::discover()?;
     let seed_template_path = validate_seed_template(
         &config
@@ -611,7 +611,7 @@ fn format_session_list_text(
 
 async fn ensure_bound_workspace_runtime(
     state: &AppState,
-    record: &ConversationRecord,
+    record: &ThreadRecord,
     binding: &SessionBinding,
 ) -> Result<PathBuf> {
     let session_id = binding
@@ -732,7 +732,7 @@ async fn upsert_pending_image_batch_message(
     state: &AppState,
     chat_id: ChatId,
     thread_id: ThreadId,
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
     batch: threadbridge_rust::image_artifacts::PendingImageBatch,
 ) -> Result<threadbridge_rust::image_artifacts::PendingImageBatch> {
     let text = render_pending_image_batch(&batch);
@@ -775,7 +775,7 @@ async fn read_file_or_none(path: impl Into<PathBuf>) -> Result<Option<String>> {
 }
 
 async fn read_build_prompt_result(
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
 ) -> Result<Option<(String, String)>> {
     let Some(result_text) =
         read_file_or_none(record.folder_path.join(BUILD_PROMPT_RESULT_FILE)).await?
@@ -787,7 +787,7 @@ async fn read_build_prompt_result(
 }
 
 async fn read_generate_image_result(
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
 ) -> Result<Option<threadbridge_rust::tool_results::GenerateImageToolResult>> {
     let Some(result_text) =
         read_file_or_none(record.folder_path.join(GENERATE_IMAGE_RESULT_FILE)).await?
@@ -798,7 +798,7 @@ async fn read_generate_image_result(
 }
 
 async fn read_telegram_outbox(
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
 ) -> Result<Option<threadbridge_rust::tool_results::TelegramOutbox>> {
     let Some(result_text) =
         read_file_or_none(record.folder_path.join(TELEGRAM_OUTBOX_FILE)).await?
@@ -818,7 +818,7 @@ async fn remove_file_if_exists(path: impl Into<PathBuf>) -> Result<()> {
 }
 
 fn resolve_workspace_file_path(
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
     relative_path: &str,
 ) -> PathBuf {
     record.folder_path.join(relative_path)
@@ -827,7 +827,7 @@ fn resolve_workspace_file_path(
 async fn dispatch_workspace_telegram_outbox(
     bot: &Bot,
     state: &AppState,
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
     thread_id: ThreadId,
 ) -> Result<()> {
     let Some(outbox) = read_telegram_outbox(record).await? else {
@@ -896,7 +896,7 @@ async fn dispatch_workspace_telegram_outbox(
 
 async fn send_generated_images(
     bot: &Bot,
-    record: &threadbridge_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ThreadRecord,
     thread_id: ThreadId,
     image_paths: &[String],
     summary: &str,
@@ -1009,7 +1009,7 @@ async fn run_command(bot: &Bot, msg: &Message, command: Command, state: &AppStat
                 .repository
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
-            if matches!(record.metadata.status, ConversationStatus::Archived) {
+            if matches!(record.metadata.status, ThreadStatus::Archived) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -1224,7 +1224,7 @@ async fn run_command(bot: &Bot, msg: &Message, command: Command, state: &AppStat
                 .repository
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
-            if matches!(record.metadata.status, ConversationStatus::Archived) {
+            if matches!(record.metadata.status, ThreadStatus::Archived) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -1324,7 +1324,7 @@ async fn run_command(bot: &Bot, msg: &Message, command: Command, state: &AppStat
                 .repository
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
-            if matches!(record.metadata.status, ConversationStatus::Archived) {
+            if matches!(record.metadata.status, ThreadStatus::Archived) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -1754,7 +1754,7 @@ async fn queue_image_for_thread(
         .repository
         .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
         .await?;
-    if matches!(record.metadata.status, ConversationStatus::Archived) {
+    if matches!(record.metadata.status, ThreadStatus::Archived) {
         send_scoped_message(
             bot,
             msg.chat.id,
@@ -1836,13 +1836,13 @@ async fn queue_image_for_thread(
 async fn analyze_pending_image_batch(
     bot: &Bot,
     state: &AppState,
-    record: threadbridge_rust::repository::ConversationRecord,
+    record: threadbridge_rust::repository::ThreadRecord,
     thread_id: ThreadId,
     batch_id: &str,
     user_prompt: Option<&str>,
     callback_query_id: Option<&teloxide::types::CallbackQueryId>,
 ) -> Result<()> {
-    if matches!(record.metadata.status, ConversationStatus::Archived) {
+    if matches!(record.metadata.status, ThreadStatus::Archived) {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
                 .text("This thread is archived.")
@@ -2204,7 +2204,7 @@ async fn restore_thread(
         return Ok(());
     };
 
-    if !matches!(thread_record.metadata.status, ConversationStatus::Archived) {
+    if !matches!(thread_record.metadata.status, ThreadStatus::Archived) {
         bot.answer_callback_query(query.id.clone())
             .text("That thread binding is already active.")
             .await?;
@@ -2343,7 +2343,7 @@ async fn run_text_message(bot: &Bot, msg: &Message, text: &str, state: &AppState
         .repository
         .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
         .await?;
-    if matches!(record.metadata.status, ConversationStatus::Archived) {
+    if matches!(record.metadata.status, ThreadStatus::Archived) {
         send_scoped_message(
             bot,
             msg.chat.id,

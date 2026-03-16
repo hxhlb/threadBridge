@@ -13,20 +13,20 @@ const SESSION_BINDING_FILE_NAME: &str = "session-binding.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConversationScope {
+pub enum ThreadScope {
     Main,
     Thread,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConversationStatus {
+pub enum ThreadStatus {
     Active,
     Archived,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversationMetadata {
+pub struct ThreadMetadata {
     pub archived_at: Option<String>,
     pub chat_id: i64,
     pub codex_session_id: Option<String>,
@@ -35,11 +35,11 @@ pub struct ConversationMetadata {
     pub last_summary_at: Option<String>,
     pub message_thread_id: Option<i32>,
     pub previous_message_thread_ids: Vec<i32>,
-    pub scope: ConversationScope,
+    pub scope: ThreadScope,
     pub session_broken: bool,
     pub session_broken_at: Option<String>,
     pub session_broken_reason: Option<String>,
-    pub status: ConversationStatus,
+    pub status: ThreadStatus,
     pub title: Option<String>,
     pub updated_at: String,
     #[serde(alias = "workspace_id")]
@@ -76,11 +76,11 @@ pub enum LogDirection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversationLogEntry {
+pub struct ThreadLogEntry {
     pub timestamp: String,
     pub chat_id: i64,
     pub codex_session_id: Option<String>,
-    pub scope: ConversationScope,
+    pub scope: ThreadScope,
     pub message_thread_id: Option<i32>,
     pub direction: LogDirection,
     pub text: String,
@@ -88,24 +88,24 @@ pub struct ConversationLogEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConversationRecord {
+pub struct ThreadRecord {
     pub conversation_key: String,
     pub folder_name: String,
     pub folder_path: PathBuf,
     pub log_path: PathBuf,
-    pub metadata: ConversationMetadata,
+    pub metadata: ThreadMetadata,
     pub metadata_path: PathBuf,
     pub summary_path: PathBuf,
 }
 
-impl ConversationRecord {
+impl ThreadRecord {
     pub fn linked_workspace_path(&self) -> PathBuf {
         self.folder_path.join("workspace")
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ConversationRepository {
+pub struct ThreadRepository {
     data_root_path: PathBuf,
 }
 
@@ -113,31 +113,31 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn folder_name_for(scope: &ConversationScope, thread_key: &str) -> String {
+fn folder_name_for(scope: &ThreadScope, thread_key: &str) -> String {
     match scope {
-        ConversationScope::Main => MAIN_THREAD_KEY.to_owned(),
-        ConversationScope::Thread => thread_key.to_owned(),
+        ThreadScope::Main => MAIN_THREAD_KEY.to_owned(),
+        ThreadScope::Thread => thread_key.to_owned(),
     }
 }
 
-fn conversation_key_for(scope: &ConversationScope, thread_key: &str) -> String {
+fn conversation_key_for(scope: &ThreadScope, thread_key: &str) -> String {
     match scope {
-        ConversationScope::Main => MAIN_THREAD_KEY.to_owned(),
-        ConversationScope::Thread => format!("thread:{thread_key}"),
+        ThreadScope::Main => MAIN_THREAD_KEY.to_owned(),
+        ThreadScope::Thread => format!("thread:{thread_key}"),
     }
 }
 
-impl ConversationRepository {
+impl ThreadRepository {
     pub async fn open(data_root_path: impl AsRef<Path>) -> Result<Self> {
         let data_root_path = data_root_path.as_ref().to_path_buf();
         fs::create_dir_all(&data_root_path).await?;
         Ok(Self { data_root_path })
     }
 
-    pub async fn get_main_thread(&self, chat_id: i64) -> Result<ConversationRecord> {
+    pub async fn get_main_thread(&self, chat_id: i64) -> Result<ThreadRecord> {
         self.get_or_create(
             chat_id,
-            ConversationScope::Main,
+            ThreadScope::Main,
             None,
             None,
             MAIN_THREAD_KEY.to_owned(),
@@ -145,11 +145,7 @@ impl ConversationRepository {
         .await
     }
 
-    pub async fn get_thread(
-        &self,
-        chat_id: i64,
-        message_thread_id: i32,
-    ) -> Result<ConversationRecord> {
+    pub async fn get_thread(&self, chat_id: i64, message_thread_id: i32) -> Result<ThreadRecord> {
         if let Some(record) = self
             .find_thread_by_message_thread_id(chat_id, message_thread_id)
             .await?
@@ -158,7 +154,7 @@ impl ConversationRepository {
         }
         self.get_or_create(
             chat_id,
-            ConversationScope::Thread,
+            ThreadScope::Thread,
             Some(message_thread_id),
             None,
             Uuid::new_v4().to_string(),
@@ -171,14 +167,14 @@ impl ConversationRepository {
         chat_id: i64,
         message_thread_id: i32,
         title: String,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         if let Some(record) = self
             .find_thread_by_message_thread_id(chat_id, message_thread_id)
             .await?
         {
             return self
-                .update_metadata(ConversationRecord {
-                    metadata: ConversationMetadata {
+                .update_metadata(ThreadRecord {
+                    metadata: ThreadMetadata {
                         title: Some(title),
                         ..record.metadata.clone()
                     },
@@ -189,7 +185,7 @@ impl ConversationRepository {
 
         self.get_or_create(
             chat_id,
-            ConversationScope::Thread,
+            ThreadScope::Thread,
             Some(message_thread_id),
             Some(title),
             Uuid::new_v4().to_string(),
@@ -199,12 +195,12 @@ impl ConversationRepository {
 
     pub async fn append_log(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         direction: LogDirection,
         text: impl Into<String>,
         user_id: Option<i64>,
     ) -> Result<()> {
-        let entry = ConversationLogEntry {
+        let entry = ThreadLogEntry {
             timestamp: now_iso(),
             chat_id: record.metadata.chat_id,
             codex_session_id: record.metadata.codex_session_id.clone(),
@@ -226,7 +222,7 @@ impl ConversationRepository {
 
     pub async fn read_pending_image_batch(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
     ) -> Result<Option<PendingImageBatch>> {
         let path = record.folder_path.join("pending-image-batch.json");
         if !fs::try_exists(&path).await? {
@@ -238,7 +234,7 @@ impl ConversationRepository {
 
     pub async fn get_or_create_pending_image_batch(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
     ) -> Result<PendingImageBatch> {
         if let Some(batch) = self.read_pending_image_batch(record).await? {
             return Ok(batch);
@@ -262,7 +258,7 @@ impl ConversationRepository {
 
     pub async fn append_image_to_pending_batch(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         batch: PendingImageBatch,
         input: AppendPendingImageInput,
     ) -> Result<PendingImageBatch> {
@@ -305,7 +301,7 @@ impl ConversationRepository {
 
     pub async fn set_pending_image_batch_control_message_id(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         batch: PendingImageBatch,
         control_message_id: i32,
     ) -> Result<PendingImageBatch> {
@@ -318,7 +314,7 @@ impl ConversationRepository {
         Ok(updated)
     }
 
-    pub async fn clear_pending_image_batch(&self, record: &ConversationRecord) -> Result<()> {
+    pub async fn clear_pending_image_batch(&self, record: &ThreadRecord) -> Result<()> {
         let path = record.folder_path.join("pending-image-batch.json");
         if fs::try_exists(&path).await? {
             fs::remove_file(path).await?;
@@ -328,7 +324,7 @@ impl ConversationRepository {
 
     pub async fn write_image_analysis(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         artifact: &ImageAnalysisArtifact,
     ) -> Result<()> {
         let path = record
@@ -349,9 +345,9 @@ impl ConversationRepository {
 
     pub async fn read_recent_transcript(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         limit: usize,
-    ) -> Result<Vec<ConversationLogEntry>> {
+    ) -> Result<Vec<ThreadLogEntry>> {
         let content = match fs::read_to_string(&record.log_path).await {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -366,7 +362,7 @@ impl ConversationRepository {
             if trimmed.is_empty() {
                 continue;
             }
-            let entry: ConversationLogEntry = serde_json::from_str(trimmed)?;
+            let entry: ThreadLogEntry = serde_json::from_str(trimmed)?;
             match entry.direction {
                 LogDirection::User | LogDirection::Assistant => entries.push(entry),
                 LogDirection::System => {}
@@ -380,12 +376,12 @@ impl ConversationRepository {
 
     pub async fn write_summary(
         &self,
-        record: ConversationRecord,
+        record: ThreadRecord,
         summary: impl Into<String>,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         fs::write(&record.summary_path, format!("{}\n", summary.into().trim())).await?;
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 last_summary_at: Some(now_iso()),
                 ..record.metadata.clone()
             },
@@ -396,7 +392,7 @@ impl ConversationRepository {
 
     pub async fn read_session_binding(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
     ) -> Result<Option<SessionBinding>> {
         let path = self.session_binding_path(record);
         match fs::read_to_string(&path).await {
@@ -408,11 +404,11 @@ impl ConversationRepository {
 
     pub async fn bind_session(
         &self,
-        record: ConversationRecord,
+        record: ThreadRecord,
         codex_session_id: String,
         session_title: Option<String>,
         workspace_cwd: String,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         let now = now_iso();
         let session = SessionBinding {
             schema_version: 1,
@@ -428,8 +424,8 @@ impl ConversationRepository {
             updated_at: now.clone(),
         };
         self.write_session_binding(&record, &session).await?;
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 codex_session_id: Some(codex_session_id),
                 last_codex_turn_at: Some(now),
                 session_broken: false,
@@ -444,8 +440,8 @@ impl ConversationRepository {
 
     pub async fn mark_session_binding_verified(
         &self,
-        record: ConversationRecord,
-    ) -> Result<ConversationRecord> {
+        record: ThreadRecord,
+    ) -> Result<ThreadRecord> {
         let mut session = self
             .read_session_binding(&record)
             .await?
@@ -457,8 +453,8 @@ impl ConversationRepository {
         session.session_broken_reason = None;
         session.updated_at = now.clone();
         self.write_session_binding(&record, &session).await?;
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 codex_session_id: session.codex_session_id.clone(),
                 last_codex_turn_at: Some(now),
                 session_broken: false,
@@ -473,9 +469,9 @@ impl ConversationRepository {
 
     pub async fn mark_session_binding_broken(
         &self,
-        record: ConversationRecord,
+        record: ThreadRecord,
         reason: impl Into<String>,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         let reason = reason.into();
         let now = now_iso();
         let mut session = self
@@ -499,8 +495,8 @@ impl ConversationRepository {
         session.session_broken_reason = Some(reason.clone());
         session.updated_at = now.clone();
         self.write_session_binding(&record, &session).await?;
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 codex_session_id: session.codex_session_id.clone(),
                 session_broken: true,
                 session_broken_at: Some(now),
@@ -512,11 +508,11 @@ impl ConversationRepository {
         .await
     }
 
-    pub async fn archive_thread(&self, record: ConversationRecord) -> Result<ConversationRecord> {
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+    pub async fn archive_thread(&self, record: ThreadRecord) -> Result<ThreadRecord> {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 archived_at: Some(now_iso()),
-                status: ConversationStatus::Archived,
+                status: ThreadStatus::Archived,
                 ..record.metadata.clone()
             },
             ..record
@@ -526,22 +522,22 @@ impl ConversationRepository {
 
     pub async fn restore_thread(
         &self,
-        record: ConversationRecord,
+        record: ThreadRecord,
         message_thread_id: i32,
         title: String,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         let mut previous = record.metadata.previous_message_thread_ids.clone();
         if let Some(current) = record.metadata.message_thread_id {
             if current != message_thread_id && !previous.contains(&current) {
                 previous.push(current);
             }
         }
-        self.update_metadata(ConversationRecord {
-            metadata: ConversationMetadata {
+        self.update_metadata(ThreadRecord {
+            metadata: ThreadMetadata {
                 archived_at: None,
                 message_thread_id: Some(message_thread_id),
                 previous_message_thread_ids: previous,
-                status: ConversationStatus::Active,
+                status: ThreadStatus::Active,
                 title: Some(title),
                 ..record.metadata.clone()
             },
@@ -550,7 +546,7 @@ impl ConversationRepository {
         .await
     }
 
-    pub async fn list_archived_threads(&self, chat_id: i64) -> Result<Vec<ConversationRecord>> {
+    pub async fn list_archived_threads(&self, chat_id: i64) -> Result<Vec<ThreadRecord>> {
         let mut dir = fs::read_dir(&self.data_root_path).await?;
         let mut records = Vec::new();
         while let Some(entry) = dir.next_entry().await? {
@@ -562,11 +558,11 @@ impl ConversationRepository {
             if !fs::try_exists(&metadata_path).await? {
                 continue;
             }
-            let metadata: ConversationMetadata =
+            let metadata: ThreadMetadata =
                 serde_json::from_str(&fs::read_to_string(&metadata_path).await?)?;
-            if matches!(metadata.scope, ConversationScope::Thread)
+            if matches!(metadata.scope, ThreadScope::Thread)
                 && metadata.chat_id == chat_id
-                && matches!(metadata.status, ConversationStatus::Archived)
+                && matches!(metadata.status, ThreadStatus::Archived)
             {
                 records.push(
                     self.build_record(entry.file_name().to_string_lossy().to_string(), metadata),
@@ -581,13 +577,13 @@ impl ConversationRepository {
         &self,
         chat_id: i64,
         thread_key: &str,
-    ) -> Result<Option<ConversationRecord>> {
-        let folder_name = folder_name_for(&ConversationScope::Thread, thread_key);
+    ) -> Result<Option<ThreadRecord>> {
+        let folder_name = folder_name_for(&ThreadScope::Thread, thread_key);
         let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
         if !fs::try_exists(&metadata_path).await? {
             return Ok(None);
         }
-        let metadata: ConversationMetadata =
+        let metadata: ThreadMetadata =
             serde_json::from_str(&fs::read_to_string(&metadata_path).await?)?;
         if metadata.chat_id != chat_id {
             return Ok(None);
@@ -598,11 +594,11 @@ impl ConversationRepository {
     async fn get_or_create(
         &self,
         chat_id: i64,
-        scope: ConversationScope,
+        scope: ThreadScope,
         message_thread_id: Option<i32>,
         title: Option<String>,
         thread_key: String,
-    ) -> Result<ConversationRecord> {
+    ) -> Result<ThreadRecord> {
         let folder_name = folder_name_for(&scope, &thread_key);
         let folder_path = self.data_root_path.join(&folder_name);
         let metadata_path = folder_path.join("metadata.json");
@@ -612,7 +608,7 @@ impl ConversationRepository {
 
         fs::create_dir_all(&folder_path).await?;
         let created_at = now_iso();
-        let metadata = ConversationMetadata {
+        let metadata = ThreadMetadata {
             archived_at: None,
             chat_id,
             codex_session_id: None,
@@ -625,7 +621,7 @@ impl ConversationRepository {
             session_broken: false,
             session_broken_at: None,
             session_broken_reason: None,
-            status: ConversationStatus::Active,
+            status: ThreadStatus::Active,
             title,
             updated_at: created_at,
             thread_key: thread_key.clone(),
@@ -645,7 +641,7 @@ impl ConversationRepository {
 
     async fn save_pending_image_batch(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         batch: &PendingImageBatch,
     ) -> Result<()> {
         let path = record.folder_path.join("pending-image-batch.json");
@@ -655,7 +651,7 @@ impl ConversationRepository {
 
     async fn write_session_binding(
         &self,
-        record: &ConversationRecord,
+        record: &ThreadRecord,
         session: &SessionBinding,
     ) -> Result<()> {
         let path = self.session_binding_path(record);
@@ -667,12 +663,12 @@ impl ConversationRepository {
         Ok(())
     }
 
-    fn session_binding_path(&self, record: &ConversationRecord) -> PathBuf {
+    fn session_binding_path(&self, record: &ThreadRecord) -> PathBuf {
         record.folder_path.join(SESSION_BINDING_FILE_NAME)
     }
 
-    pub async fn update_metadata(&self, record: ConversationRecord) -> Result<ConversationRecord> {
-        let updated = ConversationMetadata {
+    pub async fn update_metadata(&self, record: ThreadRecord) -> Result<ThreadRecord> {
+        let updated = ThreadMetadata {
             updated_at: now_iso(),
             ..record.metadata.clone()
         };
@@ -681,7 +677,7 @@ impl ConversationRepository {
             format!("{}\n", serde_json::to_string_pretty(&updated)?),
         )
         .await?;
-        Ok(ConversationRecord {
+        Ok(ThreadRecord {
             metadata: updated,
             ..record
         })
@@ -691,7 +687,7 @@ impl ConversationRepository {
         &self,
         chat_id: i64,
         message_thread_id: i32,
-    ) -> Result<Option<ConversationRecord>> {
+    ) -> Result<Option<ThreadRecord>> {
         let mut dir = fs::read_dir(&self.data_root_path).await?;
         while let Some(entry) = dir.next_entry().await? {
             let path = entry.path();
@@ -702,12 +698,12 @@ impl ConversationRepository {
             if !fs::try_exists(&metadata_path).await? {
                 continue;
             }
-            let metadata: ConversationMetadata = serde_json::from_str(
+            let metadata: ThreadMetadata = serde_json::from_str(
                 &fs::read_to_string(&metadata_path)
                     .await
                     .with_context(|| format!("failed to read {}", metadata_path.display()))?,
             )?;
-            if matches!(metadata.scope, ConversationScope::Thread)
+            if matches!(metadata.scope, ThreadScope::Thread)
                 && metadata.chat_id == chat_id
                 && metadata.message_thread_id == Some(message_thread_id)
             {
@@ -720,9 +716,9 @@ impl ConversationRepository {
         Ok(None)
     }
 
-    async fn load_record(&self, folder_name: String) -> Result<ConversationRecord> {
+    async fn load_record(&self, folder_name: String) -> Result<ThreadRecord> {
         let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
-        let metadata: ConversationMetadata = serde_json::from_str(
+        let metadata: ThreadMetadata = serde_json::from_str(
             &fs::read_to_string(&metadata_path)
                 .await
                 .with_context(|| format!("failed to read {}", metadata_path.display()))?,
@@ -730,13 +726,9 @@ impl ConversationRepository {
         Ok(self.build_record(folder_name, metadata))
     }
 
-    fn build_record(
-        &self,
-        folder_name: String,
-        metadata: ConversationMetadata,
-    ) -> ConversationRecord {
+    fn build_record(&self, folder_name: String, metadata: ThreadMetadata) -> ThreadRecord {
         let folder_path = self.data_root_path.join(&folder_name);
-        ConversationRecord {
+        ThreadRecord {
             conversation_key: conversation_key_for(&metadata.scope, &metadata.thread_key),
             folder_name,
             folder_path: folder_path.clone(),
@@ -759,7 +751,7 @@ pub struct AppendPendingImageInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppendPendingImageInput, ConversationRepository, ConversationScope, LogDirection};
+    use super::{AppendPendingImageInput, LogDirection, ThreadRepository, ThreadScope};
     use uuid::Uuid;
 
     fn temp_path() -> std::path::PathBuf {
@@ -769,12 +761,12 @@ mod tests {
     #[tokio::test]
     async fn creates_thread_workspace_and_appends_log() {
         let root = temp_path();
-        let repo = ConversationRepository::open(&root).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
         let record = repo
             .create_thread(42, 1001, "Title".to_owned())
             .await
             .unwrap();
-        assert!(matches!(record.metadata.scope, ConversationScope::Thread));
+        assert!(matches!(record.metadata.scope, ThreadScope::Thread));
         assert_eq!(record.metadata.message_thread_id, Some(1001));
         repo.append_log(&record, LogDirection::User, "hello", Some(7))
             .await
@@ -787,7 +779,7 @@ mod tests {
     #[tokio::test]
     async fn pending_image_batch_roundtrip() {
         let root = temp_path();
-        let repo = ConversationRepository::open(&root).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
         let record = repo
             .create_thread(42, 1002, "Images".to_owned())
             .await
@@ -824,7 +816,7 @@ mod tests {
     #[tokio::test]
     async fn session_binding_roundtrip_and_state_updates() {
         let root = temp_path();
-        let repo = ConversationRepository::open(&root).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
         let record = repo
             .create_thread(42, 1003, "Session".to_owned())
             .await
