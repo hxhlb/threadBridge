@@ -50,6 +50,6 @@ Your output must include these sections:
 
 ## Scope Reminder
 
-- This is a child `AGENTS.md` for one `data/<workspace-id>/` workspace.
+- This is a child `AGENTS.md` for one `data/<thread-key>/` workspace.
 - Keep the thread runtime workspace-local and self-contained.
 - Do not include generic contributor-guide content.

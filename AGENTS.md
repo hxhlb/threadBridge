@@ -9,7 +9,7 @@ It is not the thread-local runtime instruction file that Codex follows inside a 
 The runtime is organized in three layers:
 
 - Telegram UI and orchestration: the Rust bot receives Telegram updates, enforces authorization, manages thread commands, streams live Codex previews, and sends results back to Telegram.
-- Workspace agent runtime by Codex CLI: the Rust runtime layer maps each Telegram thread to bot-local metadata under `data/`, binds it to an existing Codex session from `~/.codex`, projects the session `cwd` into `data/<workspace-id>/workspace`, and invokes Codex CLI inside that linked workspace.
+- Workspace agent runtime by Codex CLI: the Rust runtime layer maps each Telegram thread to bot-local metadata under `data/`, binds it to an existing Codex session from `~/.codex`, projects the session `cwd` into `data/<thread-key>/workspace`, and invokes Codex CLI inside that linked workspace.
 - Tool executors: workspace-local wrapper commands call Python scripts in `tools/` to materialize prompt configs and generated image artifacts.
 
 Important repo areas:
@@ -21,7 +21,7 @@ Important repo areas:
 - `rust/src/repository.rs`: persistent workspace state for metadata, transcripts, summaries, pending image batches, and analysis artifacts.
 - `templates/`: seed assets used to initialize or maintain workspaces. `templates/AGENTS.md` is the active seed runtime contract. Other template files here are maintainer-side assets, not the primary runtime dependency.
 - `tools/`: Python executors invoked from workspace-local wrappers. `build_prompt_config.py` writes prompt artifacts; `generate_image.py` calls the image provider and stores generated outputs.
-- `data/`: runtime state. `data/main-thread/` stores the control console state. Each thread maps to `data/<workspace-id>/`.
+- `data/`: runtime state. `data/main-thread/` stores the control console state. Each thread maps to `data/<thread-key>/`.
 - `docs/`: supplemental notes such as provider-specific documentation. These files support maintenance but are not the normal workspace runtime surface.
 
 Treat `target/` and most of `data/` as generated output.
@@ -31,7 +31,7 @@ There are three distinct `AGENTS.md` roles in this repo. Do not conflate them wh
 
 - Root `AGENTS.md`: this file. It explains how to maintain the repository and how the runtime is structured.
 - `templates/AGENTS.md`: the seed template copied into each new workspace. It defines the workspace runtime contract, including the stable wrapper command names and artifact expectations.
-- `data/<workspace-id>/AGENTS.md`: the child, thread-local runtime instruction file used by Codex for one thread workspace. `/new_thread` seeds it from the template, and `/update_agents_md` rewrites it from the active session context before reconnecting Codex.
+- `data/<thread-key>/AGENTS.md`: the child, thread-local runtime instruction file used by Codex for one thread workspace. `/new_thread` seeds it from the template, and `/update_agents_md` rewrites it from the active session context before reconnecting Codex.
 
 When updating maintainer docs, describe the runtime behavior from the repo perspective. When updating workspace behavior, change the template or the child-workspace generation flow instead.
 
@@ -40,9 +40,9 @@ The operational flow is: Telegram thread -> Rust bot -> Codex workspace runtime 
 
 From a maintainer perspective, the lifecycle is:
 
-- `/new_thread` creates a Telegram topic and a bot-local metadata folder under `data/<workspace-id>/`.
+- `/new_thread` creates a Telegram topic and a bot-local metadata folder under `data/<thread-key>/`.
 - `/list_sessions` reads recent Codex sessions from the local `~/.codex` home.
-- `/bind_session` attaches a Telegram thread to an existing Codex session and ensures `data/<workspace-id>/workspace` points to that session `cwd`.
+- `/bind_session` attaches a Telegram thread to an existing Codex session and ensures `data/<thread-key>/workspace` points to that session `cwd`.
 - Normal thread messages append to the workspace transcript and run Codex in the workspace directory. The bot resumes the saved Codex thread when possible instead of replaying long transcripts.
 - `/build_prompt_config` asks Codex to read the workspace `AGENTS.md`, prepare `tool_requests/build_prompt_config.request.json`, run `./bin/build_prompt_config`, and then inspect `tool_results/build_prompt_config.result.json`.
 - `/generate_image` asks Codex to read the workspace `AGENTS.md`, run `./bin/generate_image`, and then return generated images from the workspace back to Telegram.

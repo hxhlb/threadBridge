@@ -625,11 +625,11 @@ async fn ensure_bound_workspace_runtime(
     ensure_linked_workspace_runtime(
         &state.config.runtime.codex_working_directory,
         &state.seed_template_path,
-        &record.workspace_link_path(),
+        &record.linked_workspace_path(),
         &resolved.cwd,
     )
     .await?;
-    Ok(record.workspace_link_path())
+    Ok(record.linked_workspace_path())
 }
 
 async fn handle_command(
@@ -1032,7 +1032,7 @@ async fn run_command(bot: &Bot, msg: &Message, command: Command, state: &AppStat
                     return Ok(());
                 }
             };
-            let workspace_path = record.workspace_link_path();
+            let workspace_path = record.linked_workspace_path();
             ensure_linked_workspace_runtime(
                 &state.config.runtime.codex_working_directory,
                 &state.seed_template_path,
@@ -2090,12 +2090,12 @@ async fn render_restore_page(
                 record.metadata.message_thread_id.unwrap_or_default()
             )
         });
-        lines.push(format!("- {} [{}]", label, record.metadata.workspace_id));
+        lines.push(format!("- {} [{}]", label, record.metadata.thread_key));
         keyboard.push(vec![InlineKeyboardButton::callback(
             format!("Restore: {}", label),
             format!(
                 "{CALLBACK_RESTORE_PICK}:{}:{offset}",
-                record.metadata.workspace_id
+                record.metadata.thread_key
             ),
         )]);
     }
@@ -2173,12 +2173,12 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
             bot.answer_callback_query(query.id.clone()).await?;
         }
         CALLBACK_RESTORE_PICK => {
-            let workspace_id = parts.get(1).copied().unwrap_or_default();
+            let thread_key = parts.get(1).copied().unwrap_or_default();
             let offset = parts
                 .get(2)
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0);
-            restore_thread(bot, message, query, state, workspace_id, offset).await?;
+            restore_thread(bot, message, query, state, thread_key, offset).await?;
         }
         _ => {}
     }
@@ -2190,23 +2190,23 @@ async fn restore_thread(
     message: &Message,
     query: &CallbackQuery,
     state: &AppState,
-    workspace_id: &str,
+    thread_key: &str,
     offset: usize,
 ) -> Result<()> {
     let Some(thread_record) = state
         .repository
-        .get_workspace_by_id(message.chat.id.0, workspace_id)
+        .get_thread_by_key(message.chat.id.0, thread_key)
         .await?
     else {
         bot.answer_callback_query(query.id.clone())
-            .text("That archived workspace no longer exists.")
+            .text("That archived thread binding no longer exists.")
             .await?;
         return Ok(());
     };
 
     if !matches!(thread_record.metadata.status, ConversationStatus::Archived) {
         bot.answer_callback_query(query.id.clone())
-            .text("That workspace is already active.")
+            .text("That thread binding is already active.")
             .await?;
         return Ok(());
     }

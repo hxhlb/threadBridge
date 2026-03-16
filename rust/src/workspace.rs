@@ -128,13 +128,13 @@ pub async fn ensure_workspace_runtime(
 pub async fn ensure_linked_workspace_runtime(
     repo_root: &Path,
     seed_template_path: &Path,
-    workspace_link_path: &Path,
+    linked_workspace_path: &Path,
     target_workspace_path: &Path,
 ) -> Result<()> {
-    let parent = workspace_link_path.parent().ok_or_else(|| {
+    let parent = linked_workspace_path.parent().ok_or_else(|| {
         anyhow::anyhow!(
             "workspace link path has no parent: {}",
-            workspace_link_path.display()
+            linked_workspace_path.display()
         )
     })?;
     fs::create_dir_all(parent).await?;
@@ -142,40 +142,42 @@ pub async fn ensure_linked_workspace_runtime(
         .await
         .with_context(|| format!("failed to create {}", target_workspace_path.display()))?;
 
-    match fs::symlink_metadata(workspace_link_path).await {
+    match fs::symlink_metadata(linked_workspace_path).await {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {
-                let current = fs::read_link(workspace_link_path).await.with_context(|| {
-                    format!(
-                        "failed to read workspace symlink {}",
-                        workspace_link_path.display()
-                    )
-                })?;
+                let current = fs::read_link(linked_workspace_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to read workspace symlink {}",
+                            linked_workspace_path.display()
+                        )
+                    })?;
                 if current != target_workspace_path {
-                    fs::remove_file(workspace_link_path).await?;
+                    fs::remove_file(linked_workspace_path).await?;
                 }
             } else {
                 bail!(
                     "workspace link path is not a symlink: {}",
-                    workspace_link_path.display()
+                    linked_workspace_path.display()
                 );
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("failed to inspect {}", workspace_link_path.display()));
+                .with_context(|| format!("failed to inspect {}", linked_workspace_path.display()));
         }
     }
 
-    if !fs::try_exists(workspace_link_path).await? {
+    if !fs::try_exists(linked_workspace_path).await? {
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(target_workspace_path, workspace_link_path).with_context(
+            std::os::unix::fs::symlink(target_workspace_path, linked_workspace_path).with_context(
                 || {
                     format!(
                         "failed to create workspace symlink {} -> {}",
-                        workspace_link_path.display(),
+                        linked_workspace_path.display(),
                         target_workspace_path.display()
                     )
                 },
@@ -183,7 +185,7 @@ pub async fn ensure_linked_workspace_runtime(
         }
     }
 
-    ensure_workspace_runtime(repo_root, seed_template_path, workspace_link_path).await
+    ensure_workspace_runtime(repo_root, seed_template_path, linked_workspace_path).await
 }
 
 pub fn validate_seed_template(seed_template_path: &Path) -> Result<PathBuf> {

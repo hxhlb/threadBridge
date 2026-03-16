@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::image_artifacts::{ImageAnalysisArtifact, PendingImageBatch, PendingImageBatchEntry};
 
-const MAIN_WORKSPACE_ID: &str = "main-thread";
+const MAIN_THREAD_KEY: &str = "main-thread";
 const SESSION_BINDING_FILE_NAME: &str = "session-binding.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +42,8 @@ pub struct ConversationMetadata {
     pub status: ConversationStatus,
     pub title: Option<String>,
     pub updated_at: String,
-    pub workspace_id: String,
+    #[serde(alias = "workspace_id")]
+    pub thread_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,7 +99,7 @@ pub struct ConversationRecord {
 }
 
 impl ConversationRecord {
-    pub fn workspace_link_path(&self) -> PathBuf {
+    pub fn linked_workspace_path(&self) -> PathBuf {
         self.folder_path.join("workspace")
     }
 }
@@ -112,17 +113,17 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn folder_name_for(scope: &ConversationScope, workspace_id: &str) -> String {
+fn folder_name_for(scope: &ConversationScope, thread_key: &str) -> String {
     match scope {
-        ConversationScope::Main => MAIN_WORKSPACE_ID.to_owned(),
-        ConversationScope::Thread => workspace_id.to_owned(),
+        ConversationScope::Main => MAIN_THREAD_KEY.to_owned(),
+        ConversationScope::Thread => thread_key.to_owned(),
     }
 }
 
-fn conversation_key_for(scope: &ConversationScope, workspace_id: &str) -> String {
+fn conversation_key_for(scope: &ConversationScope, thread_key: &str) -> String {
     match scope {
-        ConversationScope::Main => MAIN_WORKSPACE_ID.to_owned(),
-        ConversationScope::Thread => format!("workspace:{workspace_id}"),
+        ConversationScope::Main => MAIN_THREAD_KEY.to_owned(),
+        ConversationScope::Thread => format!("thread:{thread_key}"),
     }
 }
 
@@ -139,7 +140,7 @@ impl ConversationRepository {
             ConversationScope::Main,
             None,
             None,
-            MAIN_WORKSPACE_ID.to_owned(),
+            MAIN_THREAD_KEY.to_owned(),
         )
         .await
     }
@@ -576,12 +577,12 @@ impl ConversationRepository {
         Ok(records)
     }
 
-    pub async fn get_workspace_by_id(
+    pub async fn get_thread_by_key(
         &self,
         chat_id: i64,
-        workspace_id: &str,
+        thread_key: &str,
     ) -> Result<Option<ConversationRecord>> {
-        let folder_name = folder_name_for(&ConversationScope::Thread, workspace_id);
+        let folder_name = folder_name_for(&ConversationScope::Thread, thread_key);
         let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
         if !fs::try_exists(&metadata_path).await? {
             return Ok(None);
@@ -600,9 +601,9 @@ impl ConversationRepository {
         scope: ConversationScope,
         message_thread_id: Option<i32>,
         title: Option<String>,
-        workspace_id: String,
+        thread_key: String,
     ) -> Result<ConversationRecord> {
-        let folder_name = folder_name_for(&scope, &workspace_id);
+        let folder_name = folder_name_for(&scope, &thread_key);
         let folder_path = self.data_root_path.join(&folder_name);
         let metadata_path = folder_path.join("metadata.json");
         if fs::try_exists(&metadata_path).await? {
@@ -627,7 +628,7 @@ impl ConversationRepository {
             status: ConversationStatus::Active,
             title,
             updated_at: created_at,
-            workspace_id: workspace_id.clone(),
+            thread_key: thread_key.clone(),
         };
         let record = self.build_record(folder_name, metadata);
         fs::write(
@@ -736,7 +737,7 @@ impl ConversationRepository {
     ) -> ConversationRecord {
         let folder_path = self.data_root_path.join(&folder_name);
         ConversationRecord {
-            conversation_key: conversation_key_for(&metadata.scope, &metadata.workspace_id),
+            conversation_key: conversation_key_for(&metadata.scope, &metadata.thread_key),
             folder_name,
             folder_path: folder_path.clone(),
             log_path: folder_path.join("conversations.jsonl"),
