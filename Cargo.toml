@@ -1,5 +1,5 @@
 [package]
-name = "artbot-rust"
+name = "threadbridge-rust"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,8 +7,8 @@ edition = "2024"
 path = "rust/src/lib.rs"
 
 [[bin]]
-name = "artbot"
-path = "rust/src/bin/artbot.rs"
+name = "threadbridge"
+path = "rust/src/bin/threadbridge.rs"
 
 [[bin]]
 name = "min_chat_probe"

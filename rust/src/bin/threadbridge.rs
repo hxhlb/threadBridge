@@ -3,25 +3,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use artbot_rust::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
-use artbot_rust::codex_home::CodexHome;
-use artbot_rust::config::{AppConfig, load_app_config};
-use artbot_rust::image_artifacts::{
-    ImageAnalysisArtifact, ImageAnalysisImage, build_image_analysis_prompt,
-    render_pending_image_batch,
-};
-use artbot_rust::logging::init_json_logs;
-use artbot_rust::repository::{
-    AppendPendingImageInput, ConversationRecord, ConversationRepository, ConversationStatus,
-    LogDirection, SessionBinding,
-};
-use artbot_rust::tool_results::{
-    TelegramOutboxItem, parse_build_prompt_config_tool_result, parse_generate_image_tool_result,
-    parse_telegram_outbox,
-};
-use artbot_rust::workspace::{
-    ensure_linked_workspace_runtime, validate_seed_template,
-};
 use serde::{Deserialize, Serialize};
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::dptree;
@@ -32,6 +13,23 @@ use teloxide::types::{
     ThreadId,
 };
 use teloxide::utils::command::BotCommands;
+use threadbridge_rust::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
+use threadbridge_rust::codex_home::CodexHome;
+use threadbridge_rust::config::{AppConfig, load_app_config};
+use threadbridge_rust::image_artifacts::{
+    ImageAnalysisArtifact, ImageAnalysisImage, build_image_analysis_prompt,
+    render_pending_image_batch,
+};
+use threadbridge_rust::logging::init_json_logs;
+use threadbridge_rust::repository::{
+    AppendPendingImageInput, ConversationRecord, ConversationRepository, ConversationStatus,
+    LogDirection, SessionBinding,
+};
+use threadbridge_rust::tool_results::{
+    TelegramOutboxItem, parse_build_prompt_config_tool_result, parse_generate_image_tool_result,
+    parse_telegram_outbox,
+};
+use threadbridge_rust::workspace::{ensure_linked_workspace_runtime, validate_seed_template};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{error, info, warn};
 
@@ -579,7 +577,9 @@ fn session_binding_hint(session: Option<&SessionBinding>) -> &'static str {
         Some(session) if session.session_broken => {
             "This thread's bound Codex session is invalid. Use /reconnect_codex to revalidate it or /bind_session <session_id> to attach another one."
         }
-        _ => "This thread is not bound to a Codex session. Use /list_sessions, then /bind_session <session_id>.",
+        _ => {
+            "This thread is not bound to a Codex session. Use /list_sessions, then /bind_session <session_id>."
+        }
     }
 }
 
@@ -594,18 +594,16 @@ fn command_argument_text<'a>(msg: &'a Message, command_name: &str) -> Option<&'a
     }
 }
 
-fn format_session_list_text(sessions: &[artbot_rust::codex_home::CodexSessionSummary]) -> String {
+fn format_session_list_text(
+    sessions: &[threadbridge_rust::codex_home::CodexSessionSummary],
+) -> String {
     if sessions.is_empty() {
         return "No recent Codex sessions were found in ~/.codex.".to_owned();
     }
 
     let mut lines = vec!["Recent Codex sessions:".to_owned()];
     for session in sessions {
-        lines.push(format!(
-            "- `{}`  {}",
-            session.id,
-            session.title.trim()
-        ));
+        lines.push(format!("- `{}`  {}", session.id, session.title.trim()));
     }
     lines.push("Bind one in a creative thread with /bind_session <session_id>.".to_owned());
     lines.join("\n")
@@ -734,9 +732,9 @@ async fn upsert_pending_image_batch_message(
     state: &AppState,
     chat_id: ChatId,
     thread_id: ThreadId,
-    record: &artbot_rust::repository::ConversationRecord,
-    batch: artbot_rust::image_artifacts::PendingImageBatch,
-) -> Result<artbot_rust::image_artifacts::PendingImageBatch> {
+    record: &threadbridge_rust::repository::ConversationRecord,
+    batch: threadbridge_rust::image_artifacts::PendingImageBatch,
+) -> Result<threadbridge_rust::image_artifacts::PendingImageBatch> {
     let text = render_pending_image_batch(&batch);
     let markup = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
         "直接分析",
@@ -777,9 +775,10 @@ async fn read_file_or_none(path: impl Into<PathBuf>) -> Result<Option<String>> {
 }
 
 async fn read_build_prompt_result(
-    record: &artbot_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ConversationRecord,
 ) -> Result<Option<(String, String)>> {
-    let Some(result_text) = read_file_or_none(record.folder_path.join(BUILD_PROMPT_RESULT_FILE)).await?
+    let Some(result_text) =
+        read_file_or_none(record.folder_path.join(BUILD_PROMPT_RESULT_FILE)).await?
     else {
         return Ok(None);
     };
@@ -788,8 +787,8 @@ async fn read_build_prompt_result(
 }
 
 async fn read_generate_image_result(
-    record: &artbot_rust::repository::ConversationRecord,
-) -> Result<Option<artbot_rust::tool_results::GenerateImageToolResult>> {
+    record: &threadbridge_rust::repository::ConversationRecord,
+) -> Result<Option<threadbridge_rust::tool_results::GenerateImageToolResult>> {
     let Some(result_text) =
         read_file_or_none(record.folder_path.join(GENERATE_IMAGE_RESULT_FILE)).await?
     else {
@@ -799,8 +798,8 @@ async fn read_generate_image_result(
 }
 
 async fn read_telegram_outbox(
-    record: &artbot_rust::repository::ConversationRecord,
-) -> Result<Option<artbot_rust::tool_results::TelegramOutbox>> {
+    record: &threadbridge_rust::repository::ConversationRecord,
+) -> Result<Option<threadbridge_rust::tool_results::TelegramOutbox>> {
     let Some(result_text) =
         read_file_or_none(record.folder_path.join(TELEGRAM_OUTBOX_FILE)).await?
     else {
@@ -819,7 +818,7 @@ async fn remove_file_if_exists(path: impl Into<PathBuf>) -> Result<()> {
 }
 
 fn resolve_workspace_file_path(
-    record: &artbot_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ConversationRecord,
     relative_path: &str,
 ) -> PathBuf {
     record.folder_path.join(relative_path)
@@ -828,7 +827,7 @@ fn resolve_workspace_file_path(
 async fn dispatch_workspace_telegram_outbox(
     bot: &Bot,
     state: &AppState,
-    record: &artbot_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ConversationRecord,
     thread_id: ThreadId,
 ) -> Result<()> {
     let Some(outbox) = read_telegram_outbox(record).await? else {
@@ -897,7 +896,7 @@ async fn dispatch_workspace_telegram_outbox(
 
 async fn send_generated_images(
     bot: &Bot,
-    record: &artbot_rust::repository::ConversationRecord,
+    record: &threadbridge_rust::repository::ConversationRecord,
     thread_id: ThreadId,
     image_paths: &[String],
     summary: &str,
@@ -1837,7 +1836,7 @@ async fn queue_image_for_thread(
 async fn analyze_pending_image_batch(
     bot: &Bot,
     state: &AppState,
-    record: artbot_rust::repository::ConversationRecord,
+    record: threadbridge_rust::repository::ConversationRecord,
     thread_id: ThreadId,
     batch_id: &str,
     user_prompt: Option<&str>,
@@ -2491,9 +2490,9 @@ async fn run_text_message(bot: &Bot, msg: &Message, text: &str, state: &AppState
 #[cfg(test)]
 mod tests {
     use super::{PreviewRenderer, SendMessageDraftRequest};
-    use artbot_rust::codex::CodexThreadEvent;
     use serde_json::json;
     use teloxide::types::ChatId;
+    use threadbridge_rust::codex::CodexThreadEvent;
 
     #[test]
     fn preview_renderer_applies_heartbeat_to_draft_text() {

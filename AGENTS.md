@@ -14,7 +14,7 @@ The runtime is organized in three layers:
 
 Important repo areas:
 
-- `rust/src/bin/artbot.rs`: Telegram bot entrypoint and command handling for `/new_thread`, `/list_sessions`, `/bind_session`, `/build_prompt_config`, `/generate_image`, `/update_agents_md`, image analysis, archive, restore, and reconnect flows.
+- `rust/src/bin/threadbridge.rs`: Telegram bot entrypoint and command handling for `/new_thread`, `/list_sessions`, `/bind_session`, `/build_prompt_config`, `/generate_image`, `/update_agents_md`, image analysis, archive, restore, and reconnect flows.
 - `rust/src/codex.rs`: Codex CLI wrapper that starts or resumes sessions with `codex exec`, streams JSON events, and exposes the maintainer-facing runtime operations.
 - `rust/src/codex_home.rs`: integration layer that reads Codex session metadata from the local `~/.codex` home.
 - `rust/src/workspace.rs`: workspace bootstrap logic that seeds child `AGENTS.md`, creates workspace-local wrapper scripts in `bin/`, and keeps the runtime contract section in sync.
@@ -66,14 +66,14 @@ Use the repo-local Cargo paths from the README:
 
 ```bash
 export CARGO_HOME="$PWD/.cargo" CARGO_TARGET_DIR="$PWD/target"
-cargo run --bin artbot
+cargo run --bin threadbridge
 cargo check
 cargo test
 cargo fmt
 cargo clippy --all-targets --all-features
 ```
 
-`cargo run --bin artbot` starts the Telegram bot. `cargo check` is the fastest correctness pass. `cargo test` runs the inline unit tests. `cargo fmt` and `cargo clippy` use standard Rust tooling; run them before opening a PR.
+`cargo run --bin threadbridge` starts the Telegram bot. `cargo check` is the fastest correctness pass. `cargo test` runs the inline unit tests. `cargo fmt` and `cargo clippy` use standard Rust tooling; run them before opening a PR.
 
 ## Coding Style & Naming Conventions
 Follow `rustfmt` defaults for Rust: 4-space indentation, `snake_case` for functions and modules, `PascalCase` for types, and small focused modules. Match the existing style in `rust/src/` by returning `anyhow::Result`, using `serde`-friendly structs, and keeping async I/O in Tokio-aware helpers.

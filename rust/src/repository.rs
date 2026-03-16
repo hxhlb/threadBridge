@@ -762,7 +762,7 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_path() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("artbot-rust-test-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!("threadbridge-rust-test-{}", Uuid::new_v4()))
     }
 
     #[tokio::test]

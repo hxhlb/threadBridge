@@ -26,13 +26,13 @@ Telegram bot that binds Telegram threads to existing Codex sessions.
 
 ```bash
 export CARGO_HOME="$PWD/.cargo" CARGO_TARGET_DIR="$PWD/target"
-cargo run --bin artbot
+cargo run --bin threadbridge
 ```
 
 Or use the local helper script:
 
 ```bash
-scripts/local_artbot.sh start
+scripts/local_threadbridge.sh start
 ```
 
 ## Behavior

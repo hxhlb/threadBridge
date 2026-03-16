@@ -146,7 +146,10 @@ pub async fn ensure_linked_workspace_runtime(
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {
                 let current = fs::read_link(workspace_link_path).await.with_context(|| {
-                    format!("failed to read workspace symlink {}", workspace_link_path.display())
+                    format!(
+                        "failed to read workspace symlink {}",
+                        workspace_link_path.display()
+                    )
                 })?;
                 if current != target_workspace_path {
                     fs::remove_file(workspace_link_path).await?;
@@ -168,14 +171,15 @@ pub async fn ensure_linked_workspace_runtime(
     if !fs::try_exists(workspace_link_path).await? {
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(target_workspace_path, workspace_link_path)
-                .with_context(|| {
+            std::os::unix::fs::symlink(target_workspace_path, workspace_link_path).with_context(
+                || {
                     format!(
                         "failed to create workspace symlink {} -> {}",
                         workspace_link_path.display(),
                         target_workspace_path.display()
                     )
-                })?;
+                },
+            )?;
         }
     }
 

@@ -98,11 +98,11 @@ set -euo pipefail
 APP_ROOT=$(mkdir -p "$1" && cd "$1" && pwd -P)
 COMMAND=$2
 DEFAULT_PROXY_URL=$3
-BOT_BINARY="$APP_ROOT/artbot"
+BOT_BINARY="$APP_ROOT/threadbridge"
 ENV_FILE="$APP_ROOT/.env.local"
 LOG_DIR="$APP_ROOT/logs"
-STDOUT_LOG="$LOG_DIR/artbot.stdout.log"
-STDERR_LOG="$LOG_DIR/artbot.stderr.log"
+STDOUT_LOG="$LOG_DIR/threadbridge.stdout.log"
+STDERR_LOG="$LOG_DIR/threadbridge.stderr.log"
 EVENT_LOG="$APP_ROOT/data/debug/events.jsonl"
 RUNTIME_PATH="$APP_ROOT/bin:$HOME/.local/mamba-envs/codex-tools/bin:$HOME/.local/bin:$PATH"
 
@@ -122,7 +122,7 @@ process_cwd() {
 }
 
 bot_pids() {
-  (pgrep -x artbot 2>/dev/null || true) | while IFS= read -r pid; do
+  (pgrep -x threadbridge 2>/dev/null || true) | while IFS= read -r pid; do
     [[ -n "$pid" ]] || continue
     if [[ "$(process_cwd "$pid")" == "$APP_ROOT" ]]; then
       printf '%s\n' "$pid"
@@ -199,32 +199,32 @@ start_bot() {
 
   sleep 5
   if [[ -z "$(bot_pids)" ]]; then
-    log "artbot failed to start"
+    log "threadbridge failed to start"
     tail -n 80 "$STDERR_LOG" || true
     exit 1
   fi
 
-  log "artbot started"
+  log "threadbridge started"
   status_bot
 }
 
 stop_bot() {
   if [[ -z "$(bot_pids)" ]]; then
-    log "artbot is not running"
+    log "threadbridge is not running"
     return 0
   fi
 
   kill_bot_processes
-  log "artbot stopped"
+  log "threadbridge stopped"
 }
 
 status_bot() {
   local pids
   pids=$(bot_pids)
   if [[ -z "$pids" ]]; then
-    log "artbot is not running"
+    log "threadbridge is not running"
   else
-    log "artbot running with PID(s): $(echo "$pids" | tr '\n' ' ')"
+    log "threadbridge running with PID(s): $(echo "$pids" | tr '\n' ' ')"
   fi
 
   if [[ -f "$EVENT_LOG" ]]; then
@@ -281,14 +281,14 @@ EOF
 
 build_local_binary() {
   require_command cargo
-  log "building artbot for $BUILD_TARGET"
+  log "building threadbridge for $BUILD_TARGET"
   (
     cd "$REPO_ROOT"
     export PATH="$LOCAL_RUNTIME_PATH"
     export CARGO_HOME="$CARGO_HOME_DIR"
     export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
     export RUSTUP_HOME="$RUSTUP_HOME_DIR"
-    cargo build --release --target "$BUILD_TARGET" --bin artbot
+    cargo build --release --target "$BUILD_TARGET" --bin threadbridge
   )
 }
 
@@ -296,7 +296,7 @@ sync_remote_runtime() {
   ensure_remote_layout
   log "syncing runtime files to $REMOTE_HOST:$REMOTE_DIR"
   rsync -az --delete \
-    "$REPO_ROOT/target/$BUILD_TARGET/release/artbot" \
+    "$REPO_ROOT/target/$BUILD_TARGET/release/threadbridge" \
     "$REPO_ROOT/.env.example" \
     "$REPO_ROOT/README.md" \
     "$REMOTE_HOST:$REMOTE_DIR/"
@@ -311,7 +311,7 @@ sync_remote_runtime() {
   rsync -az \
     "$REPO_ROOT/scripts/remote_codex_wrapper.sh" \
     "$REMOTE_HOST:$REMOTE_DIR/bin/codex"
-  ssh "$REMOTE_HOST" "chmod +x '$REMOTE_DIR/artbot' '$REMOTE_DIR/bin/codex'"
+  ssh "$REMOTE_HOST" "chmod +x '$REMOTE_DIR/threadbridge' '$REMOTE_DIR/bin/codex'"
 }
 
 deploy() {

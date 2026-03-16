@@ -108,7 +108,8 @@ impl CodexHome {
         if !path.exists() {
             return Ok(HashMap::new());
         }
-        let file = File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+        let file =
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
         let reader = BufReader::new(file);
         let mut entries = HashMap::new();
         for line in reader.lines() {
@@ -129,7 +130,10 @@ impl CodexHome {
         if !sessions_root.exists() {
             return Ok(None);
         }
-        for entry in WalkDir::new(&sessions_root).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(&sessions_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -151,9 +155,10 @@ impl CodexHome {
             if trimmed.is_empty() {
                 continue;
             }
-            let envelope: SessionMetaEnvelope = serde_json::from_str(trimmed).with_context(|| {
-                format!("invalid session metadata in {}", rollout_path.display())
-            })?;
+            let envelope: SessionMetaEnvelope =
+                serde_json::from_str(trimmed).with_context(|| {
+                    format!("invalid session metadata in {}", rollout_path.display())
+                })?;
             if envelope.kind == "session_meta" {
                 return Ok(envelope.payload);
             }

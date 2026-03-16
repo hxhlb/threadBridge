@@ -5,8 +5,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd -P)
 ENV_FILE="$REPO_ROOT/.env.local"
 LOG_DIR="$REPO_ROOT/logs"
-STDOUT_LOG="$LOG_DIR/local-artbot.stdout.log"
-STDERR_LOG="$LOG_DIR/local-artbot.stderr.log"
+STDOUT_LOG="$LOG_DIR/local-threadbridge.stdout.log"
+STDERR_LOG="$LOG_DIR/local-threadbridge.stderr.log"
 EVENT_LOG="$REPO_ROOT/data/debug/events.jsonl"
 CARGO_HOME_DIR="${CARGO_HOME:-$REPO_ROOT/.cargo}"
 CARGO_TARGET_DIR_PATH="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
@@ -16,7 +16,7 @@ RUNTIME_PATH="$HOME/.cargo/bin:$REPO_ROOT/bin:$PATH"
 
 usage() {
   cat <<'EOF'
-Usage: local_artbot.sh <command>
+Usage: local_threadbridge.sh <command>
 
 Commands:
   start
@@ -31,7 +31,7 @@ EOF
 }
 
 log() {
-  printf '[local-artbot] %s\n' "$*"
+  printf '[local-threadbridge] %s\n' "$*"
 }
 
 require_command() {
@@ -55,10 +55,10 @@ process_cwd() {
 binary_path() {
   case "$BUILD_PROFILE" in
     dev)
-      printf '%s\n' "$CARGO_TARGET_DIR_PATH/debug/artbot"
+      printf '%s\n' "$CARGO_TARGET_DIR_PATH/debug/threadbridge"
       ;;
     release)
-      printf '%s\n' "$CARGO_TARGET_DIR_PATH/release/artbot"
+      printf '%s\n' "$CARGO_TARGET_DIR_PATH/release/threadbridge"
       ;;
     *)
       printf 'Unsupported BUILD_PROFILE: %s\n' "$BUILD_PROFILE" >&2
@@ -69,8 +69,8 @@ binary_path() {
 
 bot_pids() {
   {
-    pgrep -x artbot || true
-    pgrep -f 'cargo run --bin artbot' || true
+    pgrep -x threadbridge || true
+    pgrep -f 'cargo run --bin threadbridge' || true
   } | awk 'NF { print $1 }' | sort -u | while IFS= read -r pid; do
     [[ -n "$pid" ]] || continue
     if [[ "$(process_cwd "$pid")" == "$REPO_ROOT" ]]; then
@@ -126,7 +126,7 @@ ensure_env() {
 }
 
 build_bot() {
-  log "building artbot ($BUILD_PROFILE)"
+  log "building threadbridge ($BUILD_PROFILE)"
   (
     cd "$REPO_ROOT"
     export PATH="$RUNTIME_PATH"
@@ -134,9 +134,9 @@ build_bot() {
     export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
     export RUSTUP_HOME="$RUSTUP_HOME_DIR"
     if [[ "$BUILD_PROFILE" == "release" ]]; then
-      cargo build --release --bin artbot
+      cargo build --release --bin threadbridge
     else
-      cargo build --bin artbot
+      cargo build --bin threadbridge
     fi
   )
 }
@@ -169,32 +169,32 @@ start_bot() {
 
   sleep 3
   if [[ -z "$(bot_pids)" ]]; then
-    log "artbot failed to start"
+    log "threadbridge failed to start"
     tail -n 80 "$STDERR_LOG" || true
     exit 1
   fi
 
-  log "artbot started"
+  log "threadbridge started"
   status_bot
 }
 
 stop_bot() {
   if [[ -z "$(bot_pids)" ]]; then
-    log "artbot is not running"
+    log "threadbridge is not running"
     return 0
   fi
 
   kill_bot_processes
-  log "artbot stopped"
+  log "threadbridge stopped"
 }
 
 status_bot() {
   local pids
   pids=$(bot_pids)
   if [[ -z "$pids" ]]; then
-    log "artbot is not running"
+    log "threadbridge is not running"
   else
-    log "artbot running with PID(s): $(echo "$pids" | tr '\n' ' ')"
+    log "threadbridge running with PID(s): $(echo "$pids" | tr '\n' ' ')"
   fi
 
   if [[ -f "$EVENT_LOG" ]]; then

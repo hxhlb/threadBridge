@@ -169,7 +169,7 @@ def main() -> None:
     parser.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
-        help="Path to the artBot repository root.",
+        help="Path to the threadBridge repository root.",
     )
     parser.add_argument(
         "--output-root",

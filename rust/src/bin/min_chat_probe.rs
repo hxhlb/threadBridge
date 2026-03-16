@@ -1,9 +1,9 @@
 use anyhow::Result;
-use artbot_rust::codex::{CodexRunner, CodexWorkspace};
-use artbot_rust::config::load_runtime_config;
-use artbot_rust::logging::init_json_logs;
-use artbot_rust::workspace::{ensure_workspace_runtime, validate_seed_template};
 use serde::Serialize;
+use threadbridge_rust::codex::{CodexRunner, CodexWorkspace};
+use threadbridge_rust::config::load_runtime_config;
+use threadbridge_rust::logging::init_json_logs;
+use threadbridge_rust::workspace::{ensure_workspace_runtime, validate_seed_template};
 use tokio::fs;
 use uuid::Uuid;
 
