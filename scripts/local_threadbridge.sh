@@ -41,17 +41,6 @@ require_command() {
   fi
 }
 
-process_cwd() {
-  local pid=$1
-  local cwd
-  cwd=$(lsof -a -p "$pid" -d cwd 2>/dev/null | awk 'NR==2 {print $NF}')
-  if [[ -n "$cwd" && -d "$cwd" ]]; then
-    (cd "$cwd" && pwd -P)
-  else
-    printf '%s\n' "$cwd"
-  fi
-}
-
 binary_path() {
   case "$BUILD_PROFILE" in
     dev)
@@ -67,43 +56,20 @@ binary_path() {
   esac
 }
 
-bot_pids() {
-  {
-    pgrep -x threadbridge || true
-    pgrep -f 'cargo run --bin threadbridge' || true
-  } | awk 'NF { print $1 }' | sort -u | while IFS= read -r pid; do
-    [[ -n "$pid" ]] || continue
-    if [[ "$(process_cwd "$pid")" == "$REPO_ROOT" ]]; then
-      printf '%s\n' "$pid"
-    fi
-  done
+tmux_session_name() {
+  local hash
+  hash=$(printf '%s' "$REPO_ROOT" | shasum | awk '{print substr($1, 1, 10)}')
+  printf 'threadbridge-%s' "$hash"
 }
 
-kill_bot_processes() {
-  local pids
-  pids=$(bot_pids)
-  if [[ -z "$pids" ]]; then
-    return 0
-  fi
+tmux_session_exists() {
+  local session_name=$1
+  tmux has-session -t "$session_name" 2>/dev/null
+}
 
-  log "stopping existing bot process(es): $(echo "$pids" | tr '\n' ' ')"
-  while IFS= read -r pid; do
-    [[ -n "$pid" ]] || continue
-    kill "$pid" || true
-  done <<< "$pids"
-
-  sleep 2
-
-  local remaining
-  remaining=$(bot_pids)
-  if [[ -n "$remaining" ]]; then
-    log "force killing lingering bot process(es): $(echo "$remaining" | tr '\n' ' ')"
-    while IFS= read -r pid; do
-      [[ -n "$pid" ]] || continue
-      kill -9 "$pid" || true
-    done <<< "$remaining"
-    sleep 1
-  fi
+tmux_session_pid() {
+  local session_name=$1
+  tmux list-panes -t "$session_name" -F '#{pane_pid}' 2>/dev/null | head -n 1
 }
 
 ensure_layout() {
@@ -145,10 +111,7 @@ start_bot() {
   ensure_layout
   ensure_env
   require_command cargo
-  require_command pgrep
-  require_command lsof
-
-  kill_bot_processes
+  require_command tmux
 
   build_bot
 
@@ -159,42 +122,64 @@ start_bot() {
     exit 1
   fi
 
-  nohup env \
-    PATH="$RUNTIME_PATH" \
-    CARGO_HOME="$CARGO_HOME_DIR" \
-    CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH" \
-    RUSTUP_HOME="$RUSTUP_HOME_DIR" \
-    bash -lc "cd '$REPO_ROOT' && set -a && source '$ENV_FILE' && set +a && exec '$bot_binary'" \
-    >"$STDOUT_LOG" 2>"$STDERR_LOG" < /dev/null &
+  local session_name
+  session_name=$(tmux_session_name)
+  if tmux_session_exists "$session_name"; then
+    log "stopping existing tmux session: $session_name"
+    tmux kill-session -t "$session_name"
+    sleep 1
+  fi
+
+  local launch_command
+  launch_command=$(printf 'cd %q && export PATH=%q CARGO_HOME=%q CARGO_TARGET_DIR=%q RUSTUP_HOME=%q && set -a && source %q && set +a && exec %q >>%q 2>>%q' \
+    "$REPO_ROOT" \
+    "$RUNTIME_PATH" \
+    "$CARGO_HOME_DIR" \
+    "$CARGO_TARGET_DIR_PATH" \
+    "$RUSTUP_HOME_DIR" \
+    "$ENV_FILE" \
+    "$bot_binary" \
+    "$STDOUT_LOG" \
+    "$STDERR_LOG")
+  tmux new-session -d -s "$session_name" "$(printf 'bash -lc %q' "$launch_command")"
 
   sleep 3
-  if [[ -z "$(bot_pids)" ]]; then
+  if ! tmux_session_exists "$session_name"; then
     log "threadbridge failed to start"
     tail -n 80 "$STDERR_LOG" || true
     exit 1
   fi
 
-  log "threadbridge started"
+  log "threadbridge started in tmux session: $session_name"
   status_bot
 }
 
 stop_bot() {
-  if [[ -z "$(bot_pids)" ]]; then
+  local session_name
+  session_name=$(tmux_session_name)
+
+  if ! tmux_session_exists "$session_name"; then
     log "threadbridge is not running"
     return 0
   fi
 
-  kill_bot_processes
+  tmux kill-session -t "$session_name"
   log "threadbridge stopped"
 }
 
 status_bot() {
-  local pids
-  pids=$(bot_pids)
-  if [[ -z "$pids" ]]; then
+  local session_name
+  session_name=$(tmux_session_name)
+
+  if ! tmux_session_exists "$session_name"; then
     log "threadbridge is not running"
   else
-    log "threadbridge running with PID(s): $(echo "$pids" | tr '\n' ' ')"
+    local pane_pid
+    pane_pid=$(tmux_session_pid "$session_name")
+    log "threadbridge running in tmux session: $session_name"
+    if [[ -n "$pane_pid" ]]; then
+      log "tmux pane PID: $pane_pid"
+    fi
   fi
 
   if [[ -f "$EVENT_LOG" ]]; then
@@ -205,6 +190,14 @@ status_bot() {
 
 logs_bot() {
   ensure_layout
+  local session_name
+  session_name=$(tmux_session_name)
+
+  if tmux_session_exists "$session_name"; then
+    log "tmux pane"
+    tmux capture-pane -p -t "$session_name" -S -40 || true
+  fi
+
   log "stdout"
   tail -n 40 "$STDOUT_LOG" || true
   log "stderr"
