@@ -506,11 +506,6 @@ fn apply_layout_adjustments(html: &str) -> String {
     let mut adjusted = Vec::with_capacity(lines.len());
 
     for (idx, line) in lines.iter().enumerate() {
-        if should_indent_following_description_line(&lines, idx) {
-            adjusted.push(format!("　{}", line.trim_start()));
-            continue;
-        }
-
         let next_non_empty = lines
             .iter()
             .skip(idx + 1)
@@ -519,8 +514,6 @@ fn apply_layout_adjustments(html: &str) -> String {
 
         let line = if should_bold_section_label(line, next_non_empty) {
             format!("<b>{}</b>", line.trim())
-        } else if let Some(reflowed) = reflow_file_reference_bullet(line) {
-            reflowed
         } else {
             (*line).to_owned()
         };
@@ -529,21 +522,6 @@ fn apply_layout_adjustments(html: &str) -> String {
     }
 
     adjusted.join("\n")
-}
-
-fn should_indent_following_description_line(lines: &[&str], idx: usize) -> bool {
-    if idx == 0 {
-        return false;
-    }
-
-    let previous = lines[idx - 1].trim();
-    let current = lines[idx].trim();
-
-    if current.is_empty() || looks_like_bullet_line(current) {
-        return false;
-    }
-
-    previous.starts_with("- <code>") && previous.ends_with("</code>")
 }
 
 fn should_bold_section_label(line: &str, next_non_empty: Option<&str>) -> bool {
@@ -555,48 +533,6 @@ fn should_bold_section_label(line: &str, next_non_empty: Option<&str>) -> bool {
         return false;
     }
     next_non_empty.is_some_and(looks_like_bullet_line)
-}
-
-fn reflow_file_reference_bullet(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let indent = line.len().saturating_sub(trimmed.len());
-    let marker_len = if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-        2
-    } else {
-        ordered_marker_len(trimmed)?
-    };
-    let marker = &trimmed[..marker_len];
-    let content = &trimmed[marker_len..];
-
-    if let Some(close) = content.find("</a>") {
-        let reference = rewrite_anchor_reference(&content[..close + 4]);
-        let description = content[close + 4..].trim_start();
-        if !description.is_empty() {
-            return Some(format!(
-                "{}{}\n{}{}",
-                " ".repeat(indent),
-                format!("{marker}{reference}"),
-                continuation_indent(indent),
-                description
-            ));
-        }
-    }
-
-    if let Some(close) = content.find("</code>") {
-        let reference = &content[..close + 7];
-        let description = content[close + 7..].trim_start();
-        if !description.is_empty() {
-            return Some(format!(
-                "{}{}\n{}{}",
-                " ".repeat(indent),
-                format!("{marker}{reference}"),
-                continuation_indent(indent),
-                description
-            ));
-        }
-    }
-
-    None
 }
 
 fn ordered_marker_len(text: &str) -> Option<usize> {
@@ -617,22 +553,6 @@ fn looks_like_bullet_line(line: &str) -> bool {
     trimmed.starts_with("- ") || trimmed.starts_with("* ") || ordered_marker_len(trimmed).is_some()
 }
 
-fn continuation_indent(indent: usize) -> String {
-    format!("{}{}", " ".repeat(indent), "　")
-}
-
-fn rewrite_anchor_reference(anchor_html: &str) -> String {
-    let Some(start) = anchor_html.find('>') else {
-        return anchor_html.to_owned();
-    };
-    let Some(end) = anchor_html.rfind("</a>") else {
-        return anchor_html.to_owned();
-    };
-
-    let label = &anchor_html[start + 1..end];
-    format!("<code>{}</code>", label)
-}
-
 fn rewrite_markdown_links_as_code(html: &str) -> String {
     let mut rewritten = String::with_capacity(html.len());
     let mut rest = html;
@@ -651,7 +571,11 @@ fn rewrite_markdown_links_as_code(html: &str) -> String {
             return rewritten;
         };
         let label = &after_open[..close_start_rel];
-        rewritten.push_str(&format!("<code>{}</code>", label));
+        if label.starts_with("<code>") && label.ends_with("</code>") {
+            rewritten.push_str(label);
+        } else {
+            rewritten.push_str(&format!("<code>{}</code>", label));
+        }
         rest = &after_open[close_start_rel + 4..];
     }
 
@@ -690,20 +614,27 @@ mod tests {
         );
 
         assert!(html.contains("<b>項目總覽：</b>"));
-        assert!(
-            html.contains("- <code>README.md</code>\n　說明 <code>threadBridge</code> 是 bot。")
-        );
+        assert!(html.contains("- <code>README.md</code> 說明 <code>threadBridge</code> 是 bot。"));
     }
 
     #[test]
-    fn indents_following_description_line_for_two_line_file_bullets() {
+    fn preserves_two_line_file_bullets_without_added_indent() {
         let html = render_markdown_to_telegram_html(
             "- [docs/plan/session-lifecycle.md](/tmp/docs/plan/session-lifecycle.md)\n  重做 session / thread / workspace 的產品模型。",
         );
 
         assert!(html.contains(
-            "- <code>docs/plan/session-lifecycle.md</code>\n　重做 session / thread / workspace 的產品模型。"
+            "- <code>docs/plan/session-lifecycle.md</code>\n重做 session / thread / workspace 的產品模型。"
         ));
+    }
+
+    #[test]
+    fn preserves_numbered_item_with_prefix_text() {
+        let html = render_markdown_to_telegram_html(
+            "1. 入口层：[`codex-rs/README.md`](/tmp/codex-rs/README.md)\n2. 下一项",
+        );
+
+        assert!(html.contains("1. 入口层：<code>codex-rs/README.md</code>\n2. 下一项"));
     }
 
     #[test]
@@ -712,7 +643,7 @@ mod tests {
             "- [docs/callNanobanana.md](/tmp/docs/callNanobanana.md) 說明",
         );
 
-        assert!(html.contains("- <code>docs/callNanobanana.md</code>\n　說明"));
+        assert!(html.contains("- <code>docs/callNanobanana.md</code> 說明"));
     }
 
     #[test]
@@ -720,14 +651,26 @@ mod tests {
         let html =
             render_markdown_to_telegram_html("- [AGENTS.md](/tmp/AGENTS.md) 說明 maintainer guide");
 
-        assert!(html.contains("- <code>AGENTS.md</code>\n　說明 maintainer guide"));
+        assert!(html.contains("- <code>AGENTS.md</code> 說明 maintainer guide"));
     }
 
     #[test]
     fn rewrites_external_links_as_code() {
         let html = render_markdown_to_telegram_html("- [OpenAI](https://openai.com) 說明 external");
 
-        assert!(html.contains("- <code>OpenAI</code>\n　說明 external"));
+        assert!(html.contains("- <code>OpenAI</code> 說明 external"));
+    }
+
+    #[test]
+    fn preserves_bullets_that_only_contain_inline_code_mentions() {
+        let html = render_markdown_to_telegram_html(
+            "- 對普通用户可配置的 hooks，目前只有 `SessionStart` 和 `Stop`，配置文件是 `hooks.json`。",
+        );
+
+        assert_eq!(
+            html,
+            "- 對普通用户可配置的 hooks，目前只有 <code>SessionStart</code> 和 <code>Stop</code>，配置文件是 <code>hooks.json</code>。"
+        );
     }
 
     #[test]
