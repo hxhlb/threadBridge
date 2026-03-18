@@ -70,7 +70,7 @@
 ### Reset
 
 1. 目前的 Codex thread 壞掉、過時，或不再適合繼續
-2. 使用者執行 `/reset_codex_session`
+2. 使用者執行 `/new`
 3. bot 對同一個 workspace 建立新的 Codex thread
 4. 舊 continuity 直接放棄
 
@@ -88,7 +88,7 @@
 目前的指令面已經接近這個方向：
 
 - `/bind_workspace`
-- `/reset_codex_session`
+- `/new`
 - `/reconnect_codex`
 
 可能的後續增強：
@@ -126,11 +126,11 @@
 
 - `/new_thread` 之後，未來要不要支援直接帶入 workspace path？
 - 要不要把目前的 Codex `thread.id` 暴露在 `/status` 裡？
-- reset 之後，bot 端要不要保留某些本地摘要或狀態？
-- 當錯誤是 `no rollout found for thread id ...` 時，要不要直接把 reset 作為主建議？
+- `/new` 之後，bot 端要不要保留某些本地摘要或狀態？
+- 當錯誤是 `no rollout found for thread id ...` 時，要不要直接把 `/new` 作為主建議？
 
 ## 建議的下一步
 
 1. 增加一個 thread 狀態指令，顯示 workspace path、目前 binding 狀態、Codex thread 是否健康。
 2. 收斂所有使用者文案，統一用 `workspace binding` 和 `Codex thread` 的語言。
-3. 決定「new session」是否應該比現在的 `/reset_codex_session` 更明確地表達在 Telegram UX 裡。
+3. 收斂 `/new` 的文案與 Telegram UX，讓 fresh session 語意固定下來。

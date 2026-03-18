@@ -188,13 +188,13 @@ pub(crate) async fn run_command(
                 }
             }
         }
-        Command::ResetCodexSession => {
+        Command::New => {
             if is_control_chat(msg) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     None,
-                    "Use /reset_codex_session inside a thread.",
+                    "Use /new inside a thread.",
                 )
                 .await?;
                 return Ok(());
@@ -228,7 +228,7 @@ pub(crate) async fn run_command(
                             &record,
                             LogDirection::System,
                             format!(
-                                "Reset Codex session for workspace {}.",
+                                "Started a fresh Codex session for workspace {}.",
                                 workspace_path.display()
                             ),
                             None,
@@ -251,7 +251,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        format!("Reset failed: {error}"),
+                        format!("New session failed: {error}"),
                     )
                     .await?;
                 }
@@ -327,7 +327,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        "Codex session revalidation failed. Use /reset_codex_session to start a fresh one or /reconnect_codex to retry.",
+                        "Codex session revalidation failed. Use /new to start a fresh one or /reconnect_codex to retry.",
                     )
                     .await?;
                 }
@@ -394,7 +394,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        "Codex session is unavailable. Use /reconnect_codex or /reset_codex_session.",
+                        "Codex session is unavailable. Use /reconnect_codex or /new.",
                     )
                     .await?;
                     return Ok(());
@@ -650,7 +650,7 @@ pub(crate) async fn run_text_message(
                 bot,
                 msg.chat.id,
                 Some(thread_id),
-                "Codex session is unavailable. Use /reconnect_codex to retry or /reset_codex_session to start a fresh one.",
+                "Codex session is unavailable. Use /reconnect_codex to retry or /new to start a fresh one.",
             )
             .await?;
         }

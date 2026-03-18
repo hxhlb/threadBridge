@@ -43,7 +43,7 @@ From a maintainer perspective:
 - `session-binding.json` stores the mapping between the Telegram thread, the real workspace path, and the Codex `thread.id`.
 - Normal thread messages resume the saved Codex thread through app-server and run turns in the bound workspace.
 - Uploaded images are stored under `data/<thread-key>/state/`, accumulated into a pending batch, and analyzed by Codex in the same bound workspace context.
-- If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/reconnect_codex` or `/reset_codex_session`.
+- If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/reconnect_codex` or `/new`.
 - `/restore_thread` is Telegram/local-state only. It restores an archived Telegram topic and local metadata; it does not recreate Codex continuity by itself.
 
 ## Artifact Boundaries

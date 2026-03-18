@@ -31,7 +31,7 @@
 - 同一 thread 同一時間只允許一個 active Codex turn
 - 如果 thread 正在執行中，新進文字訊息直接回覆 busy 提示，不寫入 Codex turn
 - 如果 thread 正在執行中，新進圖片只允許保存為待處理素材，不能立即啟動分析
-- `/reset_codex_session`、`/reconnect_codex`、`/bind_workspace` 這類命令也應該定義是否受 busy 狀態保護
+- `/new`、`/reconnect_codex`、`/bind_workspace` 這類命令也應該定義是否受 busy 狀態保護
 
 ## 提示文案方向
 

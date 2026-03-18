@@ -148,7 +148,7 @@ core runtime 應負責：
 
 ## 開放問題
 
-- `/bind_workspace`、`/reset_codex_session`、`/reconnect_codex` 是否應被統一表示成 control action？
+- `/bind_workspace`、`/new`、`/reconnect_codex` 是否應被統一表示成 control action？
 - custom app 是否需要 topic/title 這種概念，還是只需要 thread label？
 - preview 在 custom app 裡應該是 delta stream、replace stream，還是 terminal-style replay？
 - Telegram adapter 是否仍然是預設 entrypoint，還是未來要支援多 adapter 同時註冊？

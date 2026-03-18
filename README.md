@@ -42,7 +42,7 @@ scripts/local_threadbridge.sh start
 - `/new_thread` creates a Telegram topic and bot-local metadata only.
 - `/bind_workspace <absolute-path>` installs the runtime appendix into the target workspace and starts a fresh Codex thread for it.
 - Normal thread messages resume the saved Codex thread instead of creating a new one.
-- `/reset_codex_session` starts a fresh Codex thread for the already bound workspace.
+- `/new` starts a fresh Codex thread for the already bound workspace.
 - `/reconnect_codex` verifies that the saved Codex thread still matches the stored workspace path.
 
 ## Runtime Layout
@@ -62,8 +62,8 @@ scripts/local_threadbridge.sh start
 
 - `/start`
 - `/new_thread`
+- `/new`
 - `/bind_workspace`
-- `/reset_codex_session`
 - `/generate_title`
 - `/archive_thread`
 - `/reconnect_codex`

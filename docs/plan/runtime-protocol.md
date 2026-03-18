@@ -105,7 +105,7 @@
 控制事件額外欄位：
 
 - `action`
-  - 例如 `reset_codex_session`、`reconnect_codex`
+  - 例如 `new`、`reconnect_codex`
 
 ### 3. Runtime Event
 

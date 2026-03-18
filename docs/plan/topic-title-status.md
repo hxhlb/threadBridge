@@ -129,7 +129,7 @@
 title 不應該在每一個小事件都更新，而應該只在有意義的狀態變化時更新：
 
 - `/bind_workspace` 之後
-- `/reset_codex_session` 之後
+- `/new` 之後
 - `/reconnect_codex` 之後
 - 一次完整 Codex turn 完成後，而且 context ratio 有明顯變化時
 - archive / restore 狀態切換時

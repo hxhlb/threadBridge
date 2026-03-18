@@ -33,10 +33,10 @@ pub enum Command {
     Start,
     #[command(description = "Create a new Telegram thread")]
     NewThread,
+    #[command(description = "Start a fresh Codex session for this thread")]
+    New,
     #[command(description = "Bind this Telegram thread to a workspace path")]
     BindWorkspace,
-    #[command(description = "Reset the current thread to a fresh Codex session")]
-    ResetCodexSession,
     #[command(description = "Generate a title for the current thread from chat history")]
     GenerateTitle,
     #[command(description = "Archive the current thread")]
@@ -269,10 +269,10 @@ pub(crate) fn workspace_path_from_binding(session: &SessionBinding) -> Result<Pa
 pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static str {
     match session {
         Some(session) if session.session_broken => {
-            "This thread's Codex session is invalid. Use /reconnect_codex to verify it again or /reset_codex_session to start a fresh one for the same workspace."
+            "This thread's Codex session is invalid. Use /reconnect_codex to verify it again or /new to start a fresh one for the same workspace."
         }
         Some(_) => {
-            "This thread is missing a usable Codex thread id. Use /reset_codex_session to start a fresh one."
+            "This thread is missing a usable Codex thread id. Use /new to start a fresh one."
         }
         None => "This thread is not bound to a workspace yet. Use /bind_workspace <absolute-path>.",
     }
@@ -301,4 +301,32 @@ pub(crate) async fn ensure_bound_workspace_runtime(
     )
     .await?;
     Ok(workspace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, command_list};
+    use teloxide::utils::command::BotCommands;
+
+    #[test]
+    fn command_list_registers_new_but_not_reset_codex_session() {
+        let commands = command_list()
+            .into_iter()
+            .map(|command| command.command)
+            .collect::<Vec<_>>();
+
+        assert!(commands.iter().any(|command| command == "/new"));
+        assert!(commands.iter().any(|command| command == "/new_thread"));
+        assert!(!commands.iter().any(|command| command == "/reset_codex_session"));
+    }
+
+    #[test]
+    fn command_parser_distinguishes_new_from_new_thread() {
+        assert!(matches!(Command::parse("/new", ""), Ok(Command::New)));
+        assert!(matches!(
+            Command::parse("/new_thread", ""),
+            Ok(Command::NewThread)
+        ));
+        assert!(Command::parse("/reset_codex_session", "").is_err());
+    }
 }
