@@ -14,6 +14,8 @@ const PREVIEW_CHAR_LIMIT: usize = 800;
 const OVERFLOW_FILE_NAME: &str = "reply.md";
 const OVERFLOW_NOTICE: &str =
     "Reply too long for inline Telegram delivery. Full response attached.";
+const DEBUG_REPLY_MARKDOWN_FILE: &str = "final-reply-last.md";
+const DEBUG_REPLY_HTML_FILE: &str = "final-reply-last.html";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TelegramReplyPlan {
@@ -46,6 +48,14 @@ pub fn plan_final_assistant_reply(raw_text: &str, inline_limit: usize) -> Telegr
     }
 
     let html = render_markdown_to_telegram_html(trimmed);
+    plan_final_assistant_reply_from_rendered(trimmed, html, inline_limit)
+}
+
+fn plan_final_assistant_reply_from_rendered(
+    trimmed: &str,
+    html: String,
+    inline_limit: usize,
+) -> TelegramReplyPlan {
     if html.trim().is_empty() {
         return TelegramReplyPlan::InlinePlainText {
             text: trimmed.to_owned(),
@@ -69,7 +79,24 @@ pub(crate) async fn send_final_assistant_reply(
     thread_id: Option<ThreadId>,
     raw_text: &str,
 ) -> Result<()> {
-    match plan_final_assistant_reply(raw_text, INLINE_MESSAGE_CHAR_LIMIT) {
+    let trimmed = raw_text.trim();
+    let rendered_html = if trimmed.is_empty() {
+        String::new()
+    } else {
+        render_markdown_to_telegram_html(trimmed)
+    };
+    write_debug_reply_dump(raw_text, &rendered_html).await;
+
+    let plan = if trimmed.is_empty() {
+        TelegramReplyPlan::InlinePlainText {
+            text: String::new(),
+            reason: "empty_reply",
+        }
+    } else {
+        plan_final_assistant_reply_from_rendered(trimmed, rendered_html, INLINE_MESSAGE_CHAR_LIMIT)
+    };
+
+    match plan {
         TelegramReplyPlan::InlineHtml { text } => {
             match send_html_message(
                 bot,
@@ -251,6 +278,39 @@ fn disabled_link_preview_options() -> LinkPreviewOptions {
         prefer_small_media: false,
         prefer_large_media: false,
         show_above_text: false,
+    }
+}
+
+async fn write_debug_reply_dump(raw_markdown: &str, rendered_html: &str) {
+    let dump_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp");
+    if let Err(error) = fs::create_dir_all(&dump_dir).await {
+        warn!(
+            event = "telegram.reply.debug_dump.create_dir_failed",
+            path = %dump_dir.display(),
+            error = %error,
+            "failed to create debug dump directory for final reply"
+        );
+        return;
+    }
+
+    let markdown_path = dump_dir.join(DEBUG_REPLY_MARKDOWN_FILE);
+    if let Err(error) = fs::write(&markdown_path, raw_markdown.as_bytes()).await {
+        warn!(
+            event = "telegram.reply.debug_dump.write_markdown_failed",
+            path = %markdown_path.display(),
+            error = %error,
+            "failed to write final reply markdown debug dump"
+        );
+    }
+
+    let html_path = dump_dir.join(DEBUG_REPLY_HTML_FILE);
+    if let Err(error) = fs::write(&html_path, rendered_html.as_bytes()).await {
+        warn!(
+            event = "telegram.reply.debug_dump.write_html_failed",
+            path = %html_path.display(),
+            error = %error,
+            "failed to write final reply html debug dump"
+        );
     }
 }
 
