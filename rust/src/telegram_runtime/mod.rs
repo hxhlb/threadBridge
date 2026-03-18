@@ -20,6 +20,7 @@ pub(crate) use crate::repository::{
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 
+mod final_reply;
 mod media;
 pub mod preview;
 mod restore;

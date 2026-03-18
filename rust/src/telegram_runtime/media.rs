@@ -9,6 +9,7 @@ use teloxide::types::{
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
+use super::final_reply::send_final_assistant_reply;
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::*;
 
@@ -498,13 +499,7 @@ pub(crate) async fn analyze_pending_image_batch(
         )
         .await?;
     if !preview_finalized {
-        send_scoped_message(
-            bot,
-            ChatId(record.metadata.chat_id),
-            Some(thread_id),
-            artifact.result_text,
-        )
-        .await?;
+        send_final_assistant_reply(bot, &record, Some(thread_id), &artifact.result_text).await?;
     }
     dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
     Ok(())

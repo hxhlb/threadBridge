@@ -6,6 +6,7 @@ use teloxide::payloads::setters::*;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
+use super::final_reply::send_final_assistant_reply;
 use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
@@ -617,7 +618,7 @@ pub(crate) async fn run_text_message(
                     result.final_response
                 };
                 if !final_text.trim().is_empty() {
-                    send_scoped_message(bot, msg.chat.id, Some(thread_id), final_text).await?;
+                    send_final_assistant_reply(bot, &record, Some(thread_id), &final_text).await?;
                 }
             }
             dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
