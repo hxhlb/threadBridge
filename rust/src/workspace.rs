@@ -83,9 +83,9 @@ fn build_codex_shell_snippet(workspace_path: &Path) -> String {
         "  fi",
         "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_started --shell-pid \"$$\" >/dev/null 2>&1 || true",
         "  command codex -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"$@\"",
-        "  local status=$?",
-        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$status\" >/dev/null 2>&1 || true",
-        "  return \"$status\"",
+        "  local exit_code=$?",
+        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$exit_code\" >/dev/null 2>&1 || true",
+        "  return \"$exit_code\"",
         "}",
         "",
     ]

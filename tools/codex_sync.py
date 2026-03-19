@@ -63,7 +63,9 @@ def read_current(workspace: Path) -> dict[str, Any]:
 
 def write_current(workspace: Path, current: dict[str, Any]) -> None:
     current_path = workspace / CURRENT_FILE
-    tmp_path = current_path.with_name(f"{current_path.name}.{now_iso()}.tmp")
+    tmp_path = current_path.with_name(
+        f"{current_path.name}.{int(datetime.now(timezone.utc).timestamp() * 1000)}.tmp"
+    )
     tmp_path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
     tmp_path.replace(current_path)
 

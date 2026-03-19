@@ -20,6 +20,7 @@
 - 只支持 Bash
 - 只追蹤已 source wrapper 的本地 `codex`
 - 不支持同一 workspace 的多個並發本地 CLI session
+- 這份 `v1` 是 workspace-level busy signal，不是 session registry 或多 agent scheduler
 
 ## 背景
 
@@ -51,6 +52,32 @@ V1 只修改 `threadBridge`。
 - 不要求全局安裝 shell plugin
 - 不自動改寫使用者的 `~/.bashrc`
 - 只先支持 Bash
+
+## 模型邊界
+
+這份 `v1` 的核心模型是：
+
+- 每個 workspace 只有一份共享快照 `current.json`
+- 這份快照表達的是「這個 workspace 現在是否忙碌，以及忙碌來源是 `cli` 還是 `bot`」
+
+這代表它是 workspace-level busy signal，不是 session-level registry。
+
+它明確不處理：
+
+- 同一 workspace 下多個本地 Codex CLI session 的並發追蹤
+- 同一 workspace 下多個 agent 的衝突協調
+- Telegram thread 和某一個特定 CLI session 的精確一對一映射
+- 哪些 session 是只讀、哪些 session 會改文件的差異化策略
+
+所以 ` · cli` 的語義應理解成：
+
+- 這個 workspace 目前被某個本地 Codex CLI 活躍使用
+- Telegram 端應暫停新的 turn，以避免和本地工作撞車
+
+而不是：
+
+- threadBridge 已經完整理解這個 workspace 裡所有 Codex session 的拓撲
+- threadBridge 已經支持同一 workspace 的多 agent 並發調度
 
 ## 設計
 
@@ -167,6 +194,7 @@ CLI busy 提示文案：
 - 只追蹤經過已 source wrapper 的 `codex` 啟動
 - 同一 workspace 的多個並發本地 CLI session 不作為 V1 目標
 - `.codex/hooks.json` 由 threadBridge 接管
+- `current.json` 是單一 workspace 快照，不是多 session 狀態表
 
 ## 完成條件
 

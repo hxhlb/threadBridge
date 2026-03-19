@@ -1,12 +1,10 @@
-這個工具就是你剛剛找的那個清理類工具，功能上是對的。
+<code>codexmanager</code> 目前記錄的訪問端口有兩個，見 <code>codex_manager/README.md:25</code>：
 
-<code>mole --help</code> 顯示它的定位是 <code>Deep clean and optimize your Mac</code>，主要命令其實是 <code>mo</code>，不是直接打子命令在 <code>mole</code> 後面。重點功能有：
+- Web 端口：<code>48761</code>
+- 服務端口：<code>48760</code>
 
-- <code>mo clean</code>：清理磁碟空間
-- <code>mo purge</code>：刪除舊的專案產物
-- <code>mo analyze</code>：分析磁碟使用
-- <code>mo uninstall</code>：完整移除 App
-- <code>mo optimize</code>：系統維護
+對應 VM IP 是 <code>192.168.139.110</code>，Web 入口是：
+<code>http://192.168.139.110:48761/</code>
 
-如果你是想找能清 Xcode 衍生垃圾的工具，<code>mo purge</code> 和 <code>mo clean</code> 最值得看。
-要的話我可以下一步幫你跑 <code>mo purge --help</code> 或 <code>mo clean --dry-run</code>，看看它會不會掃到 Xcode 的 <code>DerivedData</code>、Archives 這類內容。
+補充一下：
+<code>48761</code> 是你平常瀏覽器要訪問的端口，<code>48760</code> 是服務/API 端口；README 記錄它在未帶 API key 時會回 <code>missing api key</code>。

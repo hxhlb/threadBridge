@@ -13,6 +13,7 @@
 - [codex-cli-telegram-status-sync-hooks.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-cli-telegram-status-sync-hooks.md)
   - 已完成 v1
   - Bash wrapper、Codex hooks、notify、workspace shared status、topic title watcher、busy gate 都已落地
+  - 這份 v1 只是 workspace-level busy signal，不是多 session / 多 agent 協調模型
 
 ## 部分落地
 
@@ -30,6 +31,9 @@
 
 ## 純草稿
 
+- [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
+  - 目標是 CLI / Telegram 共用同一個 Codex session
+  - 目前是調研草稿，且完整落地需要 upstream `codex` 暴露 remote attach 能力
 - [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
   - 狀態語義主規格草稿
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
@@ -62,6 +66,8 @@
   - 描述 turn 互斥與 busy gate
 - `codex-cli-telegram-status-sync-hooks`
   - 把本地 CLI 狀態接到同一份 busy / title 模型
+- `session-level-cli-telegram-sync`
+  - 描述真正的同 session 雙窗口輸入 / 事件同步願景
 - `topic-title-status`
   - 描述 title 應承載哪些狀態
 - `runtime-state-machine`
