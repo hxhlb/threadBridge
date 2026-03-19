@@ -758,7 +758,10 @@ mod tests {
     fn keeps_regular_inline_code_as_code() {
         let html = render_markdown_to_telegram_html("保留 `hooks.json` 和 `SessionStart`。");
 
-        assert_eq!(html, "保留 <code>hooks.json</code> 和 <code>SessionStart</code>。");
+        assert_eq!(
+            html,
+            "保留 <code>hooks.json</code> 和 <code>SessionStart</code>。"
+        );
     }
 
     #[test]

@@ -71,6 +71,7 @@ scripts/local_threadbridge.sh start
 - After `/bind_workspace`, source `./.threadbridge/shell/codex-sync.bash` inside that workspace if you want local Bash `codex` launches to sync into Telegram.
 - The generated Bash wrapper injects `features.codex_hooks=true` and a workspace-local `notify` override, then writes CLI lifecycle state into `.threadbridge/state/codex-sync/`.
 - This v1 sync path is Bash-only. Raw `codex` launches that bypass the sourced wrapper are not guaranteed to update Telegram status.
+- Manual test flow for `.cli` / `.sync` session behavior: [docs/session-sync-manual-test.md](/Volumes/Data/Github/threadBridge/docs/session-sync-manual-test.md)
 
 ## Commands
 

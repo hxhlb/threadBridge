@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
-STATUS_SCHEMA_VERSION = 1
+STATUS_SCHEMA_VERSION = 2
 STATUS_DIR = Path(".threadbridge/state/codex-sync")
 CURRENT_FILE = STATUS_DIR / "current.json"
 EVENTS_FILE = STATUS_DIR / "events.jsonl"
+SESSIONS_DIR = STATUS_DIR / "sessions"
 
 
 def now_iso() -> str:
@@ -29,23 +30,48 @@ def workspace_root(path: str | None) -> Path:
 def ensure_surface(workspace: Path) -> None:
     status_dir = workspace / STATUS_DIR
     status_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
     current_path = workspace / CURRENT_FILE
     if not current_path.exists():
-        write_current(workspace, idle_status(workspace))
+        write_current(workspace, default_workspace_status(workspace))
     events_path = workspace / EVENTS_FILE
     if not events_path.exists():
         events_path.write_text("", encoding="utf-8")
 
 
-def idle_status(workspace: Path) -> dict[str, Any]:
+def default_workspace_status(workspace: Path) -> dict[str, Any]:
     return {
         "schema_version": STATUS_SCHEMA_VERSION,
         "workspace_cwd": str(workspace.resolve()),
-        "source": None,
+        "live_cli_session_ids": [],
+        "active_shell_pids": [],
+        "updated_at": now_iso(),
+    }
+
+
+def session_file_name(session_id: str) -> str:
+    safe = "".join(
+        ch if (ch.isalnum() or ch in "-_.") else "_" for ch in session_id
+    )
+    return f"{safe}.json"
+
+
+def session_status_path(workspace: Path, session_id: str) -> Path:
+    return workspace / SESSIONS_DIR / session_file_name(session_id)
+
+
+def default_session_status(
+    workspace: Path, session_id: str, owner: str = "cli"
+) -> dict[str, Any]:
+    return {
+        "schema_version": STATUS_SCHEMA_VERSION,
+        "workspace_cwd": str(workspace.resolve()),
+        "session_id": session_id,
+        "owner": owner,
+        "live": owner == "cli",
         "phase": "idle",
         "shell_pid": None,
         "client": None,
-        "session_id": None,
         "turn_id": None,
         "summary": None,
         "updated_at": now_iso(),
@@ -56,7 +82,7 @@ def read_current(workspace: Path) -> dict[str, Any]:
     ensure_surface(workspace)
     current_path = workspace / CURRENT_FILE
     if not current_path.exists():
-        return idle_status(workspace)
+        return default_workspace_status(workspace)
     with current_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -68,6 +94,51 @@ def write_current(workspace: Path, current: dict[str, Any]) -> None:
     )
     tmp_path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
     tmp_path.replace(current_path)
+
+
+def read_session(workspace: Path, session_id: str) -> dict[str, Any] | None:
+    path = session_status_path(workspace, session_id)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_session(workspace: Path, session: dict[str, Any]) -> None:
+    path = session_status_path(workspace, session["session_id"])
+    tmp_path = path.with_name(
+        f"{path.name}.{int(datetime.now(timezone.utc).timestamp() * 1000)}.tmp"
+    )
+    tmp_path.write_text(json.dumps(session, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def list_sessions(workspace: Path) -> list[dict[str, Any]]:
+    root = workspace / SESSIONS_DIR
+    if not root.exists():
+        return []
+    sessions = []
+    for path in root.glob("*.json"):
+        with path.open("r", encoding="utf-8") as handle:
+            sessions.append(json.load(handle))
+    sessions.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+    return sessions
+
+
+def refresh_current(workspace: Path, current: dict[str, Any]) -> dict[str, Any]:
+    live_cli_session_ids = sorted(
+        {
+            session["session_id"]
+            for session in list_sessions(workspace)
+            if session.get("owner") == "cli" and session.get("live")
+        }
+    )
+    current["schema_version"] = STATUS_SCHEMA_VERSION
+    current["workspace_cwd"] = str(workspace.resolve())
+    current["live_cli_session_ids"] = live_cli_session_ids
+    current["updated_at"] = now_iso()
+    write_current(workspace, current)
+    return current
 
 
 def append_event(
@@ -99,97 +170,130 @@ def summarize_text(value: str | None) -> str | None:
     return trimmed[:96] + "..."
 
 
+def normalize_session(
+    workspace: Path,
+    session_id: str,
+    owner: str = "cli",
+) -> dict[str, Any]:
+    existing = read_session(workspace, session_id)
+    if existing is None:
+        existing = default_session_status(workspace, session_id, owner=owner)
+    existing["schema_version"] = STATUS_SCHEMA_VERSION
+    existing["workspace_cwd"] = str(workspace.resolve())
+    existing["session_id"] = session_id
+    existing["updated_at"] = now_iso()
+    return existing
+
+
+def apply_shell_exit(workspace: Path, shell_pid: int | None) -> None:
+    if shell_pid is None:
+        return
+    for session in list_sessions(workspace):
+        if session.get("owner") != "cli":
+            continue
+        if session.get("shell_pid") != shell_pid:
+            continue
+        session["live"] = False
+        session["phase"] = "idle"
+        session["turn_id"] = None
+        session["updated_at"] = now_iso()
+        write_session(workspace, session)
+
+
 def apply_event(
+    workspace: Path,
     current: dict[str, Any],
     event_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    next_status = dict(current)
-    next_status["schema_version"] = STATUS_SCHEMA_VERSION
-    next_status["workspace_cwd"] = current["workspace_cwd"]
-    next_status["updated_at"] = now_iso()
+    current["schema_version"] = STATUS_SCHEMA_VERSION
+    current["workspace_cwd"] = str(workspace.resolve())
+    current.setdefault("active_shell_pids", [])
+
+    shell_pid = payload.get("shell_pid")
 
     if event_name == "shell_process_started":
-        next_status.update(
-            {
-                "source": "cli",
-                "phase": "shell_active",
-                "shell_pid": payload.get("shell_pid"),
-                "client": payload.get("client") or "codex-cli",
-            }
-        )
-        return next_status
+        if shell_pid is not None and shell_pid not in current["active_shell_pids"]:
+            current["active_shell_pids"].append(shell_pid)
+        return refresh_current(workspace, current)
 
     if event_name == "shell_process_exited":
-        shell_pid = payload.get("shell_pid")
-        if next_status.get("shell_pid") not in (None, shell_pid):
-            return next_status
-        next_status.update(
-            {
-                "source": None,
-                "phase": "idle",
-                "shell_pid": None,
-                "client": None,
-                "session_id": None,
-                "turn_id": None,
-                "summary": None,
-            }
-        )
-        return next_status
+        current["active_shell_pids"] = [
+            pid for pid in current.get("active_shell_pids", []) if pid != shell_pid
+        ]
+        apply_shell_exit(workspace, shell_pid)
+        return refresh_current(workspace, current)
 
     if event_name == "session_started":
-        next_status.update(
+        session_id = payload.get("session_id")
+        if not session_id:
+            return refresh_current(workspace, current)
+        session = normalize_session(workspace, session_id, owner="cli")
+        session.update(
             {
-                "source": "cli",
+                "owner": "cli",
+                "live": True,
                 "phase": "shell_active",
-                "session_id": payload.get("session_id"),
+                "shell_pid": shell_pid or session.get("shell_pid"),
+                "client": payload.get("client") or "codex-cli",
                 "summary": summarize_text(payload.get("source")),
+                "turn_id": None,
             }
         )
-        return next_status
+        write_session(workspace, session)
+        return refresh_current(workspace, current)
 
     if event_name == "user_prompt_submitted":
-        next_status.update(
+        session_id = payload.get("session_id")
+        if not session_id:
+            return refresh_current(workspace, current)
+        session = normalize_session(workspace, session_id, owner="cli")
+        session.update(
             {
-                "source": "cli",
+                "owner": "cli",
+                "live": True,
                 "phase": "turn_running",
-                "session_id": payload.get("session_id"),
+                "shell_pid": shell_pid or session.get("shell_pid"),
+                "client": payload.get("client") or session.get("client") or "codex-cli",
                 "summary": summarize_text(payload.get("prompt")),
             }
         )
-        return next_status
+        write_session(workspace, session)
+        return refresh_current(workspace, current)
 
     if event_name == "stop_reached":
-        next_status.update(
+        session_id = payload.get("session_id")
+        if not session_id:
+            return refresh_current(workspace, current)
+        session = normalize_session(workspace, session_id, owner="cli")
+        session.update(
             {
-                "source": "cli",
+                "owner": "cli",
+                "live": True,
                 "phase": "turn_finalizing",
-                "session_id": payload.get("session_id"),
+                "shell_pid": shell_pid or session.get("shell_pid"),
+                "client": payload.get("client") or session.get("client") or "codex-cli",
             }
         )
-        return next_status
+        write_session(workspace, session)
+        return refresh_current(workspace, current)
 
     if event_name == "turn_completed":
-        next_status.update(
+        session_id = payload.get("thread-id")
+        if not session_id:
+            return refresh_current(workspace, current)
+        session = normalize_session(workspace, session_id, owner="cli")
+        session.update(
             {
-                "source": "cli" if next_status.get("shell_pid") else None,
-                "phase": "shell_active" if next_status.get("shell_pid") else "idle",
-                "client": payload.get("client") or next_status.get("client"),
-                "session_id": payload.get("thread-id"),
+                "owner": "cli",
+                "phase": "shell_active" if session.get("live") else "idle",
+                "client": payload.get("client") or session.get("client") or "codex-cli",
                 "turn_id": payload.get("turn-id"),
                 "summary": summarize_text(payload.get("last-assistant-message")),
             }
         )
-        if not next_status.get("shell_pid"):
-            next_status.update(
-                {
-                    "client": None,
-                    "session_id": None,
-                    "turn_id": None,
-                    "summary": None,
-                }
-            )
-        return next_status
+        write_session(workspace, session)
+        return refresh_current(workspace, current)
 
     raise ValueError(f"unsupported event: {event_name}")
 
@@ -215,7 +319,10 @@ def command_event(args: argparse.Namespace) -> int:
             event_name = "stop_reached"
         else:
             raise SystemExit(f"unsupported hook event: {hook_event}")
-        payload = stdin_payload
+        payload = dict(stdin_payload)
+        if args.shell_pid is not None:
+            payload["shell_pid"] = args.shell_pid
+        payload.setdefault("client", "codex-cli")
     else:
         if not args.event_name:
             raise SystemExit("event name is required")
@@ -227,7 +334,7 @@ def command_event(args: argparse.Namespace) -> int:
         }
 
     current = read_current(workspace)
-    next_status = apply_event(current, event_name, payload)
+    next_status = apply_event(workspace, current, event_name, payload)
     append_event(workspace, event_name, "cli", payload)
     write_current(workspace, next_status)
     return 0
@@ -245,7 +352,7 @@ def command_notify(args: argparse.Namespace) -> int:
     if payload.get("type") != "agent-turn-complete":
         return 0
     current = read_current(workspace)
-    next_status = apply_event(current, "turn_completed", payload)
+    next_status = apply_event(workspace, current, "turn_completed", payload)
     append_event(workspace, "turn_completed", "cli", payload)
     write_current(workspace, next_status)
     return 0

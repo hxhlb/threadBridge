@@ -81,6 +81,7 @@ fn build_codex_shell_snippet(workspace_path: &Path) -> String {
         "    command codex \"$@\"",
         "    return $?",
         "  fi",
+        "  export THREADBRIDGE_CODEX_SHELL_PID=\"$$\"",
         "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_started --shell-pid \"$$\" >/dev/null 2>&1 || true",
         "  command codex -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"$@\"",
         "  local exit_code=$?",
@@ -102,27 +103,31 @@ fn build_codex_hooks_json(workspace_path: &Path) -> String {
             "SessionStart": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event SessionStart", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event SessionStart --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge session start sync"
                 }]
             }],
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event UserPromptSubmit", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event UserPromptSubmit --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge prompt sync"
                 }]
             }],
             "Stop": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event Stop", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event Stop --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge stop sync"
                 }]
             }]
         }
     }))
     .unwrap()
+}
+
+fn build_runtime_gitignore() -> &'static str {
+    "*\n!.gitignore\n"
 }
 
 fn managed_appendix_block(appendix: &str) -> String {
@@ -218,6 +223,7 @@ pub async fn ensure_workspace_runtime(
     fs::create_dir_all(&shell_dir).await?;
     fs::create_dir_all(&tool_requests_dir).await?;
     fs::create_dir_all(&tool_results_dir).await?;
+    write_text_file(&runtime_root.join(".gitignore"), build_runtime_gitignore()).await?;
     ensure_workspace_status_surface(workspace_path).await?;
 
     for (tool, filename) in [
@@ -347,6 +353,11 @@ mod tests {
 
         assert_eq!(runtime_root, workspace.join(THREADBRIDGE_RUNTIME_DIR));
         assert!(
+            fs::try_exists(workspace.join(".threadbridge/.gitignore"))
+                .await
+                .unwrap()
+        );
+        assert!(
             fs::try_exists(workspace.join(".threadbridge/bin/build_prompt_config"))
                 .await
                 .unwrap()
@@ -385,6 +396,12 @@ mod tests {
             fs::try_exists(workspace.join(".threadbridge/state/codex-sync/current.json"))
                 .await
                 .unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join(".threadbridge/.gitignore"))
+                .await
+                .unwrap(),
+            "*\n!.gitignore\n"
         );
     }
 

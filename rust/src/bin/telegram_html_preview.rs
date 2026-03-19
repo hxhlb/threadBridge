@@ -47,7 +47,8 @@ fn main() -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    fs::write(&output_path, html).with_context(|| format!("failed to write {}", output_path.display()))?;
+    fs::write(&output_path, html)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
     println!("Wrote {}", output_path.display());
     Ok(())
 }
@@ -55,7 +56,9 @@ fn main() -> Result<()> {
 fn collect_samples(data_root: &Path) -> Result<Vec<Sample>> {
     let titles = read_thread_titles(data_root)?;
     let mut candidates = Vec::new();
-    for entry in fs::read_dir(data_root).with_context(|| format!("failed to read {}", data_root.display()))? {
+    for entry in fs::read_dir(data_root)
+        .with_context(|| format!("failed to read {}", data_root.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
@@ -69,8 +72,13 @@ fn collect_samples(data_root: &Path) -> Result<Vec<Sample>> {
         let text = fs::read_to_string(&conversation_path)
             .with_context(|| format!("failed to read {}", conversation_path.display()))?;
         for (line_no, line) in text.lines().enumerate() {
-            let item: ConversationEntry = serde_json::from_str(line)
-                .with_context(|| format!("invalid json in {}:{}", conversation_path.display(), line_no + 1))?;
+            let item: ConversationEntry = serde_json::from_str(line).with_context(|| {
+                format!(
+                    "invalid json in {}:{}",
+                    conversation_path.display(),
+                    line_no + 1
+                )
+            })?;
             if item.direction != "assistant" {
                 continue;
             }
@@ -139,7 +147,9 @@ fn collect_samples(data_root: &Path) -> Result<Vec<Sample>> {
 
 fn read_thread_titles(data_root: &Path) -> Result<BTreeMap<String, Option<String>>> {
     let mut titles = BTreeMap::new();
-    for entry in fs::read_dir(data_root).with_context(|| format!("failed to read {}", data_root.display()))? {
+    for entry in fs::read_dir(data_root)
+        .with_context(|| format!("failed to read {}", data_root.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
@@ -165,11 +175,7 @@ fn classify_tags(text: &str) -> Vec<String> {
         let trimmed = line.trim_start();
         trimmed.starts_with("- ")
             || trimmed.starts_with("* ")
-            || trimmed
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-                && trimmed.contains(". ")
+            || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) && trimmed.contains(". ")
     }) {
         tags.insert("lists");
     }
@@ -257,7 +263,12 @@ fn select_real_samples(mut candidates: Vec<Sample>) -> Vec<Sample> {
     chosen
 }
 
-fn make_synthetic_sample(title: &str, source_label: &str, raw_text: &str, tags: Vec<&str>) -> Sample {
+fn make_synthetic_sample(
+    title: &str,
+    source_label: &str,
+    raw_text: &str,
+    tags: Vec<&str>,
+) -> Sample {
     Sample {
         title: title.to_owned(),
         source_label: source_label.to_owned(),
@@ -273,7 +284,11 @@ fn make_synthetic_sample(title: &str, source_label: &str, raw_text: &str, tags: 
 fn render_page(samples: &[Sample]) -> String {
     let real_count = samples.iter().filter(|sample| !sample.synthetic).count();
     let synthetic_count = samples.len().saturating_sub(real_count);
-    let cards = samples.iter().map(render_sample_card).collect::<Vec<_>>().join("\n");
+    let cards = samples
+        .iter()
+        .map(render_sample_card)
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         r#"<!DOCTYPE html>
 <html lang="zh-Hant">
