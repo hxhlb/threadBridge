@@ -286,8 +286,17 @@ fn build_codex_shell_snippet(
         "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$exit_code\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\" >/dev/null 2>&1 || true"
             .to_owned(),
         "  local attach_payload".to_owned(),
+        "  \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage before-consume --exit-code \"$exit_code\" >/dev/null 2>&1 || true"
+            .to_owned(),
         "  attach_payload=\"$($THREADBRIDGE_CODEX_SYNC_MANAGE consume-attach-intent --shell-pid \"$$\")\""
             .to_owned(),
+        "  if [ -n \"$attach_payload\" ]; then".to_owned(),
+        "    \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage after-consume --exit-code \"$exit_code\" --attach-payload-present >/dev/null 2>&1 || true"
+            .to_owned(),
+        "  else".to_owned(),
+        "    \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage after-consume --exit-code \"$exit_code\" >/dev/null 2>&1 || true"
+            .to_owned(),
+        "  fi".to_owned(),
         "  if [ \"$exit_code\" -eq 137 ] || [ \"$exit_code\" -eq 143 ]; then".to_owned(),
         "    local shell_ppid shell_pgid shell_tty child_pid child_pgid child_command".to_owned(),
         "    shell_ppid=\"$(ps -o ppid= -p \"$$\" 2>/dev/null | tr -d ' ')\"".to_owned(),
@@ -323,14 +332,26 @@ fn build_codex_shell_snippet(
         "    IFS=$'\\t' read -r attach_thread_key attach_session_id attach_since <<< \"$attach_payload\""
             .to_owned(),
         "    if [ -x \"$THREADBRIDGE_VIEWER_BIN\" ]; then".to_owned(),
+        "      \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage before-viewer --exit-code \"$exit_code\" --attach-payload-present --viewer-bin-exists --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\" >/dev/null 2>&1 || true"
+            .to_owned(),
         "      \"$THREADBRIDGE_VIEWER_BIN\" --repo-root \"$THREADBRIDGE_REPO_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\""
             .to_owned(),
-        "      return \"$?\"".to_owned(),
+        "      local viewer_exit_code=$?".to_owned(),
+        "      \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage after-viewer --exit-code \"$exit_code\" --attach-payload-present --viewer-bin-exists --viewer-exit-code \"$viewer_exit_code\" --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\" >/dev/null 2>&1 || true"
+            .to_owned(),
+        "      return \"$viewer_exit_code\"".to_owned(),
         "    fi".to_owned(),
+        "    \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage before-viewer-fallback --exit-code \"$exit_code\" --attach-payload-present --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\" >/dev/null 2>&1 || true"
+            .to_owned(),
         "    cargo run --manifest-path \"$THREADBRIDGE_REPO_ROOT/Cargo.toml\" --bin threadbridge_viewer -- --repo-root \"$THREADBRIDGE_REPO_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\""
             .to_owned(),
-        "    return \"$?\"".to_owned(),
+        "    local viewer_exit_code=$?".to_owned(),
+        "    \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage after-viewer-fallback --exit-code \"$exit_code\" --attach-payload-present --viewer-exit-code \"$viewer_exit_code\" --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\" >/dev/null 2>&1 || true"
+            .to_owned(),
+        "    return \"$viewer_exit_code\"".to_owned(),
         "  fi".to_owned(),
+        "  \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" record-wrapper-handoff --shell-pid \"$$\" --stage no-attach-payload --exit-code \"$exit_code\" >/dev/null 2>&1 || true"
+            .to_owned(),
         "  return \"$exit_code\"".to_owned(),
         "}".to_owned(),
         "".to_owned(),

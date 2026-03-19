@@ -611,6 +611,24 @@ def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_record_wrapper_handoff(args: argparse.Namespace) -> int:
+    workspace = workspace_root(args.workspace)
+    ensure_surface(workspace)
+    payload = {
+        "shell_pid": args.shell_pid,
+        "stage": args.stage,
+        "exit_code": args.exit_code,
+        "attach_payload_present": args.attach_payload_present,
+        "viewer_bin_exists": args.viewer_bin_exists,
+        "viewer_exit_code": args.viewer_exit_code,
+        "thread_key": args.thread_key,
+        "session_id": args.session_id,
+        "since": args.since,
+    }
+    append_event(workspace, "wrapper_handoff_stage", "cli", payload)
+    return 0
+
+
 def command_notify(args: argparse.Namespace) -> int:
     workspace = workspace_root(args.workspace)
     ensure_surface(workspace)
@@ -681,6 +699,19 @@ def build_parser() -> argparse.ArgumentParser:
     exit_diag_parser.add_argument("--child-command")
     exit_diag_parser.add_argument("--attach-intent-present", action="store_true")
     exit_diag_parser.set_defaults(func=command_record_exit_diagnostic)
+
+    wrapper_parser = subparsers.add_parser("record-wrapper-handoff")
+    wrapper_parser.add_argument("--workspace")
+    wrapper_parser.add_argument("--shell-pid", type=int, required=True)
+    wrapper_parser.add_argument("--stage", required=True)
+    wrapper_parser.add_argument("--exit-code", type=int)
+    wrapper_parser.add_argument("--attach-payload-present", action="store_true")
+    wrapper_parser.add_argument("--viewer-bin-exists", action="store_true")
+    wrapper_parser.add_argument("--viewer-exit-code", type=int)
+    wrapper_parser.add_argument("--thread-key")
+    wrapper_parser.add_argument("--session-id")
+    wrapper_parser.add_argument("--since")
+    wrapper_parser.set_defaults(func=command_record_wrapper_handoff)
 
     return parser
 
