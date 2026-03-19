@@ -10,3 +10,4 @@ target
 logs/
 tools/__pycache__/**
 .threadbridge/
+tmp/
