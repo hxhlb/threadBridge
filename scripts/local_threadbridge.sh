@@ -92,7 +92,7 @@ ensure_env() {
 }
 
 build_bot() {
-  log "building threadbridge ($BUILD_PROFILE)"
+  log "building threadbridge binaries ($BUILD_PROFILE)"
   (
     cd "$REPO_ROOT"
     export PATH="$RUNTIME_PATH"
@@ -100,9 +100,9 @@ build_bot() {
     export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
     export RUSTUP_HOME="$RUSTUP_HOME_DIR"
     if [[ "$BUILD_PROFILE" == "release" ]]; then
-      cargo build --release --bin threadbridge
+      cargo build --release --bin threadbridge --bin threadbridge_viewer
     else
-      cargo build --bin threadbridge
+      cargo build --bin threadbridge --bin threadbridge_viewer
     fi
   )
 }
