@@ -13,6 +13,7 @@ use super::final_reply::send_final_assistant_reply;
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::status_sync;
 use super::*;
+use crate::image_artifacts::PendingImageBatch;
 
 pub(crate) const CALLBACK_IMAGE_BATCH_ANALYZE: &str = "image_batch_analyze";
 const TELEGRAM_OUTBOX_FILE: &str = ".threadbridge/tool_results/telegram_outbox.json";
@@ -447,21 +448,6 @@ pub(crate) async fn analyze_pending_image_batch(
             .text("Starting image analysis...")
             .await?;
     }
-    let typing = TypingHeartbeat::start(
-        bot.clone(),
-        ChatId(record.metadata.chat_id),
-        Some(thread_id),
-    );
-    let prompt = build_image_analysis_prompt(&batch, user_prompt);
-    let preview = Arc::new(Mutex::new(TurnPreviewController::new(
-        bot.clone(),
-        ChatId(record.metadata.chat_id),
-        Some(thread_id),
-        state.config.stream_message_max_chars,
-        state.config.command_output_tail_chars,
-        state.config.stream_edit_interval_ms,
-    )));
-    let preview_heartbeat = PreviewHeartbeat::start(preview.clone());
     record_bot_status_event(
         &workspace_path,
         "bot_turn_started",
@@ -470,6 +456,83 @@ pub(crate) async fn analyze_pending_image_batch(
         Some(user_prompt.unwrap_or("Analyze pending image batch")),
     )
     .await?;
+    spawn_image_analysis_turn(
+        bot.clone(),
+        state.clone(),
+        record,
+        thread_id,
+        workspace_path,
+        existing_thread_id.to_owned(),
+        batch,
+        user_prompt.map(str::to_owned),
+    );
+    Ok(())
+}
+
+fn spawn_image_analysis_turn(
+    bot: Bot,
+    state: AppState,
+    record: ThreadRecord,
+    thread_id: ThreadId,
+    workspace_path: PathBuf,
+    existing_thread_id: String,
+    batch: PendingImageBatch,
+    user_prompt: Option<String>,
+) {
+    let chat_id = ChatId(record.metadata.chat_id);
+    tokio::spawn(async move {
+        if let Err(error) = execute_image_analysis_turn(
+            &bot,
+            &state,
+            record,
+            thread_id,
+            workspace_path,
+            &existing_thread_id,
+            batch,
+            user_prompt.as_deref(),
+        )
+        .await
+        {
+            error!(
+                event = "telegram.thread.image_analysis.background_failed",
+                chat_id = chat_id.0,
+                message_thread_id = thread_id_to_i32(thread_id),
+                error = %error,
+                "background image analysis failed"
+            );
+            let _ = send_scoped_message(
+                &bot,
+                chat_id,
+                Some(thread_id),
+                format!("Image handling failed: {error}"),
+            )
+            .await;
+        }
+    });
+}
+
+async fn execute_image_analysis_turn(
+    bot: &Bot,
+    state: &AppState,
+    record: ThreadRecord,
+    thread_id: ThreadId,
+    workspace_path: PathBuf,
+    existing_thread_id: &str,
+    batch: PendingImageBatch,
+    user_prompt: Option<&str>,
+) -> Result<()> {
+    let chat_id = ChatId(record.metadata.chat_id);
+    let typing = TypingHeartbeat::start(bot.clone(), chat_id, Some(thread_id));
+    let prompt = build_image_analysis_prompt(&batch, user_prompt);
+    let preview = Arc::new(Mutex::new(TurnPreviewController::new(
+        bot.clone(),
+        chat_id,
+        Some(thread_id),
+        state.config.stream_message_max_chars,
+        state.config.command_output_tail_chars,
+        state.config.stream_edit_interval_ms,
+    )));
+    let preview_heartbeat = PreviewHeartbeat::start(preview.clone());
     let mut input = vec![CodexInputItem::Text {
         text: prompt.clone(),
     }];

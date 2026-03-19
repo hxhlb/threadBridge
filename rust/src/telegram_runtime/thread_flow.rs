@@ -1183,7 +1183,7 @@ pub(crate) async fn run_text_message(
     }
 
     let thread_id = msg.thread_id.context("thread message missing thread id")?;
-    let mut record = state
+    let record = state
         .repository
         .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
         .await?;
@@ -1316,16 +1316,6 @@ pub(crate) async fn run_text_message(
         )
         .await?;
 
-    let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
-    let preview = Arc::new(Mutex::new(TurnPreviewController::new(
-        bot.clone(),
-        msg.chat.id,
-        Some(thread_id),
-        state.config.stream_message_max_chars,
-        state.config.command_output_tail_chars,
-        state.config.stream_edit_interval_ms,
-    )));
-    let preview_heartbeat = PreviewHeartbeat::start(preview.clone());
     record_bot_status_event(
         &workspace_path,
         "bot_turn_started",
@@ -1334,6 +1324,82 @@ pub(crate) async fn run_text_message(
         Some(text),
     )
     .await?;
+
+    spawn_text_turn(
+        bot.clone(),
+        state.clone(),
+        record,
+        msg.chat.id,
+        thread_id,
+        workspace_path,
+        existing_thread_id.to_owned(),
+        text.to_owned(),
+    );
+
+    Ok(())
+}
+
+fn spawn_text_turn(
+    bot: Bot,
+    state: AppState,
+    record: ThreadRecord,
+    chat_id: ChatId,
+    thread_id: ThreadId,
+    workspace_path: PathBuf,
+    existing_thread_id: String,
+    text: String,
+) {
+    tokio::spawn(async move {
+        if let Err(error) = execute_text_turn(
+            &bot,
+            &state,
+            record,
+            chat_id,
+            thread_id,
+            workspace_path,
+            &existing_thread_id,
+            &text,
+        )
+        .await
+        {
+            error!(
+                event = "telegram.thread.message.background_failed",
+                chat_id = chat_id.0,
+                message_thread_id = thread_id_to_i32(thread_id),
+                error = %error,
+                "background text turn failed"
+            );
+            let _ = send_scoped_message(
+                &bot,
+                chat_id,
+                Some(thread_id),
+                format!("Request failed: {error}"),
+            )
+            .await;
+        }
+    });
+}
+
+async fn execute_text_turn(
+    bot: &Bot,
+    state: &AppState,
+    mut record: ThreadRecord,
+    chat_id: ChatId,
+    thread_id: ThreadId,
+    workspace_path: PathBuf,
+    existing_thread_id: &str,
+    text: &str,
+) -> Result<()> {
+    let typing = TypingHeartbeat::start(bot.clone(), chat_id, Some(thread_id));
+    let preview = Arc::new(Mutex::new(TurnPreviewController::new(
+        bot.clone(),
+        chat_id,
+        Some(thread_id),
+        state.config.stream_message_max_chars,
+        state.config.command_output_tail_chars,
+        state.config.stream_edit_interval_ms,
+    )));
+    let preview_heartbeat = PreviewHeartbeat::start(preview.clone());
 
     let result = state
         .codex
@@ -1440,7 +1506,7 @@ pub(crate) async fn run_text_message(
                 .await?;
             send_scoped_message(
                 bot,
-                msg.chat.id,
+                chat_id,
                 Some(thread_id),
                 "Codex session is unavailable. Use /reconnect_codex to retry or /new to start a fresh one.",
             )

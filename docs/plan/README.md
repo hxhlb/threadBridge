@@ -23,7 +23,8 @@
   - final reply 的 Telegram HTML renderer、plain-text fallback、attachment fallback 已落地
 - [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-busy-input-gate.md)
   - v1 忙碌閘控已落地
-  - 但 queue 模型與更完整的狀態語義仍未收斂
+  - Telegram 文字 turn / 圖片分析已改成 background 執行，後續輸入現在會命中 reject
+  - 但 queue 模型、更完整的狀態語義，以及更乾淨的 ingress / dispatcher 邊界仍未收斂
 - [topic-title-status.md](/Volumes/Data/Github/threadBridge/docs/plan/topic-title-status.md)
   - 已落地 `workspace/title + cli/cli!/attach/broken suffix`
   - 已落地新產生的 topic rename service message best-effort cleanup

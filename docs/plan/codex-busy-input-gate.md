@@ -10,12 +10,20 @@
 - 圖片保存後延後分析的 busy gate
 - `/new`、`/reconnect_codex`、已綁定 thread 的 `/bind_workspace` 受 busy 狀態保護
 - busy 狀態已經不只看 bot 本身，也會讀 workspace shared status
+- Telegram 文字 turn 與圖片分析改成 background 執行；handler 會先寫入 busy，再快速返回
+- 因此同一 Telegram chat / topic 的後續輸入，現在會在 busy gate 被明確拒絕，而不再主要表現成長 handler 造成的隱性串行化
 
 目前尚未實作：
 
 - 顯式 queue 模型
 - 更完整的 `runtime-state-machine` 對齊
 - Web App 觀測面上的正式狀態展示
+
+目前已知邊界：
+
+- `teloxide` 預設仍按 `ChatId` 分發 update；在 forum topic 場景下，同一個 supergroup 內的 topic 共享同一個 chat id
+- 現在靠「先寫 busy、再把長 turn 丟到 background」已經能讓後續輸入命中 reject，但底層 dispatcher 仍不是 thread-aware 的併發模型
+- 也就是說，目前已經解決了「同 chat 連發看起來像排隊」這個主要 UX 問題，但 Telegram ingress 語義仍未被正式抽象成獨立層
 
 ## 背景
 
@@ -76,6 +84,8 @@
 - 如果 Codex 執行失敗、超時或程序中斷，busy 狀態必須可靠釋放
 - 預覽訊息更新期間不能讓第二個 turn 把第一個 turn 的 draft 狀態污染掉
 - log 需要能看出一次輸入是被拒絕、延後，還是成功進入執行
+- Telegram 目前是靠 background turn + shared status 達成 reject，不是靠 thread-aware dispatcher 原生保證
+- 若未來要把這個語義做成更乾淨的 transport/runtime 邊界，仍應考慮 ingress 層或 dispatcher 分發策略
 
 ## 與其他計劃的關係
 
@@ -93,3 +103,8 @@
 - 先加入 thread-level busy gate
 - 先採用「拒絕新輸入，不做排隊」
 - 等 Web App 觀測面成形後，再決定是否升級成顯式 queue 模型
+
+目前狀態可更新為：
+
+- `v1` 已經達到使用者可感知的 reject 行為
+- 但底層實作仍是「shared status + background turn」方案，不是最終的 ingress / state-machine 主規格
