@@ -557,6 +557,9 @@ def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
         "shell_ppid": args.shell_ppid,
         "shell_pgid": args.shell_pgid,
         "tty": args.tty,
+        "child_pid": args.child_pid,
+        "child_pgid": args.child_pgid,
+        "child_command": args.child_command,
     }
     append_event(workspace, "shell_exit_diagnostic", "cli", payload)
     return 0
@@ -619,6 +622,9 @@ def build_parser() -> argparse.ArgumentParser:
     exit_diag_parser.add_argument("--shell-ppid")
     exit_diag_parser.add_argument("--shell-pgid")
     exit_diag_parser.add_argument("--tty")
+    exit_diag_parser.add_argument("--child-pid")
+    exit_diag_parser.add_argument("--child-pgid")
+    exit_diag_parser.add_argument("--child-command")
     exit_diag_parser.add_argument("--attach-intent-present", action="store_true")
     exit_diag_parser.set_defaults(func=command_record_exit_diagnostic)
 
