@@ -546,6 +546,22 @@ def command_consume_attach_intent(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
+    workspace = workspace_root(args.workspace)
+    ensure_surface(workspace)
+    payload = {
+        "shell_pid": args.shell_pid,
+        "exit_code": args.exit_code,
+        "owner_thread_key": args.owner_thread_key,
+        "attach_intent_present": args.attach_intent_present,
+        "shell_ppid": args.shell_ppid,
+        "shell_pgid": args.shell_pgid,
+        "tty": args.tty,
+    }
+    append_event(workspace, "shell_exit_diagnostic", "cli", payload)
+    return 0
+
+
 def command_notify(args: argparse.Namespace) -> int:
     workspace = workspace_root(args.workspace)
     ensure_surface(workspace)
@@ -594,6 +610,17 @@ def build_parser() -> argparse.ArgumentParser:
     consume_intent_parser.add_argument("--workspace")
     consume_intent_parser.add_argument("--shell-pid", type=int, required=True)
     consume_intent_parser.set_defaults(func=command_consume_attach_intent)
+
+    exit_diag_parser = subparsers.add_parser("record-exit-diagnostic")
+    exit_diag_parser.add_argument("--workspace")
+    exit_diag_parser.add_argument("--shell-pid", type=int, required=True)
+    exit_diag_parser.add_argument("--exit-code", type=int, required=True)
+    exit_diag_parser.add_argument("--owner-thread-key")
+    exit_diag_parser.add_argument("--shell-ppid")
+    exit_diag_parser.add_argument("--shell-pgid")
+    exit_diag_parser.add_argument("--tty")
+    exit_diag_parser.add_argument("--attach-intent-present", action="store_true")
+    exit_diag_parser.set_defaults(func=command_record_exit_diagnostic)
 
     return parser
 
