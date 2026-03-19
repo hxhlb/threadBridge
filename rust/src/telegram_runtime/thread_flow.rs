@@ -42,6 +42,7 @@ async fn start_fresh_binding(
 ) -> Result<ThreadRecord> {
     ensure_workspace_runtime(
         &state.config.runtime.codex_working_directory,
+        &state.config.runtime.data_root_path,
         &state.seed_template_path,
         &workspace_path,
     )
@@ -65,6 +66,24 @@ async fn busy_snapshot_for_binding(
         return Ok(None);
     };
     busy_selected_session_status(&state.workspace_status_cache, &workspace_path, session_id).await
+}
+
+pub(crate) async fn current_thread_cli_owner_claim(
+    _state: &AppState,
+    record: &ThreadRecord,
+    binding: &SessionBinding,
+) -> Result<Option<CliOwnerClaim>> {
+    if binding.attachment_state == SessionAttachmentState::CliHandoff {
+        return Ok(None);
+    }
+    let workspace_path = workspace_path_from_binding(binding)?;
+    let Some(claim) = read_cli_owner_claim(&workspace_path).await? else {
+        return Ok(None);
+    };
+    if claim.thread_key != record.metadata.thread_key {
+        return Ok(None);
+    }
+    Ok(Some(claim))
 }
 
 fn render_live_cli_session_choices(
@@ -101,6 +120,67 @@ fn render_live_cli_session_choices(
         ));
     }
     lines.join("\n")
+}
+
+async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<String> {
+    let session = state.repository.read_session_binding(record).await?;
+    let workspace_path = session
+        .as_ref()
+        .and_then(|binding| binding.workspace_cwd.as_deref())
+        .map(PathBuf::from);
+    let aggregate = if let Some(path) = workspace_path.as_ref() {
+        Some(crate::workspace_status::read_workspace_aggregate_status(path).await?)
+    } else {
+        None
+    };
+    let owner_claim = if let Some(path) = workspace_path.as_ref() {
+        read_cli_owner_claim(path).await?
+    } else {
+        None
+    };
+    let marker = status_sync::cli_topic_marker_for_record(
+        record,
+        session.as_ref(),
+        aggregate.as_ref(),
+        owner_claim.as_ref(),
+    );
+    let selected_session_id = usable_bound_session_id(session.as_ref())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "none".to_owned());
+    let attachment_state = session
+        .as_ref()
+        .map(|binding| match binding.attachment_state {
+            SessionAttachmentState::None => "none",
+            SessionAttachmentState::CliHandoff => "cli_handoff",
+        })
+        .unwrap_or("none");
+    let workspace = workspace_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unbound".to_owned());
+    let owner_thread_key = owner_claim
+        .as_ref()
+        .map(|claim| claim.thread_key.as_str())
+        .unwrap_or("none");
+    let owner_session_id = owner_claim
+        .as_ref()
+        .and_then(|claim| claim.session_id.as_deref())
+        .unwrap_or("none");
+    let owner_flag = owner_claim
+        .as_ref()
+        .is_some_and(|claim| claim.thread_key == record.metadata.thread_key);
+
+    Ok(format!(
+        "thread_key: `{}`\nworkspace: `{}`\nselected_session_id: `{}`\nattachment_state: `{}`\nmarker: `{}`\nowner_thread: `{}`\nowner_session_id: `{}`\nis_owner_thread: `{}`",
+        record.metadata.thread_key,
+        workspace,
+        selected_session_id,
+        attachment_state,
+        status_sync::cli_marker_label(marker),
+        owner_thread_key,
+        owner_session_id,
+        if owner_flag { "yes" } else { "no" },
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,26 +298,13 @@ async fn terminate_cli_session_tui(
 
 pub(crate) async fn selected_live_cli_owned_session(
     state: &AppState,
+    record: &ThreadRecord,
     binding: &SessionBinding,
-) -> Result<Option<crate::workspace_status::SessionCurrentStatus>> {
+) -> Result<Option<CliOwnerClaim>> {
     if binding.attachment_state == SessionAttachmentState::CliHandoff {
         return Ok(None);
     }
-    let Some(session_id) = usable_bound_session_id(Some(binding)) else {
-        return Ok(None);
-    };
-    let workspace_path = workspace_path_from_binding(binding)?;
-    let aggregate =
-        crate::workspace_status::read_workspace_aggregate_status(&workspace_path).await?;
-    state.workspace_status_cache.insert(aggregate.clone()).await;
-    if !aggregate
-        .live_cli_session_ids
-        .iter()
-        .any(|item| item == session_id)
-    {
-        return Ok(None);
-    }
-    read_session_status(&workspace_path, session_id).await
+    current_thread_cli_owner_claim(state, record, binding).await
 }
 
 pub(crate) async fn run_command(
@@ -352,7 +419,7 @@ pub(crate) async fn run_command(
             }
             if let Some(binding) = existing_binding.as_ref()
                 && binding.workspace_cwd.is_some()
-                && selected_live_cli_owned_session(state, binding)
+                && selected_live_cli_owned_session(state, &record, binding)
                     .await?
                     .is_some()
             {
@@ -390,7 +457,7 @@ pub(crate) async fn run_command(
                         msg.chat.id,
                         Some(thread_id),
                         format!(
-                            "Bound workspace: `{}`\n\nTo sync local Bash Codex sessions in this workspace, run:\n`source {}/.threadbridge/shell/codex-sync.bash`",
+                            "Bound workspace: `{}`\n\nTo sync local Bash Codex sessions in this workspace, run:\n`source {}/.threadbridge/shell/codex-sync.bash`\nThen start managed CLI with:\n`hcodex`",
                             workspace_path.display(),
                             workspace_path.display()
                         ),
@@ -440,7 +507,7 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            if selected_live_cli_owned_session(state, binding)
+            if selected_live_cli_owned_session(state, &record, binding)
                 .await?
                 .is_some()
             {
@@ -536,7 +603,7 @@ pub(crate) async fn run_command(
                 return Ok(());
             }
             if let Some(binding) = session.as_ref()
-                && selected_live_cli_owned_session(state, binding)
+                && selected_live_cli_owned_session(state, &record, binding)
                     .await?
                     .is_some()
             {
@@ -717,7 +784,19 @@ pub(crate) async fn run_command(
                 return Ok(());
             }
 
-            terminate_cli_session_tui(&workspace_path, &target).await?;
+            let intent = default_attach_intent(
+                &workspace_path,
+                record.metadata.thread_key.clone(),
+                target.session_id.clone(),
+                target
+                    .shell_pid
+                    .context("live CLI session is missing shell_pid")?,
+            );
+            write_attach_intent(&workspace_path, &intent).await?;
+            if let Err(error) = terminate_cli_session_tui(&workspace_path, &target).await {
+                let _ = remove_attach_intent(&workspace_path).await;
+                return Err(error);
+            }
             let updated = state
                 .repository
                 .attach_cli_session_binding_session(record, target.session_id.clone())
@@ -739,12 +818,31 @@ pub(crate) async fn run_command(
                 msg.chat.id,
                 Some(thread_id),
                 format!(
-                    "Attached this thread to live CLI session `{}` and switched control to Telegram.\n\nTo return to local CLI later, run:\n`codex resume {}`",
-                    target.session_id, target.session_id
+                    "Attached this thread to live CLI session `{}` and switched control to Telegram.\n\nTo return to local CLI later, run:\n`hcodex resume {} --thread-key {}`",
+                    target.session_id, target.session_id, updated.metadata.thread_key
                 ),
             )
             .await?;
             let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+        }
+        Command::ThreadInfo => {
+            if is_control_chat(msg) {
+                send_scoped_message(bot, msg.chat.id, None, "Use /thread_info inside a thread.")
+                    .await?;
+                return Ok(());
+            }
+            let thread_id = msg.thread_id.context("thread message missing thread id")?;
+            let record = state
+                .repository
+                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
+                .await?;
+            send_scoped_message(
+                bot,
+                msg.chat.id,
+                Some(thread_id),
+                render_thread_info(state, &record).await?,
+            )
+            .await?;
         }
         Command::GenerateTitle => {
             if is_control_chat(msg) {
@@ -796,7 +894,7 @@ pub(crate) async fn run_command(
                 return Ok(());
             }
             if let Some(binding) = session.as_ref()
-                && selected_live_cli_owned_session(state, binding)
+                && selected_live_cli_owned_session(state, &record, binding)
                     .await?
                     .is_some()
             {
@@ -992,7 +1090,7 @@ pub(crate) async fn run_text_message(
         return Ok(());
     }
     if let Some(binding) = session.as_ref()
-        && selected_live_cli_owned_session(state, binding)
+        && selected_live_cli_owned_session(state, &record, binding)
             .await?
             .is_some()
     {
@@ -1048,6 +1146,20 @@ pub(crate) async fn run_text_message(
             LogDirection::User,
             text.to_owned(),
             msg.from.as_ref().map(|user| user.id.0 as i64),
+        )
+        .await?;
+    state
+        .repository
+        .append_transcript_mirror(
+            &record,
+            &TranscriptMirrorEntry {
+                timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                session_id: existing_thread_id.to_owned(),
+                origin: TranscriptMirrorOrigin::Telegram,
+                role: TranscriptMirrorRole::User,
+                delivery: TranscriptMirrorDelivery::Final,
+                text: text.to_owned(),
+            },
         )
         .await?;
 
@@ -1108,6 +1220,21 @@ pub(crate) async fn run_text_message(
                     LogDirection::Assistant,
                     result.final_response.clone(),
                     None,
+                )
+                .await?;
+            state
+                .repository
+                .append_transcript_mirror(
+                    &record,
+                    &TranscriptMirrorEntry {
+                        timestamp: chrono::Utc::now()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        session_id: existing_thread_id.to_owned(),
+                        origin: TranscriptMirrorOrigin::Telegram,
+                        role: TranscriptMirrorRole::Assistant,
+                        delivery: TranscriptMirrorDelivery::Final,
+                        text: result.final_response.clone(),
+                    },
                 )
                 .await?;
             if !preview.lock().await.complete(&result.final_response).await {

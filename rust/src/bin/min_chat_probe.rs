@@ -48,7 +48,13 @@ async fn main() -> Result<()> {
     let _guard = init_json_logs(&probe_root.join("events.jsonl"))?;
     let template =
         validate_seed_template(&runtime.codex_working_directory.join("templates/AGENTS.md"))?;
-    ensure_workspace_runtime(&runtime.codex_working_directory, &template, &workspace_path).await?;
+    ensure_workspace_runtime(
+        &runtime.codex_working_directory,
+        &runtime.data_root_path,
+        &template,
+        &workspace_path,
+    )
+    .await?;
 
     let runner = CodexRunner::new(runtime.codex_model.clone());
     let workspace = CodexWorkspace {

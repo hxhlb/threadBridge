@@ -344,7 +344,7 @@ pub(crate) async fn queue_image_for_thread(
         .await?;
     }
     if let Some(binding) = session.as_ref()
-        && super::thread_flow::selected_live_cli_owned_session(state, binding)
+        && super::thread_flow::selected_live_cli_owned_session(state, &record, binding)
             .await?
             .is_some()
     {
@@ -410,7 +410,7 @@ pub(crate) async fn analyze_pending_image_batch(
         return Ok(());
     }
     if let Some(binding) = session.as_ref()
-        && super::thread_flow::selected_live_cli_owned_session(state, binding)
+        && super::thread_flow::selected_live_cli_owned_session(state, &record, binding)
             .await?
             .is_some()
     {

@@ -15,13 +15,16 @@ pub(crate) use crate::image_artifacts::{
 };
 pub(crate) use crate::repository::{
     AppendPendingImageInput, LogDirection, SessionAttachmentState, SessionBinding, ThreadRecord,
-    ThreadRepository, ThreadStatus,
+    ThreadRepository, ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry,
+    TranscriptMirrorOrigin, TranscriptMirrorRole,
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 pub(crate) use crate::workspace_status::{
-    WorkspaceStatusCache, busy_selected_session_status, list_live_cli_sessions,
-    read_session_status, read_workspace_status_with_cache, record_bot_status_event,
+    CliOwnerClaim, WorkspaceStatusCache, busy_selected_session_status, default_attach_intent,
+    list_live_cli_sessions, read_cli_owner_claim, read_session_status,
+    read_workspace_status_with_cache, record_bot_status_event, remove_attach_intent,
+    write_attach_intent,
 };
 
 pub mod final_reply;
@@ -52,6 +55,8 @@ pub enum Command {
     ReconnectCodex,
     #[command(description = "Take over a live CLI session and continue it in Telegram")]
     AttachCliSession,
+    #[command(description = "Show this thread's key, workspace, session, and CLI owner state")]
+    ThreadInfo,
 }
 
 #[derive(Clone)]
@@ -323,6 +328,7 @@ pub(crate) async fn ensure_bound_workspace_runtime(
     let workspace = workspace_path_from_binding(binding)?;
     ensure_workspace_runtime(
         &state.config.runtime.codex_working_directory,
+        &state.config.runtime.data_root_path,
         &state.seed_template_path,
         &workspace,
     )
@@ -349,6 +355,7 @@ mod tests {
                 .iter()
                 .any(|command| command == "/attach_cli_session")
         );
+        assert!(commands.iter().any(|command| command == "/thread_info"));
         assert!(
             !commands
                 .iter()
@@ -366,6 +373,10 @@ mod tests {
         assert!(matches!(
             Command::parse("/attach_cli_session", ""),
             Ok(Command::AttachCliSession)
+        ));
+        assert!(matches!(
+            Command::parse("/thread_info", ""),
+            Ok(Command::ThreadInfo)
         ));
         assert!(Command::parse("/reset_codex_session", "").is_err());
     }

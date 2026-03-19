@@ -13,6 +13,8 @@ STATUS_DIR = Path(".threadbridge/state/codex-sync")
 CURRENT_FILE = STATUS_DIR / "current.json"
 EVENTS_FILE = STATUS_DIR / "events.jsonl"
 SESSIONS_DIR = STATUS_DIR / "sessions"
+CLI_OWNER_FILE = STATUS_DIR / "cli-owner.json"
+ATTACH_INTENT_FILE = STATUS_DIR / "attach-intent.json"
 
 
 def now_iso() -> str:
@@ -37,6 +39,21 @@ def ensure_surface(workspace: Path) -> None:
     events_path = workspace / EVENTS_FILE
     if not events_path.exists():
         events_path.write_text("", encoding="utf-8")
+
+
+def read_json_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    tmp_path = path.with_name(
+        f"{path.name}.{int(datetime.now(timezone.utc).timestamp() * 1000)}.tmp"
+    )
+    tmp_path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def default_workspace_status(workspace: Path) -> dict[str, Any]:
@@ -89,11 +106,7 @@ def read_current(workspace: Path) -> dict[str, Any]:
 
 def write_current(workspace: Path, current: dict[str, Any]) -> None:
     current_path = workspace / CURRENT_FILE
-    tmp_path = current_path.with_name(
-        f"{current_path.name}.{int(datetime.now(timezone.utc).timestamp() * 1000)}.tmp"
-    )
-    tmp_path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(current_path)
+    atomic_write_json(current_path, current)
 
 
 def read_session(workspace: Path, session_id: str) -> dict[str, Any] | None:
@@ -106,11 +119,43 @@ def read_session(workspace: Path, session_id: str) -> dict[str, Any] | None:
 
 def write_session(workspace: Path, session: dict[str, Any]) -> None:
     path = session_status_path(workspace, session["session_id"])
-    tmp_path = path.with_name(
-        f"{path.name}.{int(datetime.now(timezone.utc).timestamp() * 1000)}.tmp"
-    )
-    tmp_path.write_text(json.dumps(session, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, session)
+
+
+def read_owner_claim(workspace: Path) -> dict[str, Any] | None:
+    return read_json_file(workspace / CLI_OWNER_FILE)
+
+
+def write_owner_claim(workspace: Path, claim: dict[str, Any]) -> None:
+    claim["schema_version"] = STATUS_SCHEMA_VERSION
+    claim["workspace_cwd"] = str(workspace.resolve())
+    atomic_write_json(workspace / CLI_OWNER_FILE, claim)
+
+
+def remove_owner_claim(workspace: Path) -> None:
+    path = workspace / CLI_OWNER_FILE
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def read_attach_intent(workspace: Path) -> dict[str, Any] | None:
+    return read_json_file(workspace / ATTACH_INTENT_FILE)
+
+
+def write_attach_intent(workspace: Path, intent: dict[str, Any]) -> None:
+    intent["schema_version"] = STATUS_SCHEMA_VERSION
+    intent["workspace_cwd"] = str(workspace.resolve())
+    atomic_write_json(workspace / ATTACH_INTENT_FILE, intent)
+
+
+def remove_attach_intent(workspace: Path) -> None:
+    path = workspace / ATTACH_INTENT_FILE
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
 
 
 def list_sessions(workspace: Path) -> list[dict[str, Any]]:
@@ -198,6 +243,9 @@ def apply_shell_exit(workspace: Path, shell_pid: int | None) -> None:
         session["turn_id"] = None
         session["updated_at"] = now_iso()
         write_session(workspace, session)
+    claim = read_owner_claim(workspace)
+    if claim and claim.get("shell_pid") == shell_pid:
+        remove_owner_claim(workspace)
 
 
 def apply_event(
@@ -241,6 +289,23 @@ def apply_event(
             }
         )
         write_session(workspace, session)
+        claim = read_owner_claim(workspace)
+        owner_thread_key = payload.get("owner_thread_key")
+        if claim and claim.get("shell_pid") == shell_pid:
+            claim["session_id"] = session_id
+            claim["updated_at"] = now_iso()
+            write_owner_claim(workspace, claim)
+        elif owner_thread_key:
+            write_owner_claim(
+                workspace,
+                {
+                    "thread_key": owner_thread_key,
+                    "shell_pid": shell_pid,
+                    "session_id": session_id,
+                    "started_at": now_iso(),
+                    "updated_at": now_iso(),
+                },
+            )
         return refresh_current(workspace, current)
 
     if event_name == "user_prompt_submitted":
@@ -323,6 +388,9 @@ def command_event(args: argparse.Namespace) -> int:
         if args.shell_pid is not None:
             payload["shell_pid"] = args.shell_pid
         payload.setdefault("client", "codex-cli")
+        owner_thread_key = args.owner_thread_key or payload.get("owner_thread_key")
+        if owner_thread_key:
+            payload["owner_thread_key"] = owner_thread_key
     else:
         if not args.event_name:
             raise SystemExit("event name is required")
@@ -337,6 +405,112 @@ def command_event(args: argparse.Namespace) -> int:
     next_status = apply_event(workspace, current, event_name, payload)
     append_event(workspace, event_name, "cli", payload)
     write_current(workspace, next_status)
+    return 0
+
+
+def list_active_bound_threads(data_root: Path, workspace: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    if not data_root.exists():
+        return records
+    workspace_cwd = str(workspace.resolve())
+    for entry in data_root.iterdir():
+        if not entry.is_dir():
+            continue
+        metadata = read_json_file(entry / "metadata.json")
+        binding = read_json_file(entry / "session-binding.json")
+        if not metadata or not binding:
+            continue
+        if metadata.get("scope") != "thread":
+            continue
+        if metadata.get("status") != "active":
+            continue
+        if binding.get("workspace_cwd") != workspace_cwd:
+            continue
+        records.append(
+            {
+                "thread_key": metadata.get("thread_key"),
+                "title": metadata.get("title"),
+                "message_thread_id": metadata.get("message_thread_id"),
+            }
+        )
+    records.sort(key=lambda item: item.get("thread_key") or "")
+    return records
+
+
+def resolve_owner_thread(
+    data_root: Path, workspace: Path, requested_thread_key: str | None
+) -> str:
+    active = list_active_bound_threads(data_root, workspace)
+    if requested_thread_key:
+        for item in active:
+            if item.get("thread_key") == requested_thread_key:
+                return requested_thread_key
+        raise SystemExit(
+            f"thread_key {requested_thread_key!r} is not an active bound thread for {workspace}"
+        )
+    if len(active) == 1:
+        return active[0]["thread_key"]
+    if not active:
+        raise SystemExit(f"no active bound Telegram threads are available for {workspace}")
+    details = "\n".join(
+        f"- {item['thread_key']} (topic={item.get('message_thread_id')})" for item in active
+    )
+    raise SystemExit(
+        "multiple active bound Telegram threads are available for this workspace.\n"
+        "rerun hcodex with --thread-key <thread-key> using one of:\n"
+        f"{details}"
+    )
+
+
+def command_prepare_launch(args: argparse.Namespace) -> int:
+    workspace = workspace_root(args.workspace)
+    ensure_surface(workspace)
+    data_root = Path(args.data_root).resolve()
+    thread_key = resolve_owner_thread(data_root, workspace, args.thread_key)
+    current = read_current(workspace)
+    claim = read_owner_claim(workspace)
+    if current.get("live_cli_session_ids"):
+        if claim and claim.get("shell_pid") == args.shell_pid:
+            print(thread_key)
+            return 0
+        raise SystemExit(
+            "a live Codex CLI session is already managed in this workspace; attach or resume that session instead of starting another one"
+        )
+    if claim and claim.get("shell_pid") != args.shell_pid:
+        raise SystemExit(
+            f"workspace already has a managed CLI owner for thread {claim.get('thread_key')}"
+        )
+    now = now_iso()
+    write_owner_claim(
+        workspace,
+        {
+            "thread_key": thread_key,
+            "shell_pid": args.shell_pid,
+            "session_id": claim.get("session_id") if claim else None,
+            "started_at": claim.get("started_at", now) if claim else now,
+            "updated_at": now,
+        },
+    )
+    print(thread_key)
+    return 0
+
+
+def command_consume_attach_intent(args: argparse.Namespace) -> int:
+    workspace = workspace_root(args.workspace)
+    ensure_surface(workspace)
+    intent = read_attach_intent(workspace)
+    if not intent or intent.get("shell_pid") != args.shell_pid:
+        return 0
+    print(
+        "\t".join(
+            [
+                intent["thread_key"],
+                intent["session_id"],
+                intent["created_at"],
+            ]
+        )
+    )
+    remove_attach_intent(workspace)
     return 0
 
 
@@ -368,6 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
     event_parser.add_argument("--workspace")
     event_parser.add_argument("--shell-pid", type=int)
     event_parser.add_argument("--exit-code", type=int)
+    event_parser.add_argument("--owner-thread-key")
     event_parser.set_defaults(func=command_event)
 
     notify_parser = subparsers.add_parser("notify")
@@ -375,6 +550,18 @@ def build_parser() -> argparse.ArgumentParser:
     notify_parser.add_argument("payload", nargs="?")
     notify_parser.add_argument("extra", nargs="*")
     notify_parser.set_defaults(func=command_notify)
+
+    launch_parser = subparsers.add_parser("prepare-launch")
+    launch_parser.add_argument("--workspace")
+    launch_parser.add_argument("--data-root", required=True)
+    launch_parser.add_argument("--shell-pid", type=int, required=True)
+    launch_parser.add_argument("--thread-key")
+    launch_parser.set_defaults(func=command_prepare_launch)
+
+    consume_intent_parser = subparsers.add_parser("consume-attach-intent")
+    consume_intent_parser.add_argument("--workspace")
+    consume_intent_parser.add_argument("--shell-pid", type=int, required=True)
+    consume_intent_parser.set_defaults(func=command_consume_attach_intent)
 
     return parser
 

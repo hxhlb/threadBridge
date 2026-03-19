@@ -16,6 +16,8 @@ const STATUS_DIR: &str = ".threadbridge/state/codex-sync";
 const CURRENT_FILE: &str = "current.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const SESSIONS_DIR: &str = "sessions";
+const CLI_OWNER_FILE: &str = "cli-owner.json";
+const ATTACH_INTENT_FILE: &str = "attach-intent.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +82,28 @@ pub struct WorkspaceStatusEventRecord {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CliOwnerClaim {
+    pub schema_version: u32,
+    pub workspace_cwd: String,
+    pub thread_key: String,
+    pub shell_pid: u32,
+    pub session_id: Option<String>,
+    pub started_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachIntent {
+    pub schema_version: u32,
+    pub workspace_cwd: String,
+    pub thread_key: String,
+    pub session_id: String,
+    pub shell_pid: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WorkspaceStatusCache {
     inner: Arc<RwLock<HashMap<String, WorkspaceAggregateStatus>>>,
@@ -111,6 +135,14 @@ fn sessions_dir(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(SESSIONS_DIR)
 }
 
+pub fn cli_owner_claim_path(workspace_path: &Path) -> PathBuf {
+    status_dir(workspace_path).join(CLI_OWNER_FILE)
+}
+
+pub fn attach_intent_path(workspace_path: &Path) -> PathBuf {
+    status_dir(workspace_path).join(ATTACH_INTENT_FILE)
+}
+
 pub fn current_status_path(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(CURRENT_FILE)
 }
@@ -134,6 +166,41 @@ fn session_file_name(session_id: &str) -> String {
 
 pub fn session_status_path(workspace_path: &Path, session_id: &str) -> PathBuf {
     sessions_dir(workspace_path).join(session_file_name(session_id))
+}
+
+pub fn default_cli_owner_claim(
+    workspace_path: &Path,
+    thread_key: impl Into<String>,
+    shell_pid: u32,
+) -> CliOwnerClaim {
+    let now = now_iso();
+    CliOwnerClaim {
+        schema_version: STATUS_SCHEMA_VERSION,
+        workspace_cwd: canonical_workspace_string(workspace_path),
+        thread_key: thread_key.into(),
+        shell_pid,
+        session_id: None,
+        started_at: now.clone(),
+        updated_at: now,
+    }
+}
+
+pub fn default_attach_intent(
+    workspace_path: &Path,
+    thread_key: impl Into<String>,
+    session_id: impl Into<String>,
+    shell_pid: u32,
+) -> AttachIntent {
+    let now = now_iso();
+    AttachIntent {
+        schema_version: STATUS_SCHEMA_VERSION,
+        workspace_cwd: canonical_workspace_string(workspace_path),
+        thread_key: thread_key.into(),
+        session_id: session_id.into(),
+        shell_pid,
+        created_at: now.clone(),
+        updated_at: now,
+    }
 }
 
 pub fn default_workspace_status(workspace_path: &Path) -> WorkspaceAggregateStatus {
@@ -199,6 +266,32 @@ async fn write_session_status(workspace_path: &Path, status: &SessionCurrentStat
     .await
 }
 
+pub async fn write_cli_owner_claim(workspace_path: &Path, claim: &CliOwnerClaim) -> Result<()> {
+    atomic_write_json(&cli_owner_claim_path(workspace_path), claim).await
+}
+
+pub async fn remove_cli_owner_claim(workspace_path: &Path) -> Result<()> {
+    let path = cli_owner_claim_path(workspace_path);
+    match fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+pub async fn write_attach_intent(workspace_path: &Path, intent: &AttachIntent) -> Result<()> {
+    atomic_write_json(&attach_intent_path(workspace_path), intent).await
+}
+
+pub async fn remove_attach_intent(workspace_path: &Path) -> Result<()> {
+    let path = attach_intent_path(workspace_path);
+    match fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
 pub async fn append_status_event(
     workspace_path: &Path,
     event: &WorkspaceStatusEventRecord,
@@ -255,6 +348,24 @@ pub async fn read_session_status(
     session_id: &str,
 ) -> Result<Option<SessionCurrentStatus>> {
     let path = session_status_path(workspace_path, session_id);
+    match fs::read_to_string(&path).await {
+        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+pub async fn read_cli_owner_claim(workspace_path: &Path) -> Result<Option<CliOwnerClaim>> {
+    let path = cli_owner_claim_path(workspace_path);
+    match fs::read_to_string(&path).await {
+        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+pub async fn read_attach_intent(workspace_path: &Path) -> Result<Option<AttachIntent>> {
+    let path = attach_intent_path(workspace_path);
     match fs::read_to_string(&path).await {
         Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

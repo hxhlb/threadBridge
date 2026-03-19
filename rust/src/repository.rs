@@ -10,6 +10,7 @@ use crate::image_artifacts::{ImageAnalysisArtifact, PendingImageBatch, PendingIm
 
 const MAIN_THREAD_KEY: &str = "main-thread";
 const SESSION_BINDING_FILE_NAME: &str = "session-binding.json";
+const TRANSCRIPT_MIRROR_FILE_NAME: &str = "transcript-mirror.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +90,36 @@ pub struct ThreadLogEntry {
     pub user_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMirrorOrigin {
+    Cli,
+    Telegram,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMirrorRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMirrorDelivery {
+    Final,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptMirrorEntry {
+    pub timestamp: String,
+    pub session_id: String,
+    pub origin: TranscriptMirrorOrigin,
+    pub role: TranscriptMirrorRole,
+    pub delivery: TranscriptMirrorDelivery,
+    pub text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ThreadRecord {
     pub conversation_key: String,
@@ -102,6 +133,10 @@ pub struct ThreadRecord {
 impl ThreadRecord {
     pub fn state_path(&self) -> PathBuf {
         self.folder_path.join("state")
+    }
+
+    pub fn transcript_mirror_path(&self) -> PathBuf {
+        self.state_path().join(TRANSCRIPT_MIRROR_FILE_NAME)
     }
 }
 
@@ -221,6 +256,25 @@ impl ThreadRepository {
         }
         existing.push_str(&line);
         fs::write(&record.log_path, existing).await?;
+        Ok(())
+    }
+
+    pub async fn append_transcript_mirror(
+        &self,
+        record: &ThreadRecord,
+        entry: &TranscriptMirrorEntry,
+    ) -> Result<()> {
+        let path = record.transcript_mirror_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let line = format!("{}\n", serde_json::to_string(entry)?);
+        let mut existing = String::new();
+        if let Ok(content) = fs::read_to_string(&path).await {
+            existing = content;
+        }
+        existing.push_str(&line);
+        fs::write(path, existing).await?;
         Ok(())
     }
 
@@ -713,6 +767,10 @@ impl ThreadRepository {
             return Ok(None);
         }
         Ok(Some(self.build_record(folder_name, metadata)))
+    }
+
+    pub fn data_root_path(&self) -> &Path {
+        &self.data_root_path
     }
 
     pub async fn update_metadata(&self, record: ThreadRecord) -> Result<ThreadRecord> {

@@ -8,10 +8,24 @@ use teloxide::types::{MessageId, ThreadId};
 use tracing::warn;
 
 use super::*;
-use crate::repository::SessionAttachmentState;
-use crate::workspace_status::{SessionCurrentStatus, SessionStatusOwner, WorkspaceAggregateStatus};
+use crate::repository::{
+    SessionAttachmentState, ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry,
+    TranscriptMirrorOrigin, TranscriptMirrorRole,
+};
+use crate::workspace_status::{
+    CliOwnerClaim, SessionCurrentStatus, SessionStatusOwner, WorkspaceAggregateStatus,
+    WorkspaceStatusEventRecord, events_path, read_cli_owner_claim,
+};
 
 const TELEGRAM_TOPIC_TITLE_MAX_CHARS: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliTopicMarker {
+    None,
+    Cli,
+    CliConflict,
+    Attach,
+}
 
 fn thread_id_from_i32(value: i32) -> ThreadId {
     ThreadId(MessageId(value))
@@ -46,11 +60,54 @@ fn truncate_topic_base(base: &str, suffix: &str) -> String {
     format!("{truncated}{suffix}")
 }
 
+fn workspace_cli_conflict(
+    aggregate: Option<&WorkspaceAggregateStatus>,
+    owner_claim: Option<&CliOwnerClaim>,
+) -> bool {
+    let Some(aggregate) = aggregate else {
+        return false;
+    };
+    if aggregate.live_cli_session_ids.is_empty() {
+        return false;
+    }
+    let Some(owner_claim) = owner_claim else {
+        return true;
+    };
+    if aggregate.live_cli_session_ids.len() > 1 {
+        return true;
+    }
+    let Some(expected_session_id) = owner_claim.session_id.as_deref() else {
+        return false;
+    };
+    aggregate
+        .live_cli_session_ids
+        .iter()
+        .all(|item| item != expected_session_id)
+}
+
+pub(crate) fn cli_topic_marker_for_record(
+    record: &ThreadRecord,
+    session: Option<&SessionBinding>,
+    aggregate: Option<&WorkspaceAggregateStatus>,
+    owner_claim: Option<&CliOwnerClaim>,
+) -> CliTopicMarker {
+    if session.is_some_and(|binding| binding.attachment_state == SessionAttachmentState::CliHandoff)
+    {
+        return CliTopicMarker::Attach;
+    }
+    if workspace_cli_conflict(aggregate, owner_claim) {
+        return CliTopicMarker::CliConflict;
+    }
+    if owner_claim.is_some_and(|claim| claim.thread_key == record.metadata.thread_key) {
+        return CliTopicMarker::Cli;
+    }
+    CliTopicMarker::None
+}
+
 pub(crate) fn render_topic_title(
     record: &ThreadRecord,
     workspace_path: Option<&Path>,
-    session: Option<&SessionBinding>,
-    aggregate: Option<&WorkspaceAggregateStatus>,
+    marker: CliTopicMarker,
 ) -> String {
     let base = record
         .metadata
@@ -63,19 +120,26 @@ pub(crate) fn render_topic_title(
         .unwrap_or_else(|| "Unbound".to_owned());
 
     let mut suffix = String::new();
-    if session.is_some_and(|binding| binding.attachment_state == SessionAttachmentState::CliHandoff)
-    {
-        suffix.push_str(" · attach");
-    } else if let Some(aggregate) = aggregate
-        && !aggregate.live_cli_session_ids.is_empty()
-    {
-        suffix.push_str(" · cli");
+    match marker {
+        CliTopicMarker::Attach => suffix.push_str(" · attach"),
+        CliTopicMarker::Cli => suffix.push_str(" · cli"),
+        CliTopicMarker::CliConflict => suffix.push_str(" · cli!"),
+        CliTopicMarker::None => {}
     }
     if record.metadata.session_broken {
         suffix.push_str(" · broken");
     }
 
     truncate_topic_base(&base, &suffix)
+}
+
+pub(crate) fn cli_marker_label(marker: CliTopicMarker) -> &'static str {
+    match marker {
+        CliTopicMarker::None => "none",
+        CliTopicMarker::Cli => ".cli",
+        CliTopicMarker::CliConflict => ".cli!",
+        CliTopicMarker::Attach => ".attach",
+    }
 }
 
 pub(crate) async fn refresh_thread_topic_title(
@@ -96,11 +160,20 @@ pub(crate) async fn refresh_thread_topic_title(
     } else {
         None
     };
+    let owner_claim = if let Some(path) = workspace_path.as_ref() {
+        read_cli_owner_claim(path).await?
+    } else {
+        None
+    };
     let title = render_topic_title(
         record,
         workspace_path.as_deref(),
-        session.as_ref(),
-        aggregate.as_ref(),
+        cli_topic_marker_for_record(
+            record,
+            session.as_ref(),
+            aggregate.as_ref(),
+            owner_claim.as_ref(),
+        ),
     );
     bot.edit_forum_topic(
         ChatId(record.metadata.chat_id),
@@ -154,10 +227,16 @@ pub(crate) fn cli_owned_command_message() -> &'static str {
 pub async fn spawn_workspace_status_watcher(bot: Bot, state: AppState) {
     tokio::spawn(async move {
         let mut applied_titles: HashMap<String, String> = HashMap::new();
+        let mut workspace_event_offsets: HashMap<String, usize> = HashMap::new();
         loop {
             if let Err(error) = sync_workspace_titles_once(&bot, &state, &mut applied_titles).await
             {
                 warn!(event = "workspace_status.sync.failed", error = %error);
+            }
+            if let Err(error) =
+                sync_cli_transcript_mirrors_once(&bot, &state, &mut workspace_event_offsets).await
+            {
+                warn!(event = "workspace_mirror.sync.failed", error = %error);
             }
             tokio::time::sleep(Duration::from_millis(
                 state.config.workspace_status_poll_interval_ms,
@@ -176,6 +255,7 @@ async fn sync_workspace_titles_once(
     let mut active_conversations = HashSet::new();
     let mut keep_workspaces = Vec::new();
     let mut aggregate_by_workspace: HashMap<String, WorkspaceAggregateStatus> = HashMap::new();
+    let mut owner_claim_by_workspace: HashMap<String, Option<CliOwnerClaim>> = HashMap::new();
 
     for record in records {
         let Some(message_thread_id) = record.metadata.message_thread_id else {
@@ -196,6 +276,10 @@ async fn sync_workspace_titles_once(
                 .display()
                 .to_string();
             keep_workspaces.push(key.clone());
+            if !owner_claim_by_workspace.contains_key(&key) {
+                owner_claim_by_workspace
+                    .insert(key.clone(), read_cli_owner_claim(workspace_path).await?);
+            }
             if let Some(existing) = aggregate_by_workspace.get(&key) {
                 Some(existing.clone())
             } else {
@@ -231,8 +315,21 @@ async fn sync_workspace_titles_once(
         let rendered = render_topic_title(
             &record,
             workspace_path.as_deref(),
-            session.as_ref(),
-            aggregate.as_ref(),
+            cli_topic_marker_for_record(
+                &record,
+                session.as_ref(),
+                aggregate.as_ref(),
+                workspace_path.as_ref().and_then(|path| {
+                    let key = path
+                        .canonicalize()
+                        .unwrap_or_else(|_| path.clone())
+                        .display()
+                        .to_string();
+                    owner_claim_by_workspace
+                        .get(&key)
+                        .and_then(|claim| claim.as_ref())
+                }),
+            ),
         );
         let previous = applied_titles.get(&record.conversation_key);
         if previous.is_some_and(|value| value == &rendered) {
@@ -256,14 +353,171 @@ async fn sync_workspace_titles_once(
     Ok(())
 }
 
+async fn sync_cli_transcript_mirrors_once(
+    bot: &Bot,
+    state: &AppState,
+    workspace_event_offsets: &mut HashMap<String, usize>,
+) -> Result<()> {
+    let records = state.repository.list_active_threads().await?;
+    let mut by_workspace: HashMap<String, Vec<ThreadRecord>> = HashMap::new();
+    for record in records {
+        if matches!(record.metadata.status, ThreadStatus::Archived) {
+            continue;
+        }
+        let Some(binding) = state.repository.read_session_binding(&record).await? else {
+            continue;
+        };
+        let Some(workspace_cwd) = binding.workspace_cwd else {
+            continue;
+        };
+        by_workspace.entry(workspace_cwd).or_default().push(record);
+    }
+
+    for (workspace_key, workspace_records) in by_workspace {
+        let workspace_path = PathBuf::from(&workspace_key);
+        let Some(owner_claim) = read_cli_owner_claim(&workspace_path).await? else {
+            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+                continue;
+            };
+            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            continue;
+        };
+        let aggregate =
+            crate::workspace_status::read_workspace_aggregate_status(&workspace_path).await?;
+        if workspace_cli_conflict(Some(&aggregate), Some(&owner_claim)) {
+            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+                continue;
+            };
+            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            continue;
+        }
+        let Some(owner_record) = workspace_records
+            .iter()
+            .find(|record| record.metadata.thread_key == owner_claim.thread_key)
+            .cloned()
+        else {
+            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+                continue;
+            };
+            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            continue;
+        };
+
+        let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+            continue;
+        };
+        let Some(previous_offset) = workspace_event_offsets.get(&workspace_key).copied() else {
+            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            continue;
+        };
+        let new_offset = lines.len();
+        for line in lines.iter().skip(previous_offset) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let event: WorkspaceStatusEventRecord = match serde_json::from_str(trimmed) {
+                Ok(event) => event,
+                Err(error) => {
+                    warn!(event = "workspace_mirror.event_parse_failed", error = %error);
+                    continue;
+                }
+            };
+            if let Some(entry) =
+                cli_mirror_entry_from_event(&event, owner_claim.session_id.as_deref())
+            {
+                state
+                    .repository
+                    .append_transcript_mirror(&owner_record, &entry)
+                    .await?;
+                if let Some(message_thread_id) = owner_record.metadata.message_thread_id {
+                    let prefix = match (entry.origin.clone(), entry.role.clone()) {
+                        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::User) => "CLI",
+                        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::Assistant) => "Codex",
+                        _ => continue,
+                    };
+                    send_scoped_message(
+                        bot,
+                        ChatId(owner_record.metadata.chat_id),
+                        Some(thread_id_from_i32(message_thread_id)),
+                        format!("{prefix}: {}", entry.text),
+                    )
+                    .await?;
+                }
+            }
+        }
+        workspace_event_offsets.insert(workspace_key, new_offset);
+    }
+    Ok(())
+}
+
+async fn read_workspace_event_lines(workspace_path: &Path) -> Result<Option<Vec<String>>> {
+    let path = events_path(workspace_path);
+    let content = match tokio::fs::read_to_string(&path).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(content.lines().map(str::to_owned).collect()))
+}
+
+fn cli_mirror_entry_from_event(
+    event: &WorkspaceStatusEventRecord,
+    expected_session_id: Option<&str>,
+) -> Option<TranscriptMirrorEntry> {
+    match event.event.as_str() {
+        "user_prompt_submitted" => {
+            let session_id = event.payload.get("session_id")?.as_str()?;
+            if expected_session_id.is_some_and(|expected| expected != session_id) {
+                return None;
+            }
+            let text = event.payload.get("prompt")?.as_str()?.trim();
+            if text.is_empty() {
+                return None;
+            }
+            Some(TranscriptMirrorEntry {
+                timestamp: event.occurred_at.clone(),
+                session_id: session_id.to_owned(),
+                origin: TranscriptMirrorOrigin::Cli,
+                role: TranscriptMirrorRole::User,
+                delivery: TranscriptMirrorDelivery::Final,
+                text: text.to_owned(),
+            })
+        }
+        "turn_completed" => {
+            let session_id = event.payload.get("thread-id")?.as_str()?;
+            if expected_session_id.is_some_and(|expected| expected != session_id) {
+                return None;
+            }
+            let text = event
+                .payload
+                .get("last-assistant-message")?
+                .as_str()?
+                .trim();
+            if text.is_empty() {
+                return None;
+            }
+            Some(TranscriptMirrorEntry {
+                timestamp: event.occurred_at.clone(),
+                session_id: session_id.to_owned(),
+                origin: TranscriptMirrorOrigin::Cli,
+                role: TranscriptMirrorRole::Assistant,
+                delivery: TranscriptMirrorDelivery::Final,
+                text: text.to_owned(),
+            })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::render_topic_title;
+    use super::{CliTopicMarker, cli_topic_marker_for_record, render_topic_title};
     use crate::repository::{
         SessionAttachmentState, SessionBinding, ThreadMetadata, ThreadRecord, ThreadScope,
         ThreadStatus,
     };
-    use crate::workspace_status::WorkspaceAggregateStatus;
+    use crate::workspace_status::{CliOwnerClaim, WorkspaceAggregateStatus};
     use std::path::PathBuf;
 
     fn record(title: Option<&str>, session_broken: bool) -> ThreadRecord {
@@ -305,6 +559,18 @@ mod tests {
         }
     }
 
+    fn owner_claim(thread_key: &str, session_id: Option<&str>) -> CliOwnerClaim {
+        CliOwnerClaim {
+            schema_version: 2,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            thread_key: thread_key.to_owned(),
+            shell_pid: 42,
+            session_id: session_id.map(str::to_owned),
+            started_at: "2026-03-19T00:00:00.000Z".to_owned(),
+            updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
+        }
+    }
+
     fn binding(
         selected_session_id: Option<&str>,
         attachment_state: SessionAttachmentState,
@@ -330,22 +596,23 @@ mod tests {
         let title = render_topic_title(
             &record(Some("Status Sync"), true),
             Some(PathBuf::from("/tmp/workspace").as_path()),
-            Some(&binding(
-                Some("thr_cli"),
-                SessionAttachmentState::CliHandoff,
-            )),
-            Some(&aggregate(&["thr_cli"])),
+            CliTopicMarker::Attach,
         );
         assert_eq!(title, "Status Sync · attach · broken");
     }
 
     #[test]
-    fn render_title_uses_cli_for_other_live_workspace_session() {
+    fn render_title_uses_cli_for_owner_thread() {
+        let marker = cli_topic_marker_for_record(
+            &record(None, false),
+            Some(&binding(Some("thr_bot"), SessionAttachmentState::None)),
+            Some(&aggregate(&["thr_cli"])),
+            Some(&owner_claim("thread-key", Some("thr_cli"))),
+        );
         let title = render_topic_title(
             &record(None, false),
             Some(PathBuf::from("/tmp/example-workspace").as_path()),
-            Some(&binding(Some("thr_bot"), SessionAttachmentState::None)),
-            Some(&aggregate(&["thr_cli"])),
+            marker,
         );
         assert_eq!(title, "example-workspace · cli");
     }
@@ -356,13 +623,25 @@ mod tests {
         let title = render_topic_title(
             &record(Some(&long_title), false),
             Some(PathBuf::from("/tmp/workspace").as_path()),
-            Some(&binding(
-                Some("thr_cli"),
-                SessionAttachmentState::CliHandoff,
-            )),
-            Some(&aggregate(&["thr_cli"])),
+            CliTopicMarker::Attach,
         );
         assert!(title.ends_with(" · attach"));
         assert!(title.chars().count() <= 128);
+    }
+
+    #[test]
+    fn cli_conflict_marker_appears_when_live_cli_has_no_owner_claim() {
+        let marker = cli_topic_marker_for_record(
+            &record(Some("Conflict"), false),
+            Some(&binding(Some("thr_bot"), SessionAttachmentState::None)),
+            Some(&aggregate(&["thr_cli"])),
+            None,
+        );
+        let title = render_topic_title(
+            &record(Some("Conflict"), false),
+            Some(PathBuf::from("/tmp/workspace").as_path()),
+            marker,
+        );
+        assert_eq!(title, "Conflict · cli!");
     }
 }

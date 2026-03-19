@@ -1,31 +1,40 @@
 # Session Sync Manual Test
 
-這份文檔是 `threadBridge` 目前 CLI / Telegram session 同步能力的手動測試清單。
+這份文檔是 `threadBridge` 目前 CLI / Telegram 信息同步能力的手動測試清單。
 
 它描述的是已落地行為，不是願景設計稿。
 
 ## 先記住語義
 
 - `· cli`
-  - 同一個 workspace 裡存在 live CLI session，而且本地 CLI 目前持有輸入權
+  - 只有 owner thread 會顯示
+  - 表示這個 thread 是當前受管本地 CLI 的 mirror target
 - `· attach`
-  - 當前 Telegram thread 已經接管原 CLI session，Telegram 現在持有輸入權
+  - 當前 Telegram thread 已接管原 CLI session
+  - Telegram 現在持有輸入權
+- `· cli!`
+  - workspace 的 CLI owner 狀態不可信或衝突
+  - 例如 owner claim 缺失、registry 對不上、或出現多個 live CLI sessions
 
 目前已落地的是：
 
-- Telegram 可以 attach 到 live CLI session
-- attach 時會自動終止本地 `codex` TUI
-- attach 後，Telegram 新輸入會沿用同一個 Codex `thread.id`
-- 本地重新 `codex resume <session-id>` 後，ownership 會回到 CLI
+- `hcodex` 是受管本地 CLI 入口
+- owner thread 透過 `thread_key` 決定
+- CLI 的用戶輸入文本與 assistant 最終文本會鏡像到 owner thread
+- `/attach_cli_session` 會 kill `codex` TUI，然後在同一個終端進入只讀 viewer
+- viewer 會顯示 attach 之後的 Telegram 文本與 Codex 最終回覆
+- viewer 按 `r` 會在同一終端執行 `hcodex resume <session-id> --thread-key <thread-key>`
+- `/thread_info` 會暴露 `thread_key`、selected session、marker 和 owner 狀態
 
 目前還沒有落地的是：
 
-- CLI 正在進行中的 `item` / `delta` live 鏡像到 Telegram
-- Telegram 發出的 turn 即時出現在 CLI TUI 畫面裡
+- CLI token / delta 級別 live streaming 到 Telegram
+- Telegram preview draft live 進入本地 viewer
+- raw `codex` 作為受管入口
 
 ## 前置條件
 
-1. bot 已經重啟到包含 session sync 代碼的版本
+1. bot 已重啟到包含 `hcodex` / viewer / mirror 代碼的版本
 2. 你有一個已綁定 workspace 的 Telegram thread
 3. 該 workspace 已安裝 `.threadbridge/` runtime surface
 
@@ -35,45 +44,101 @@
 /Volumes/Data/Github/codex
 ```
 
-## 測試 1: CLI session 被偵測為 `· cli`
+## 測試 0: 先拿到 `thread_key`
+
+在對應的 Telegram thread 執行：
+
+```text
+/thread_info
+```
+
+檢查點：
+
+1. 回覆裡應包含：
+   - `thread_key`
+   - `workspace`
+   - `selected_session_id`
+   - `attachment_state`
+   - `marker`
+   - `owner_thread`
+   - `owner_session_id`
+2. 如果 workspace 有多個 active bound threads，後面的 `hcodex` 需要帶：
+
+```bash
+--thread-key <thread-key>
+```
+
+## 測試 1: 用 `hcodex` 啟動受管 CLI owner
 
 在本地終端執行：
 
 ```bash
 cd /Volumes/Data/Github/codex
 source ./.threadbridge/shell/codex-sync.bash
-type codex
-codex
+type hcodex
+hcodex
+```
+
+如果這個 workspace 有多個 active bound threads，改為：
+
+```bash
+hcodex --thread-key <thread-key>
 ```
 
 檢查點：
 
-1. `type codex` 應顯示 `codex is a shell function`
-2. 進入 CLI 後，在 TUI 內送一條簡短 prompt，例如：
+1. `type hcodex` 應顯示 `hcodex is a shell function`
+2. 在 CLI 裡送一條簡短 prompt，例如：
 
 ```text
 hi
 ```
 
-3. 對應的 Telegram topic title 應變成 `· cli`
+3. 只有 owner thread 的 Telegram topic title 變成 `· cli`
+4. 其他同 workspace thread 不應顯示 `· cli`
 
-這一步只是在驗證：
+這一步驗證的是：
 
-- 本地 Bash wrapper 生效
-- CLI hook / notify 生效
-- Telegram 看見同 workspace 的 live CLI session
+- `hcodex` 而不是 raw `codex` 在管理受管 CLI
+- owner thread 由 `thread_key` 明確決定
+- `.cli` 是 owner-thread marker，不是 workspace 廣播標記
 
-## 測試 2: attach 後變成 `· attach`
+## 測試 2: CLI 文本鏡像到 owner thread
 
-在剛才對應的 Telegram thread 裡執行：
+保持剛才的 `hcodex` session 活著，在 CLI 裡送兩條簡短 prompt，例如：
+
+```text
+這個項目是做什麼的？
+```
+
+```text
+再用一句話總結
+```
+
+檢查點：
+
+1. owner thread 應收到：
+   - `CLI: <你的 prompt>`
+   - `Codex: <最終回覆>`
+2. 其他同 workspace thread 不應收到這些鏡像文本
+3. 若你在 Telegram thread 執行 `/thread_info`：
+   - `marker` 應是 `.cli`
+   - `is_owner_thread` 應是 `yes`
+
+這一步驗證的是：
+
+- `CLI -> Telegram` mirror routing 只走 owner thread
+- routing 依賴 `thread_key` owner claim，不依賴 workspace 廣播
+
+## 測試 3: `/attach_cli_session` 進入 `· attach`
+
+在 owner thread 執行：
 
 ```text
 /attach_cli_session
 ```
 
-如果同一個 workspace 只有一個 live CLI session，bot 會直接 attach。
-
-如果有多個 live CLI sessions，bot 會列出可選的 session id。這時改為：
+如果同一 workspace 出現多個 live CLI sessions，bot 會列出可選 session id。這時改為：
 
 ```text
 /attach_cli_session <session-id>
@@ -81,19 +146,23 @@ hi
 
 檢查點：
 
-1. attach 成功後，topic title 應從 `· cli` 變成 `· attach`
-2. 本地 `codex` TUI 應被結束，terminal 回到 prompt
-3. bot 應回覆已 attach 到指定 live CLI session，並給出：
+1. Telegram topic title 從 `· cli` 變成 `· attach`
+2. 原本的 `codex` TUI 會被結束
+3. 同一個本地終端不回到普通 prompt，而是直接進入 `threadbridge_viewer`
+4. bot 回覆裡應給出：
 
 ```bash
-codex resume <session-id>
+hcodex resume <session-id> --thread-key <thread-key>
 ```
 
-## 測試 3: `.attach` 狀態下，Telegram 可以接手當輸入窗口
+這一步驗證的是：
 
-attach 成功後，本地 CLI TUI 已退出，這時 Telegram 是唯一輸入窗口。
+- attach 是排他式 handoff
+- `codex` TUI 被 kill 後，由 viewer 在同一終端接棒
 
-然後在 Telegram 同一個 thread 發送普通文字，例如：
+## 測試 4: `.attach` 狀態下 Telegram 接手輸入窗口
+
+現在 viewer 已在本地終端中打開，不要按 `r`。改到 Telegram owner thread 發送普通文字，例如：
 
 ```text
 用一句話說明這個 repo 是做什麼的
@@ -101,118 +170,187 @@ attach 成功後，本地 CLI TUI 已退出，這時 Telegram 是唯一輸入窗
 
 檢查點：
 
-1. 這條 Telegram 請求不應被 busy gate 擋住
-2. 它應正常完成
+1. 這條 Telegram 請求不應被 owner gate 擋住
+2. viewer 應顯示：
+   - `Telegram: <你的輸入>`
+   - `Codex: <最終回覆>`
 3. `· attach` 標記應保留
 
 這一步驗證的是：
 
-- selected session 已被 Telegram 接管
-- Telegram 可以接力原 CLI session 繼續對話
+- Telegram 已接管原 CLI session
+- `Telegram -> viewer` 文本鏡像已生效
 
-## 測試 4: selected-session busy gate 生效
+## 測試 5: viewer 用 `r` 回到本地 CLI
 
-在本地 CLI 裡送一條稍微慢一點的 prompt，例如：
+在 viewer 裡按：
 
 ```text
-讀一下 repo 根目錄的 AGENTS.md，總結成 8 點
+r
 ```
-
-在它還沒完成時，立刻去 Telegram 同一個 thread 再發一條普通文字。
 
 檢查點：
 
-1. 這次 Telegram 應被 busy gate 擋住
-2. 提示應該是 selected session 正在跑 turn，而不是整個 workspace 忙碌
-
-這一步驗證的是 attach 後的 busy gate 只看同一個 selected session。
-
-## 測試 5: 同 workspace 不同 session 時是 `· cli`
-
-開第二個本地終端，再啟一個新的 CLI session：
+1. viewer 應退出
+2. 同一終端直接執行：
 
 ```bash
-cd /Volumes/Data/Github/codex
-source ./.threadbridge/shell/codex-sync.bash
-codex
+hcodex resume <session-id> --thread-key <thread-key>
 ```
 
-在這個新 CLI session 裡也送一條簡短 prompt，讓它成為 live session。
-
-然後觀察一個還沒有 attach 到這個新 session 的 Telegram thread。
-
-檢查點：
-
-1. 這個 thread 應顯示 `· cli`
-2. 它不應自動變成 `· attach`
-3. 只有你執行：
-
-```text
-/attach_cli_session
-```
-
-或：
-
-```text
-/attach_cli_session <session-id>
-```
-
-後，才會變成 `· attach`
+3. Telegram topic title 從 `· attach` 回到 `· cli`
+4. 在 Telegram owner thread 執行 `/thread_info`：
+   - `marker` 應回到 `.cli`
+   - `attachment_state` 應回到 `none`
 
 這一步驗證的是：
 
-- `.cli` 和 `.attach` 是 ownership 標記，不是單純忙碌標記
-- attach 必須顯式完成，而且會接管 CLI 輸入權
+- viewer 的唯一受管熱鍵是 `r`
+- resume 會把 ownership 奪回給本地 CLI
+
+## 測試 6: owner gate 生效
+
+當前已回到 `.cli` 狀態。不要再 attach，直接在 Telegram owner thread 發一條普通文字，例如：
+
+```text
+你現在看到什麼上下文？
+```
+
+檢查點：
+
+1. 這條 Telegram 請求應被擋住
+2. 提示應要求你先執行 `/attach_cli_session`
+
+這一步驗證的是：
+
+- `.cli` 狀態下，本地 CLI 持有輸入權
+- Telegram 不能直接往這個 selected session 發新 turn
+
+## 測試 7: 多 thread workspace 下的顯式 `thread_key`
+
+如果同一 workspace 綁了多個 active Telegram threads：
+
+1. 在任一 thread 執行 `/thread_info`，拿到不同的 `thread_key`
+2. 本地終端執行：
+
+```bash
+cd /Volumes/Data/Github/codex
+source ./.threadbridge/shell/codex-sync.bash
+hcodex
+```
+
+預期：
+
+1. `hcodex` 應拒絕直接啟動
+2. 它應要求你顯式傳：
+
+```bash
+hcodex --thread-key <thread-key>
+```
+
+這一步驗證的是：
+
+- 多 thread workspace 下，owner thread 必須顯式決定
+- 不允許模糊推斷 mirror target
+
+## 測試 8: `.cli!` 衝突態
+
+這個狀態通常只在異常或繞過受管入口時出現，例如：
+
+- 直接用 raw `codex`
+- 人工改動 `.threadbridge/state/codex-sync/cli-owner.json`
+- workspace 內出現多個 live CLI sessions
+
+檢查點：
+
+1. 同 workspace 的 active threads 應顯示 `· cli!`
+2. 此時不要依賴 owner-based mirror routing
+3. `/attach_cli_session` 只能靠顯式 session id 選擇，不應假設 owner thread
+
+這一步主要是確認衝突標記，不要求你日常主動製造。
 
 ## 失敗時先看什麼
 
-### 看不到 `· cli`
+### `hcodex` 啟不來
 
 先檢查：
 
 ```bash
 cd /Volumes/Data/Github/codex
 source ./.threadbridge/shell/codex-sync.bash
-type codex
-tail -f .threadbridge/state/codex-sync/events.jsonl
+type hcodex
 ```
 
-如果 `type codex` 不是 shell function，代表 wrapper 沒生效。
+如果 `type hcodex` 不是 shell function，說明 shell snippet 沒載入。
 
-如果 `events.jsonl` 沒有新事件，代表 CLI 沒走進同步鏈。
-
-### `/attach_cli_session` 說沒有 live CLI session
+### 沒看到 `· cli`
 
 先檢查：
 
 ```bash
-cat .threadbridge/state/codex-sync/current.json
-ls .threadbridge/state/codex-sync/sessions
+tail -f .threadbridge/state/codex-sync/events.jsonl
+cat .threadbridge/state/codex-sync/cli-owner.json
 ```
 
-如果 `live_cli_session_ids` 是空的，說明目前沒有被 registry 視為 live 的 CLI session。
+如果 `events.jsonl` 沒事件，代表 `hcodex` 沒進同步鏈。  
+如果 `cli-owner.json` 不存在或 `thread_key` 不對，代表 owner claim 沒建立對。
 
-### `.attach` 之後 Telegram 仍被擋住
+### CLI 文本沒有鏡像到 Telegram
 
-先看 selected session 的 phase 是否還在：
+先看：
 
-- `turn_running`
-- `turn_finalizing`
+```bash
+cat .threadbridge/state/codex-sync/cli-owner.json
+```
 
-這兩個狀態下，Telegram 新 turn 會被擋住，這是預期行為。
+以及 Telegram thread：
+
+```text
+/thread_info
+```
+
+檢查：
+
+1. owner claim 的 `thread_key` 是否就是當前 thread
+2. `marker` 是否是 `.cli`
+3. thread 是否是 active，而不是 archived
+
+### `/attach_cli_session` 後沒有進 viewer
+
+先看：
+
+```bash
+cat .threadbridge/state/codex-sync/attach-intent.json
+```
+
+如果 attach intent 還留著，表示 handoff 已下發，但原終端沒有正常執行 `hcodex` 的接棒邏輯。常見原因是：
+
+- 不是用 `hcodex` 啟動的
+- 終端裡不是當前 shell snippet 版本
+
+### viewer 裡按 `r` 沒回到 CLI
+
+先確認：
+
+1. viewer 啟動命令裡的 `thread_key` 與 `session_id` 正確
+2. `.threadbridge/shell/codex-sync.bash` 仍存在
+3. 你沒有手動刪除 workspace 的 runtime surface
 
 ## 本文檔對應的能力邊界
 
-這份手測清單對應的是 threadBridge 目前已落地的 session sync 能力：
+這份手測清單對應的是 threadBridge 目前已落地的能力：
 
-- session registry
-- selected session binding
-- `/attach_cli_session`
-- `.cli` / `.attach` title
-- selected-session busy gate
-- Telegram 往已 attach session 發 turn
+- `hcodex`
+- owner claim / `thread_key`
+- `.cli` / `.cli!` / `.attach`
+- `/thread_info`
+- CLI user text 與 assistant final text 鏡像到 owner thread
+- `/attach_cli_session` handoff
+- attach 後 viewer 顯示 Telegram user text 與 assistant final text
+- viewer `r` -> `hcodex resume`
 
 它不驗證以下尚未落地能力：
 
-- CLI turn 的完整 live event stream 同步到 Telegram
-- Telegram turn 的 live UI 反映到 CLI TUI
+- CLI token / delta live streaming 到 Telegram
+- Telegram preview draft live 進入 viewer
+- raw `codex` 受管接入 threadBridge lifecycle

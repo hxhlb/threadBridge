@@ -22,9 +22,14 @@ path = "rust/src/bin/telegram_html_preview.rs"
 name = "telegram_html_probe"
 path = "rust/src/bin/telegram_html_probe.rs"
 
+[[bin]]
+name = "threadbridge_viewer"
+path = "rust/src/bin/threadbridge_viewer.rs"
+
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+crossterm = "0.28"
 dotenvy = "0.15"
 pulldown-cmark = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

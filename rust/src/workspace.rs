@@ -49,11 +49,35 @@ fn build_codex_sync_wrapper_script(subcommand: &str, repo_root: &Path) -> String
     .join("\n")
 }
 
-fn build_codex_shell_snippet(workspace_path: &Path) -> String {
+fn build_codex_sync_manage_wrapper_script(repo_root: &Path) -> String {
+    let quoted_repo_root = shell_single_quote(&repo_root.display().to_string());
+    [
+        "#!/bin/sh",
+        "set -eu",
+        "SCRIPT_DIR=\"$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\"",
+        "RUNTIME_DIR=\"$(CDPATH= cd -- \"$SCRIPT_DIR/..\" && pwd)\"",
+        "WORKSPACE_DIR=\"$(CDPATH= cd -- \"$RUNTIME_DIR/..\" && pwd)\"",
+        &format!("REPO_ROOT={quoted_repo_root}"),
+        "cd \"$WORKSPACE_DIR\"",
+        "exec python3 \"$REPO_ROOT/tools/codex_sync.py\" \"$@\" --workspace \"$WORKSPACE_DIR\"",
+        "",
+    ]
+    .join("\n")
+}
+
+fn build_codex_shell_snippet(workspace_path: &Path, repo_root: &Path, data_root: &Path) -> String {
     let workspace = shell_single_quote(&workspace_path.display().to_string());
+    let repo_root = shell_single_quote(&repo_root.display().to_string());
+    let data_root = shell_single_quote(&data_root.display().to_string());
     let event_wrapper = shell_single_quote(
         &workspace_path
             .join(".threadbridge/bin/codex_sync_event")
+            .display()
+            .to_string(),
+    );
+    let manage_wrapper = shell_single_quote(
+        &workspace_path
+            .join(".threadbridge/bin/codex_sync_manage")
             .display()
             .to_string(),
     );
@@ -66,26 +90,66 @@ fn build_codex_shell_snippet(workspace_path: &Path) -> String {
     [
         "# threadBridge Codex CLI sync",
         &format!("export THREADBRIDGE_WORKSPACE_ROOT={workspace}"),
+        &format!("export THREADBRIDGE_REPO_ROOT={repo_root}"),
+        &format!("export THREADBRIDGE_DATA_ROOT={data_root}"),
         &format!("export THREADBRIDGE_CODEX_SYNC_EVENT={event_wrapper}"),
+        &format!("export THREADBRIDGE_CODEX_SYNC_MANAGE={manage_wrapper}"),
         &format!("export THREADBRIDGE_CODEX_NOTIFY_JSON={notify_json}"),
         "",
         "__threadbridge_codex_in_workspace() {",
+        "  local current_dir",
+        "  current_dir=\"$(pwd -P 2>/dev/null || pwd)\"",
         "  case \"$PWD/\" in",
+        "    \"$THREADBRIDGE_WORKSPACE_ROOT\"/*|\"$THREADBRIDGE_WORKSPACE_ROOT/\") return 0 ;;",
+        "  esac",
+        "  case \"$current_dir/\" in",
         "    \"$THREADBRIDGE_WORKSPACE_ROOT\"/*|\"$THREADBRIDGE_WORKSPACE_ROOT/\") return 0 ;;",
         "    *) return 1 ;;",
         "  esac",
         "}",
         "",
-        "codex() {",
+        "hcodex() {",
         "  if ! __threadbridge_codex_in_workspace; then",
         "    command codex \"$@\"",
         "    return $?",
         "  fi",
+        "  local requested_thread_key=\"\"",
+        "  local -a codex_args=()",
+        "  while [ \"$#\" -gt 0 ]; do",
+        "    case \"$1\" in",
+        "      --thread-key)",
+        "        shift",
+        "        if [ \"$#\" -eq 0 ]; then",
+        "          echo \"hcodex: missing value for --thread-key\" >&2",
+        "          return 2",
+        "        fi",
+        "        requested_thread_key=\"$1\"",
+        "        ;;",
+        "      *)",
+        "        codex_args+=(\"$1\")",
+        "        ;;",
+        "    esac",
+        "    shift",
+        "  done",
+        "  local owner_thread_key",
+        "  if [ -n \"$requested_thread_key\" ]; then",
+        "    owner_thread_key=\"$($THREADBRIDGE_CODEX_SYNC_MANAGE prepare-launch --data-root \"$THREADBRIDGE_DATA_ROOT\" --shell-pid \"$$\" --thread-key \"$requested_thread_key\")\" || return $?",
+        "  else",
+        "    owner_thread_key=\"$($THREADBRIDGE_CODEX_SYNC_MANAGE prepare-launch --data-root \"$THREADBRIDGE_DATA_ROOT\" --shell-pid \"$$\")\" || return $?",
+        "  fi",
         "  export THREADBRIDGE_CODEX_SHELL_PID=\"$$\"",
-        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_started --shell-pid \"$$\" >/dev/null 2>&1 || true",
-        "  command codex -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"$@\"",
+        "  export THREADBRIDGE_CODEX_OWNER_THREAD_KEY=\"$owner_thread_key\"",
+        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_started --shell-pid \"$$\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\" >/dev/null 2>&1 || true",
+        "  command codex -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"${codex_args[@]}\"",
         "  local exit_code=$?",
-        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$exit_code\" >/dev/null 2>&1 || true",
+        "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$exit_code\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\" >/dev/null 2>&1 || true",
+        "  local attach_payload",
+        "  attach_payload=\"$($THREADBRIDGE_CODEX_SYNC_MANAGE consume-attach-intent --shell-pid \"$$\")\"",
+        "  if [ -n \"$attach_payload\" ]; then",
+        "    local attach_thread_key attach_session_id attach_since",
+        "    IFS=$'\\t' read -r attach_thread_key attach_session_id attach_since <<< \"$attach_payload\"",
+        "    exec cargo run --manifest-path \"$THREADBRIDGE_REPO_ROOT/Cargo.toml\" --bin threadbridge_viewer -- --repo-root \"$THREADBRIDGE_REPO_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$attach_thread_key\" --session-id \"$attach_session_id\" --since \"$attach_since\"",
+        "  fi",
         "  return \"$exit_code\"",
         "}",
         "",
@@ -103,21 +167,21 @@ fn build_codex_hooks_json(workspace_path: &Path) -> String {
             "SessionStart": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event SessionStart --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event SessionStart --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge session start sync"
                 }]
             }],
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event UserPromptSubmit --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event UserPromptSubmit --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge prompt sync"
                 }]
             }],
             "Stop": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} --hook-event Stop --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\"", shell_single_quote(&event_wrapper)),
+                    "command": format!("{} --hook-event Stop --shell-pid \"$THREADBRIDGE_CODEX_SHELL_PID\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\"", shell_single_quote(&event_wrapper)),
                     "statusMessage": "threadBridge stop sync"
                 }]
             }]
@@ -174,6 +238,7 @@ async fn write_text_file(path: &Path, contents: &str) -> Result<()> {
 
 pub async fn ensure_workspace_runtime(
     repo_root: &Path,
+    data_root: &Path,
     seed_template_path: &Path,
     workspace_path: &Path,
 ) -> Result<PathBuf> {
@@ -261,10 +326,25 @@ pub async fn ensure_workspace_runtime(
         }
     }
 
+    let manage_wrapper_path = bin_dir.join("codex_sync_manage");
+    write_text_file(
+        &manage_wrapper_path,
+        &build_codex_sync_manage_wrapper_script(repo_root),
+    )
+    .await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = fs::metadata(&manage_wrapper_path).await?;
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&manage_wrapper_path, permissions).await?;
+    }
+
     let shell_snippet_path = shell_dir.join("codex-sync.bash");
     write_text_file(
         &shell_snippet_path,
-        &build_codex_shell_snippet(workspace_path),
+        &build_codex_shell_snippet(workspace_path, repo_root, data_root),
     )
     .await?;
     #[cfg(unix)]
@@ -327,9 +407,14 @@ mod tests {
             .await
             .unwrap();
 
-        ensure_workspace_runtime(Path::new("/repo"), &template, &workspace)
-            .await
-            .unwrap();
+        ensure_workspace_runtime(
+            Path::new("/repo"),
+            Path::new("/repo/data"),
+            &template,
+            &workspace,
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(workspace.join("AGENTS.md"))
             .await
@@ -347,9 +432,14 @@ mod tests {
         fs::create_dir_all(&root).await.unwrap();
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
-        let runtime_root = ensure_workspace_runtime(Path::new("/repo"), &template, &workspace)
-            .await
-            .unwrap();
+        let runtime_root = ensure_workspace_runtime(
+            Path::new("/repo"),
+            Path::new("/repo/data"),
+            &template,
+            &workspace,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(runtime_root, workspace.join(THREADBRIDGE_RUNTIME_DIR));
         assert!(
@@ -369,6 +459,11 @@ mod tests {
         );
         assert!(
             fs::try_exists(workspace.join(".threadbridge/bin/codex_sync_notify"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            fs::try_exists(workspace.join(".threadbridge/bin/codex_sync_manage"))
                 .await
                 .unwrap()
         );
@@ -403,6 +498,12 @@ mod tests {
                 .unwrap(),
             "*\n!.gitignore\n"
         );
+        let shell_snippet =
+            fs::read_to_string(workspace.join(".threadbridge/shell/codex-sync.bash"))
+                .await
+                .unwrap();
+        assert!(shell_snippet.contains("hcodex()"));
+        assert!(shell_snippet.contains("THREADBRIDGE_CODEX_SYNC_MANAGE"));
     }
 
     #[tokio::test]
@@ -413,9 +514,14 @@ mod tests {
         fs::create_dir_all(&workspace).await.unwrap();
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
-        ensure_workspace_runtime(Path::new("/repo"), &template, &workspace)
-            .await
-            .unwrap();
+        ensure_workspace_runtime(
+            Path::new("/repo"),
+            Path::new("/repo/data"),
+            &template,
+            &workspace,
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(workspace.join("AGENTS.md"))
             .await
