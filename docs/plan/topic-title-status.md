@@ -8,7 +8,7 @@
 
 - title 基底優先使用 thread title
 - 若 thread title 缺失，回退到 workspace basename
-- suffix 目前支持 `· cli`、`· bot`、`· broken`
+- suffix 目前支持 `· cli`、`· cli!`、`· attach`、`· broken`
 - background watcher 會在共享 workspace status 變化時更新 title
 - threadBridge 管理的 topic 內，新的 `... changed the topic name ...` service message 會在收到後 best-effort 刪除
 

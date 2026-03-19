@@ -25,19 +25,18 @@
   - v1 忙碌閘控已落地
   - 但 queue 模型與更完整的狀態語義仍未收斂
 - [topic-title-status.md](/Volumes/Data/Github/threadBridge/docs/plan/topic-title-status.md)
-  - 已落地 `workspace/title + cli/bot/broken suffix`
+  - 已落地 `workspace/title + cli/cli!/attach/broken suffix`
   - 已落地新產生的 topic rename service message best-effort cleanup
   - context ratio 仍未實作
 - [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
   - `/new_thread`、`/bind_workspace`、`/new`、`/reconnect_codex` 的基本生命週期已存在
   - 更完整的 runtime 主模型仍待收斂
+- [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
+  - threadBridge 側的 session registry、`.cli/.attach` title、selected-session gate、排他式 `/attach_cli_session` handoff 已落地
+  - 但完整 live turn/item/delta 鏡像仍需要 upstream `codex` 暴露更完整的 remote attach / shared runtime 能力
 
 ## 純草稿
 
-- [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
-  - 目標是 CLI / Telegram 共用同一個 Codex session
-  - threadBridge 側的 session registry、`.cli/.attach` title、selected-session gate、排他式 `/attach_cli_session` handoff 已落地
-  - 但完整 live turn/item/delta 鏡像仍需要 upstream `codex` 暴露更完整的 remote attach / shared runtime 能力
 - [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
   - 狀態語義主規格草稿
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
