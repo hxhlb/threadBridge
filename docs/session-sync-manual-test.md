@@ -21,6 +21,10 @@
 - `hcodex` 是受管本地 CLI 入口
 - owner thread 透過 `thread_key` 決定
 - `.cli` 狀態下，Telegram viewer 只看 `CLI user + Codex final`
+- 進入 `.cli` 時，owner thread 會額外收到一條系統消息：
+  - `as shell <pid> viewer`
+- 在沒有 `/attach_cli_session` 的前提下離開 `.cli` 時，owner thread 會收到：
+  - `exit session viewer`
 - `/attach_cli_session` 會 kill `codex` TUI，然後在同一個終端進入 `reedline` 只讀 viewer
 - `.attach` 狀態下，本地 viewer 只看 attach 之後的 `Telegram user + Codex final`
 - viewer 命令：
@@ -100,12 +104,15 @@ hi
 
 3. 只有 owner thread 的 Telegram topic title 變成 `· cli`
 4. 其他同 workspace thread 不應顯示 `· cli`
+5. owner thread 會多收到一條系統消息：
+   - `as shell <pid> viewer`
 
 這一步驗證的是：
 
 - `hcodex` 而不是 raw `codex` 在管理受管 CLI
 - owner thread 由 `thread_key` 明確決定
 - `.cli` 表示 `hcodex live / Telegram viewer`
+- `.cli` 是一個臨時 viewer 注入，不會隱式改掉 Telegram 的主 session
 
 ## 測試 2: CLI 文本鏡像到 owner thread
 
@@ -134,6 +141,17 @@ hi
 - `CLI -> Telegram` mirror routing 只走 owner thread
 - routing 依賴 `thread_key` owner claim，不依賴 workspace 廣播
 - owner thread 只應看到 `CLI:` user 行與 `Codex:` final；不做 token / delta streaming
+
+## 測試 2.5: 不 attach 直接離開 `.cli`
+
+直接在本地退出 `hcodex`，不要執行 `/attach_cli_session`。
+
+檢查點：
+
+1. owner thread 的 `· cli` marker 會消失
+2. owner thread 會收到一條系統消息：
+   - `exit session viewer`
+3. 這條退出消息不應伴隨主 session 的隱式切換
 
 ## 測試 3: `/attach_cli_session` 進入 `· attach`
 

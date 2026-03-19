@@ -27,6 +27,21 @@ pub(crate) enum CliTopicMarker {
     Attach,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliViewerInjectionState {
+    lifecycle_id: String,
+    shell_pid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CliViewerInjectionTransition {
+    None,
+    Enter(CliViewerInjectionState),
+    Exit,
+    ExitAndEnter(CliViewerInjectionState),
+    ClearSilently,
+}
+
 fn thread_id_from_i32(value: i32) -> ThreadId {
     ThreadId(MessageId(value))
 }
@@ -142,6 +157,68 @@ pub(crate) fn cli_marker_label(marker: CliTopicMarker) -> &'static str {
     }
 }
 
+fn cli_viewer_injection_state(
+    marker: CliTopicMarker,
+    record: &ThreadRecord,
+    owner_claim: Option<&CliOwnerClaim>,
+) -> Option<CliViewerInjectionState> {
+    if marker != CliTopicMarker::Cli {
+        return None;
+    }
+    let owner_claim = owner_claim?;
+    if owner_claim.thread_key != record.metadata.thread_key {
+        return None;
+    }
+    Some(CliViewerInjectionState {
+        lifecycle_id: format!(
+            "{}:{}:{}",
+            owner_claim.thread_key, owner_claim.shell_pid, owner_claim.started_at
+        ),
+        shell_pid: owner_claim.shell_pid,
+    })
+}
+
+fn cli_viewer_injection_transition(
+    previous: Option<&CliViewerInjectionState>,
+    marker: CliTopicMarker,
+    record: &ThreadRecord,
+    owner_claim: Option<&CliOwnerClaim>,
+) -> CliViewerInjectionTransition {
+    let current = cli_viewer_injection_state(marker, record, owner_claim);
+    match marker {
+        CliTopicMarker::Attach | CliTopicMarker::CliConflict => {
+            if previous.is_some() {
+                CliViewerInjectionTransition::ClearSilently
+            } else {
+                CliViewerInjectionTransition::None
+            }
+        }
+        CliTopicMarker::Cli => match (previous, current) {
+            (None, Some(current)) => CliViewerInjectionTransition::Enter(current),
+            (Some(previous), Some(current)) if previous.lifecycle_id == current.lifecycle_id => {
+                CliViewerInjectionTransition::None
+            }
+            (Some(_), Some(current)) => CliViewerInjectionTransition::ExitAndEnter(current),
+            _ => CliViewerInjectionTransition::None,
+        },
+        CliTopicMarker::None => {
+            if previous.is_some() {
+                CliViewerInjectionTransition::Exit
+            } else {
+                CliViewerInjectionTransition::None
+            }
+        }
+    }
+}
+
+fn cli_viewer_enter_message(shell_pid: u32) -> String {
+    format!("as shell {shell_pid} viewer")
+}
+
+fn cli_viewer_exit_message() -> &'static str {
+    "exit session viewer"
+}
+
 pub(crate) async fn refresh_thread_topic_title(
     bot: &Bot,
     state: &AppState,
@@ -227,10 +304,17 @@ pub(crate) fn cli_owned_command_message() -> &'static str {
 pub async fn spawn_workspace_status_watcher(bot: Bot, state: AppState) {
     tokio::spawn(async move {
         let mut applied_titles: HashMap<String, String> = HashMap::new();
+        let mut viewer_injections: HashMap<String, CliViewerInjectionState> = HashMap::new();
         let mut workspace_event_offsets: HashMap<String, usize> = HashMap::new();
         let mut pending_cli_user_prompts: HashSet<String> = HashSet::new();
         loop {
-            if let Err(error) = sync_workspace_titles_once(&bot, &state, &mut applied_titles).await
+            if let Err(error) = sync_workspace_titles_once(
+                &bot,
+                &state,
+                &mut applied_titles,
+                &mut viewer_injections,
+            )
+            .await
             {
                 warn!(event = "workspace_status.sync.failed", error = %error);
             }
@@ -256,6 +340,7 @@ async fn sync_workspace_titles_once(
     bot: &Bot,
     state: &AppState,
     applied_titles: &mut HashMap<String, String>,
+    viewer_injections: &mut HashMap<String, CliViewerInjectionState>,
 ) -> Result<()> {
     let records = state.repository.list_active_threads().await?;
     let mut active_conversations = HashSet::new();
@@ -318,25 +403,95 @@ async fn sync_workspace_titles_once(
             }
         }
 
-        let rendered = render_topic_title(
+        let owner_claim = workspace_path.as_ref().and_then(|path| {
+            let key = path
+                .canonicalize()
+                .unwrap_or_else(|_| path.clone())
+                .display()
+                .to_string();
+            owner_claim_by_workspace
+                .get(&key)
+                .and_then(|claim| claim.as_ref())
+        });
+        let marker =
+            cli_topic_marker_for_record(&record, session.as_ref(), aggregate.as_ref(), owner_claim);
+        match cli_viewer_injection_transition(
+            viewer_injections.get(&record.conversation_key),
+            marker,
             &record,
-            workspace_path.as_deref(),
-            cli_topic_marker_for_record(
-                &record,
-                session.as_ref(),
-                aggregate.as_ref(),
-                workspace_path.as_ref().and_then(|path| {
-                    let key = path
-                        .canonicalize()
-                        .unwrap_or_else(|_| path.clone())
-                        .display()
-                        .to_string();
-                    owner_claim_by_workspace
-                        .get(&key)
-                        .and_then(|claim| claim.as_ref())
-                }),
-            ),
-        );
+            owner_claim,
+        ) {
+            CliViewerInjectionTransition::None => {}
+            CliViewerInjectionTransition::Enter(current) => {
+                let text = cli_viewer_enter_message(current.shell_pid);
+                if let Some(message_thread_id) = record.metadata.message_thread_id {
+                    send_scoped_message(
+                        bot,
+                        ChatId(record.metadata.chat_id),
+                        Some(thread_id_from_i32(message_thread_id)),
+                        text.clone(),
+                    )
+                    .await?;
+                }
+                state
+                    .repository
+                    .append_log(&record, LogDirection::System, text, None)
+                    .await?;
+                viewer_injections.insert(record.conversation_key.clone(), current);
+            }
+            CliViewerInjectionTransition::Exit => {
+                let text = cli_viewer_exit_message();
+                if let Some(message_thread_id) = record.metadata.message_thread_id {
+                    send_scoped_message(
+                        bot,
+                        ChatId(record.metadata.chat_id),
+                        Some(thread_id_from_i32(message_thread_id)),
+                        text,
+                    )
+                    .await?;
+                }
+                state
+                    .repository
+                    .append_log(&record, LogDirection::System, text, None)
+                    .await?;
+                viewer_injections.remove(&record.conversation_key);
+            }
+            CliViewerInjectionTransition::ExitAndEnter(current) => {
+                let exit_text = cli_viewer_exit_message();
+                if let Some(message_thread_id) = record.metadata.message_thread_id {
+                    send_scoped_message(
+                        bot,
+                        ChatId(record.metadata.chat_id),
+                        Some(thread_id_from_i32(message_thread_id)),
+                        exit_text,
+                    )
+                    .await?;
+                }
+                state
+                    .repository
+                    .append_log(&record, LogDirection::System, exit_text, None)
+                    .await?;
+                let enter_text = cli_viewer_enter_message(current.shell_pid);
+                if let Some(message_thread_id) = record.metadata.message_thread_id {
+                    send_scoped_message(
+                        bot,
+                        ChatId(record.metadata.chat_id),
+                        Some(thread_id_from_i32(message_thread_id)),
+                        enter_text.clone(),
+                    )
+                    .await?;
+                }
+                state
+                    .repository
+                    .append_log(&record, LogDirection::System, enter_text, None)
+                    .await?;
+                viewer_injections.insert(record.conversation_key.clone(), current);
+            }
+            CliViewerInjectionTransition::ClearSilently => {
+                viewer_injections.remove(&record.conversation_key);
+            }
+        }
+        let rendered = render_topic_title(&record, workspace_path.as_deref(), marker);
         let previous = applied_titles.get(&record.conversation_key);
         if previous.is_some_and(|value| value == &rendered) {
             continue;
@@ -352,6 +507,7 @@ async fn sync_workspace_titles_once(
     }
 
     applied_titles.retain(|conversation, _| active_conversations.contains(conversation));
+    viewer_injections.retain(|conversation, _| active_conversations.contains(conversation));
     state
         .workspace_status_cache
         .remove_missing_workspaces(&keep_workspaces)
@@ -600,7 +756,8 @@ fn cli_mirror_entry_from_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        CliTopicMarker, cli_mirror_entry_from_event, cli_topic_marker_for_record,
+        CliTopicMarker, CliViewerInjectionState, CliViewerInjectionTransition,
+        cli_mirror_entry_from_event, cli_topic_marker_for_record, cli_viewer_injection_transition,
         render_topic_title,
     };
     use crate::repository::{
@@ -755,6 +912,52 @@ mod tests {
         assert_eq!(entry.origin, TranscriptMirrorOrigin::Cli);
         assert_eq!(entry.role, TranscriptMirrorRole::User);
         assert_eq!(entry.text, "inspect this repo");
+    }
+
+    #[test]
+    fn cli_viewer_transition_enters_for_owner_thread_cli_marker() {
+        let record = record(Some("Viewer"), false);
+        let transition = cli_viewer_injection_transition(
+            None,
+            CliTopicMarker::Cli,
+            &record,
+            Some(&owner_claim("thread-key", Some("thr_cli"))),
+        );
+        assert_eq!(
+            transition,
+            CliViewerInjectionTransition::Enter(CliViewerInjectionState {
+                lifecycle_id: "thread-key:42:2026-03-19T00:00:00.000Z".to_owned(),
+                shell_pid: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_viewer_transition_exits_when_marker_returns_to_none() {
+        let record = record(Some("Viewer"), false);
+        let previous = CliViewerInjectionState {
+            lifecycle_id: "thread-key:42:2026-03-19T00:00:00.000Z".to_owned(),
+            shell_pid: 42,
+        };
+        let transition =
+            cli_viewer_injection_transition(Some(&previous), CliTopicMarker::None, &record, None);
+        assert_eq!(transition, CliViewerInjectionTransition::Exit);
+    }
+
+    #[test]
+    fn cli_viewer_transition_clears_silently_on_attach() {
+        let record = record(Some("Viewer"), false);
+        let previous = CliViewerInjectionState {
+            lifecycle_id: "thread-key:42:2026-03-19T00:00:00.000Z".to_owned(),
+            shell_pid: 42,
+        };
+        let transition = cli_viewer_injection_transition(
+            Some(&previous),
+            CliTopicMarker::Attach,
+            &record,
+            Some(&owner_claim("thread-key", Some("thr_cli"))),
+        );
+        assert_eq!(transition, CliViewerInjectionTransition::ClearSilently);
     }
 
     #[test]

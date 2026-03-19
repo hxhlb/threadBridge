@@ -70,6 +70,7 @@ scripts/local_threadbridge.sh start
 
 - After `/bind_workspace`, source `./.threadbridge/shell/codex-sync.bash` inside that workspace and use `hcodex` if you want managed local CLI / Telegram sync.
 - `· cli` means `hcodex` is live and Telegram is only the viewer.
+- Entering `· cli` sends `as shell <pid> viewer` to the owner thread; leaving `· cli` without `/attach_cli_session` sends `exit session viewer`.
 - `· attach` means Telegram is live and the local terminal has been handed off to the `threadbridge_viewer` reedline viewer.
 - The generated shell wrapper injects `features.codex_hooks=true` and a workspace-local `notify` override, then writes CLI lifecycle state into `.threadbridge/state/codex-sync/`.
 - This v1 sync path is Bash-only. Raw `codex` launches that bypass the sourced wrapper are not guaranteed to update Telegram status.
