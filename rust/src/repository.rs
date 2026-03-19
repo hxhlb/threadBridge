@@ -198,6 +198,15 @@ impl ThreadRepository {
         .await
     }
 
+    pub async fn find_thread(
+        &self,
+        chat_id: i64,
+        message_thread_id: i32,
+    ) -> Result<Option<ThreadRecord>> {
+        self.find_thread_by_message_thread_id(chat_id, message_thread_id)
+            .await
+    }
+
     pub async fn create_thread(
         &self,
         chat_id: i64,
@@ -1074,6 +1083,15 @@ mod tests {
             .unwrap();
         assert!(matches!(restored.metadata.status, ThreadStatus::Active));
         assert_eq!(restored.metadata.message_thread_id, Some(9));
+    }
+
+    #[tokio::test]
+    async fn find_thread_does_not_create_missing_thread() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        assert!(repo.find_thread(1, 7).await.unwrap().is_none());
+        let entries = repo.list_active_threads().await.unwrap();
+        assert!(entries.is_empty());
     }
 
     #[test]

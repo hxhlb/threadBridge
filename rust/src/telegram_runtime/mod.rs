@@ -5,7 +5,7 @@ use teloxide::prelude::*;
 use teloxide::requests::Requester;
 use teloxide::types::{BotCommand, CallbackQuery, LinkPreviewOptions, ThreadId};
 use teloxide::utils::command::BotCommands;
-use tracing::error;
+use tracing::{error, warn};
 
 pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
 pub(crate) use crate::config::AppConfig;
@@ -115,6 +115,9 @@ pub async fn handle_command(
 }
 
 pub async fn handle_message(bot: Bot, msg: Message, state: AppState) -> ResponseResult<()> {
+    if handle_topic_rename_service_message(&bot, &msg, &state.repository).await {
+        return Ok(());
+    }
     if !is_authorized(&state, &msg) {
         return Ok(());
     }
@@ -148,6 +151,54 @@ pub async fn handle_message(bot: Bot, msg: Message, state: AppState) -> Response
         .await;
     }
     Ok(())
+}
+
+async fn handle_topic_rename_service_message(
+    bot: &Bot,
+    msg: &Message,
+    repository: &ThreadRepository,
+) -> bool {
+    let should_cleanup = match should_cleanup_topic_rename_service_message(repository, msg).await {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(
+                event = "telegram.topic_rename_cleanup.lookup_failed",
+                error = %error,
+                chat_id = msg.chat.id.0,
+                message_id = msg.id.0
+            );
+            return false;
+        }
+    };
+    if !should_cleanup {
+        return false;
+    }
+    if let Err(error) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!(
+            event = "telegram.topic_rename_cleanup.delete_failed",
+            error = %error,
+            chat_id = msg.chat.id.0,
+            message_id = msg.id.0,
+            message_thread_id = msg.thread_id.map(thread_id_to_i32).unwrap_or_default()
+        );
+    }
+    true
+}
+
+async fn should_cleanup_topic_rename_service_message(
+    repository: &ThreadRepository,
+    msg: &Message,
+) -> Result<bool> {
+    let Some(thread_id) = topic_rename_service_message_thread_id(msg) else {
+        return Ok(false);
+    };
+    Ok(repository.find_thread(msg.chat.id.0, thread_id).await?.is_some())
+}
+
+fn topic_rename_service_message_thread_id(msg: &Message) -> Option<i32> {
+    msg.forum_topic_edited()
+        .and(msg.thread_id)
+        .map(thread_id_to_i32)
 }
 
 pub async fn handle_callback_query(
@@ -338,8 +389,59 @@ pub(crate) async fn ensure_bound_workspace_runtime(
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, command_list};
+    use super::{
+        Command, command_list, should_cleanup_topic_rename_service_message,
+        topic_rename_service_message_thread_id,
+    };
+    use crate::repository::ThreadRepository;
+    use serde_json::json;
+    use std::path::PathBuf;
     use teloxide::utils::command::BotCommands;
+    use teloxide::types::Message;
+    use uuid::Uuid;
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("threadbridge-telegram-test-{}", Uuid::new_v4()))
+    }
+
+    fn forum_topic_edited_message(thread_id: Option<i32>) -> Message {
+        serde_json::from_value(json!({
+            "message_id": 42,
+            "message_thread_id": thread_id,
+            "date": 1_742_342_400,
+            "chat": {
+                "id": -1001234567890i64,
+                "title": "threadBridge",
+                "type": "supergroup",
+                "is_forum": true
+            },
+            "forum_topic_edited": {
+                "name": "AGENTS.md Ready Check"
+            }
+        }))
+        .unwrap()
+    }
+
+    fn text_message(thread_id: Option<i32>) -> Message {
+        serde_json::from_value(json!({
+            "message_id": 43,
+            "message_thread_id": thread_id,
+            "date": 1_742_342_401,
+            "chat": {
+                "id": -1001234567890i64,
+                "title": "threadBridge",
+                "type": "supergroup",
+                "is_forum": true
+            },
+            "from": {
+                "id": 7,
+                "is_bot": false,
+                "first_name": "Ronnie"
+            },
+            "text": "hello"
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn command_list_registers_new_but_not_reset_codex_session() {
@@ -379,5 +481,59 @@ mod tests {
             Ok(Command::ThreadInfo)
         ));
         assert!(Command::parse("/reset_codex_session", "").is_err());
+    }
+
+    #[test]
+    fn topic_rename_service_message_extracts_thread_id() {
+        let msg = forum_topic_edited_message(Some(321));
+        assert_eq!(topic_rename_service_message_thread_id(&msg), Some(321));
+    }
+
+    #[test]
+    fn topic_rename_service_message_ignores_regular_text() {
+        let msg = text_message(Some(321));
+        assert_eq!(topic_rename_service_message_thread_id(&msg), None);
+    }
+
+    #[test]
+    fn topic_rename_service_message_ignores_missing_thread_id() {
+        let msg = forum_topic_edited_message(None);
+        assert_eq!(topic_rename_service_message_thread_id(&msg), None);
+    }
+
+    #[test]
+    fn topic_rename_service_message_does_not_require_authorized_sender() {
+        let msg = forum_topic_edited_message(Some(321));
+        assert!(msg.from.is_none());
+        assert_eq!(topic_rename_service_message_thread_id(&msg), Some(321));
+    }
+
+    #[tokio::test]
+    async fn cleanup_only_applies_to_managed_threads() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let managed = forum_topic_edited_message(Some(321));
+        let unmanaged = forum_topic_edited_message(Some(999));
+
+        assert!(
+            !should_cleanup_topic_rename_service_message(&repo, &managed)
+                .await
+                .unwrap()
+        );
+
+        repo.create_thread(managed.chat.id.0, 321, "Managed".to_owned())
+            .await
+            .unwrap();
+
+        assert!(
+            should_cleanup_topic_rename_service_message(&repo, &managed)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !should_cleanup_topic_rename_service_message(&repo, &unmanaged)
+                .await
+                .unwrap()
+        );
     }
 }

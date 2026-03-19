@@ -2,6 +2,8 @@
 
 這個目錄用來放 `threadBridge` 的設計草稿、已落地方案與後續重構方向。
 
+如需新增新想法或整理既有 plan，先看 [authoring-guide.md](/Volumes/Data/Github/threadBridge/docs/plan/authoring-guide.md)。
+
 ## 閱讀方式
 
 - 先看「已落地 / 部分落地 / 純草稿」區分，不要把所有文件都當成同一成熟度。
@@ -24,6 +26,7 @@
   - 但 queue 模型與更完整的狀態語義仍未收斂
 - [topic-title-status.md](/Volumes/Data/Github/threadBridge/docs/plan/topic-title-status.md)
   - 已落地 `workspace/title + cli/bot/broken suffix`
+  - 已落地新產生的 topic rename service message best-effort cleanup
   - context ratio 仍未實作
 - [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
   - `/new_thread`、`/bind_workspace`、`/new`、`/reconnect_codex` 的基本生命週期已存在
