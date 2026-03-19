@@ -66,6 +66,28 @@ fn build_codex_sync_manage_wrapper_script(repo_root: &Path) -> String {
     .join("\n")
 }
 
+fn build_codex_launch_wrapper_script() -> String {
+    [
+        "#!/bin/sh",
+        "set -eu",
+        "PID_FILE=\"${1:-}\"",
+        "if [ $# -gt 0 ]; then",
+        "  shift",
+        "fi",
+        "if [ $# -eq 0 ]; then",
+        "  echo \"threadBridge codex launcher requires a command\" >&2",
+        "  exit 2",
+        "fi",
+        "if [ -n \"$PID_FILE\" ]; then",
+        "  CHILD_PGID=\"$(ps -o pgid= -p \"$$\" 2>/dev/null | tr -d ' ')\"",
+        "  printf '%s\\t%s\\t%s\\n' \"$$\" \"$CHILD_PGID\" \"$*\" > \"$PID_FILE\" 2>/dev/null || true",
+        "fi",
+        "exec \"$@\"",
+        "",
+    ]
+    .join("\n")
+}
+
 fn threadbridge_viewer_binary_path(repo_root: &Path) -> PathBuf {
     if let Ok(current_exe) = std::env::current_exe()
         && let Some(bin_dir) = current_exe.parent()
@@ -100,6 +122,12 @@ fn build_codex_shell_snippet(workspace_path: &Path, repo_root: &Path, data_root:
             .display()
             .to_string(),
     );
+    let launch_wrapper = shell_single_quote(
+        &workspace_path
+            .join(".threadbridge/bin/codex_launch")
+            .display()
+            .to_string(),
+    );
     let notify_wrapper = workspace_path
         .join(".threadbridge/bin/codex_sync_notify")
         .display()
@@ -124,6 +152,7 @@ fn build_codex_shell_snippet(workspace_path: &Path, repo_root: &Path, data_root:
         &format!("export THREADBRIDGE_DATA_ROOT={data_root}"),
         &format!("export THREADBRIDGE_CODEX_SYNC_EVENT={event_wrapper}"),
         &format!("export THREADBRIDGE_CODEX_SYNC_MANAGE={manage_wrapper}"),
+        &format!("export THREADBRIDGE_CODEX_LAUNCH={launch_wrapper}"),
         &format!("export THREADBRIDGE_CODEX_NOTIFY_JSON={notify_json}"),
         &format!("export THREADBRIDGE_MANAGED_CODEX={managed_codex}"),
         &format!("export THREADBRIDGE_VIEWER_BIN={viewer_binary}"),
@@ -178,52 +207,10 @@ fn build_codex_shell_snippet(workspace_path: &Path, repo_root: &Path, data_root:
         "  export THREADBRIDGE_CODEX_SHELL_PID=\"$$\"",
         "  export THREADBRIDGE_CODEX_OWNER_THREAD_KEY=\"$owner_thread_key\"",
         "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_started --shell-pid \"$$\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\" >/dev/null 2>&1 || true",
-        "  local child_info_file child_stop_file",
+        "  local child_info_file",
         "  child_info_file=\"$(mktemp \"${TMPDIR:-/tmp}/threadbridge-codex-child.XXXXXX\" 2>/dev/null || true)\"",
-        "  child_stop_file=\"${child_info_file}.stop\"",
-        "  if [ -n \"$child_info_file\" ]; then",
-        "    if [ -n \"${ZSH_VERSION:-}\" ]; then",
-        "      (",
-        "        while kill -0 \"$$\" 2>/dev/null; do",
-        "          if [ -f \"$child_stop_file\" ]; then",
-        "            exit 0",
-        "          fi",
-        "          if [ -s \"$child_info_file\" ]; then",
-        "            exit 0",
-        "          fi",
-        "          child_row=\"$(ps -o pid=,pgid=,command= --ppid \"$$\" 2>/dev/null | awk '{ cmd=$3; sub(\".*/\", \"\", cmd); if (cmd == \"codex\") { print $1 \"\\t\" $2 \"\\t\" substr($0, index($0, $3)); exit } }')\"",
-        "          if [ -n \"$child_row\" ]; then",
-        "            printf '%s\\n' \"$child_row\" > \"$child_info_file\" 2>/dev/null || true",
-        "            exit 0",
-        "          fi",
-        "          sleep 0.05",
-        "        done",
-        "      ) >/dev/null 2>&1 &!",
-        "    else",
-        "      (",
-        "        while kill -0 \"$$\" 2>/dev/null; do",
-        "          if [ -f \"$child_stop_file\" ]; then",
-        "            exit 0",
-        "          fi",
-        "          if [ -s \"$child_info_file\" ]; then",
-        "            exit 0",
-        "          fi",
-        "          child_row=\"$(ps -o pid=,pgid=,command= --ppid \"$$\" 2>/dev/null | awk '{ cmd=$3; sub(\".*/\", \"\", cmd); if (cmd == \"codex\") { print $1 \"\\t\" $2 \"\\t\" substr($0, index($0, $3)); exit } }')\"",
-        "          if [ -n \"$child_row\" ]; then",
-        "            printf '%s\\n' \"$child_row\" > \"$child_info_file\" 2>/dev/null || true",
-        "            exit 0",
-        "          fi",
-        "          sleep 0.05",
-        "        done",
-        "      ) >/dev/null 2>&1 &",
-        "      disown \"$!\" >/dev/null 2>&1 || true",
-        "    fi",
-        "  fi",
-        "  \"$codex_bin\" -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"${codex_args[@]}\"",
+        "  \"$THREADBRIDGE_CODEX_LAUNCH\" \"$child_info_file\" \"$codex_bin\" -c features.codex_hooks=true -c \"notify=$THREADBRIDGE_CODEX_NOTIFY_JSON\" \"${codex_args[@]}\"",
         "  local exit_code=$?",
-        "  if [ -n \"$child_stop_file\" ]; then",
-        "    : > \"$child_stop_file\" 2>/dev/null || true",
-        "  fi",
         "  \"$THREADBRIDGE_CODEX_SYNC_EVENT\" shell_process_exited --shell-pid \"$$\" --exit-code \"$exit_code\" --owner-thread-key \"$THREADBRIDGE_CODEX_OWNER_THREAD_KEY\" >/dev/null 2>&1 || true",
         "  local attach_payload",
         "  attach_payload=\"$($THREADBRIDGE_CODEX_SYNC_MANAGE consume-attach-intent --shell-pid \"$$\")\"",
@@ -252,7 +239,7 @@ fn build_codex_shell_snippet(workspace_path: &Path, repo_root: &Path, data_root:
         "    \"$THREADBRIDGE_CODEX_SYNC_MANAGE\" \"${exit_diag_args[@]}\" >/dev/null 2>&1 || true",
         "  fi",
         "  if [ -n \"$child_info_file\" ]; then",
-        "    rm -f \"$child_info_file\" \"$child_stop_file\" >/dev/null 2>&1 || true",
+        "    rm -f \"$child_info_file\" >/dev/null 2>&1 || true",
         "  fi",
         "  if [ -n \"$attach_payload\" ]; then",
         "    local attach_thread_key attach_session_id attach_since",
@@ -464,6 +451,10 @@ pub async fn ensure_workspace_runtime(
     .await?;
     set_mode(&manage_wrapper_path, 0o755).await?;
 
+    let launch_wrapper_path = bin_dir.join("codex_launch");
+    write_text_file(&launch_wrapper_path, &build_codex_launch_wrapper_script()).await?;
+    set_mode(&launch_wrapper_path, 0o755).await?;
+
     let managed_codex_source = repo_root.join(MANAGED_CODEX_CACHE_BINARY);
     if fs::try_exists(&managed_codex_source)
         .await
@@ -607,6 +598,11 @@ mod tests {
                 .unwrap()
         );
         assert!(
+            fs::try_exists(workspace.join(".threadbridge/bin/codex_launch"))
+                .await
+                .unwrap()
+        );
+        assert!(
             fs::try_exists(workspace.join(".threadbridge/shell/codex-sync.bash"))
                 .await
                 .unwrap()
@@ -643,6 +639,7 @@ mod tests {
                 .unwrap();
         assert!(shell_snippet.contains("hcodex()"));
         assert!(shell_snippet.contains("THREADBRIDGE_CODEX_SYNC_MANAGE"));
+        assert!(shell_snippet.contains("THREADBRIDGE_CODEX_LAUNCH"));
         assert!(shell_snippet.contains("THREADBRIDGE_MANAGED_CODEX"));
         assert!(shell_snippet.contains(".threadbridge/bin/codex"));
     }
