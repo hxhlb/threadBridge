@@ -14,7 +14,6 @@ CURRENT_FILE = STATUS_DIR / "current.json"
 EVENTS_FILE = STATUS_DIR / "events.jsonl"
 SESSIONS_DIR = STATUS_DIR / "sessions"
 CLI_OWNER_FILE = STATUS_DIR / "cli-owner.json"
-ATTACH_INTENT_FILE = STATUS_DIR / "attach-intent.json"
 
 
 def now_iso() -> str:
@@ -137,24 +136,6 @@ def write_owner_claim(workspace: Path, claim: dict[str, Any]) -> None:
 
 def remove_owner_claim(workspace: Path) -> None:
     path = workspace / CLI_OWNER_FILE
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-
-
-def read_attach_intent(workspace: Path) -> dict[str, Any] | None:
-    return read_json_file(workspace / ATTACH_INTENT_FILE)
-
-
-def write_attach_intent(workspace: Path, intent: dict[str, Any]) -> None:
-    intent["schema_version"] = STATUS_SCHEMA_VERSION
-    intent["workspace_cwd"] = str(workspace.resolve())
-    atomic_write_json(workspace / ATTACH_INTENT_FILE, intent)
-
-
-def remove_attach_intent(workspace: Path) -> None:
-    path = workspace / ATTACH_INTENT_FILE
     try:
         path.unlink()
     except FileNotFoundError:
@@ -573,25 +554,6 @@ def command_record_child_process(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_consume_attach_intent(args: argparse.Namespace) -> int:
-    workspace = workspace_root(args.workspace)
-    ensure_surface(workspace)
-    intent = read_attach_intent(workspace)
-    if not intent or intent.get("shell_pid") != args.shell_pid:
-        return 0
-    print(
-        "\t".join(
-            [
-                intent["thread_key"],
-                intent["session_id"],
-                intent["created_at"],
-            ]
-        )
-    )
-    remove_attach_intent(workspace)
-    return 0
-
-
 def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
     workspace = workspace_root(args.workspace)
     ensure_surface(workspace)
@@ -599,7 +561,6 @@ def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
         "shell_pid": args.shell_pid,
         "exit_code": args.exit_code,
         "owner_thread_key": args.owner_thread_key,
-        "attach_intent_present": args.attach_intent_present,
         "shell_ppid": args.shell_ppid,
         "shell_pgid": args.shell_pgid,
         "tty": args.tty,
@@ -608,24 +569,6 @@ def command_record_exit_diagnostic(args: argparse.Namespace) -> int:
         "child_command": args.child_command,
     }
     append_event(workspace, "shell_exit_diagnostic", "cli", payload)
-    return 0
-
-
-def command_record_wrapper_handoff(args: argparse.Namespace) -> int:
-    workspace = workspace_root(args.workspace)
-    ensure_surface(workspace)
-    payload = {
-        "shell_pid": args.shell_pid,
-        "stage": args.stage,
-        "exit_code": args.exit_code,
-        "attach_payload_present": args.attach_payload_present,
-        "viewer_bin_exists": args.viewer_bin_exists,
-        "viewer_exit_code": args.viewer_exit_code,
-        "thread_key": args.thread_key,
-        "session_id": args.session_id,
-        "since": args.since,
-    }
-    append_event(workspace, "wrapper_handoff_stage", "cli", payload)
     return 0
 
 
@@ -673,11 +616,6 @@ def build_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument("--thread-key")
     launch_parser.set_defaults(func=command_prepare_launch)
 
-    consume_intent_parser = subparsers.add_parser("consume-attach-intent")
-    consume_intent_parser.add_argument("--workspace")
-    consume_intent_parser.add_argument("--shell-pid", type=int, required=True)
-    consume_intent_parser.set_defaults(func=command_consume_attach_intent)
-
     child_parser = subparsers.add_parser("record-child-process")
     child_parser.add_argument("--workspace")
     child_parser.add_argument("--shell-pid", type=int, required=True)
@@ -697,21 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     exit_diag_parser.add_argument("--child-pid")
     exit_diag_parser.add_argument("--child-pgid")
     exit_diag_parser.add_argument("--child-command")
-    exit_diag_parser.add_argument("--attach-intent-present", action="store_true")
     exit_diag_parser.set_defaults(func=command_record_exit_diagnostic)
-
-    wrapper_parser = subparsers.add_parser("record-wrapper-handoff")
-    wrapper_parser.add_argument("--workspace")
-    wrapper_parser.add_argument("--shell-pid", type=int, required=True)
-    wrapper_parser.add_argument("--stage", required=True)
-    wrapper_parser.add_argument("--exit-code", type=int)
-    wrapper_parser.add_argument("--attach-payload-present", action="store_true")
-    wrapper_parser.add_argument("--viewer-bin-exists", action="store_true")
-    wrapper_parser.add_argument("--viewer-exit-code", type=int)
-    wrapper_parser.add_argument("--thread-key")
-    wrapper_parser.add_argument("--session-id")
-    wrapper_parser.add_argument("--since")
-    wrapper_parser.set_defaults(func=command_record_wrapper_handoff)
 
     return parser
 
