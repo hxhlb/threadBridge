@@ -2,13 +2,13 @@ use anyhow::Result;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::dptree;
 use teloxide::prelude::*;
-use tracing::info;
+use tracing::{info, warn};
 
 use threadbridge_rust::config::load_app_config;
 use threadbridge_rust::logging::init_json_logs;
 use threadbridge_rust::telegram_runtime::{
     AppState, Command, command_list, handle_callback_query, handle_command, handle_message,
-    status_sync::spawn_workspace_status_watcher,
+    status_sync::{reconcile_stale_bot_busy_sessions, spawn_workspace_status_watcher},
 };
 
 #[tokio::main]
@@ -17,6 +17,26 @@ async fn main() -> Result<()> {
     let _guard = init_json_logs(&config.runtime.debug_log_path)?;
     let state = AppState::new(config.clone()).await?;
     let bot = Bot::new(config.telegram_token.clone());
+    match reconcile_stale_bot_busy_sessions(&state).await {
+        Ok(report) => {
+            info!(
+                event = "workspace_status.reconcile_stale_bot_busy.completed",
+                scanned_threads = report.scanned_threads,
+                unique_sessions = report.unique_sessions,
+                recovered_sessions = report.recovered_sessions,
+                recovered_threads = report.recovered_threads,
+                skipped_threads = report.skipped_threads,
+                "startup stale busy reconciliation completed"
+            );
+        }
+        Err(error) => {
+            warn!(
+                event = "workspace_status.reconcile_stale_bot_busy.failed",
+                error = %error,
+                "startup stale busy reconciliation failed"
+            );
+        }
+    }
     spawn_workspace_status_watcher(bot.clone(), state.clone()).await;
 
     bot.set_my_commands(command_list()).await?;

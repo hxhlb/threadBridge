@@ -494,7 +494,7 @@ pub async fn record_bot_status_event(
             current.summary = summary.and_then(summarize_prompt);
             current
         }
-        "bot_turn_completed" | "bot_turn_failed" => {
+        "bot_turn_completed" | "bot_turn_failed" | "bot_turn_recovered" => {
             current.phase = WorkspaceStatusPhase::Idle;
             current.client = Some("threadbridge".to_owned());
             current.turn_id = None;
@@ -706,6 +706,45 @@ mod tests {
         )
         .await
         .unwrap();
+
+        let busy =
+            busy_selected_session_status(&WorkspaceStatusCache::new(), &workspace, "thr_bot")
+                .await
+                .unwrap();
+        assert!(busy.is_none());
+    }
+
+    #[tokio::test]
+    async fn bot_turn_recovered_clears_busy_without_overwriting_summary() {
+        let workspace = temp_path();
+        record_bot_status_event(
+            &workspace,
+            "bot_turn_started",
+            Some("thr_bot"),
+            Some("turn-1"),
+            Some("prompt summary"),
+        )
+        .await
+        .unwrap();
+
+        record_bot_status_event(
+            &workspace,
+            "bot_turn_recovered",
+            Some("thr_bot"),
+            Some("turn-1"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let session = read_session_status(&workspace, "thr_bot")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.owner, SessionStatusOwner::Bot);
+        assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
+        assert_eq!(session.turn_id, None);
+        assert_eq!(session.summary.as_deref(), Some("prompt summary"));
 
         let busy =
             busy_selected_session_status(&WorkspaceStatusCache::new(), &workspace, "thr_bot")
