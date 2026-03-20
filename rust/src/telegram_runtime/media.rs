@@ -597,7 +597,13 @@ async fn execute_image_analysis_turn(
                     None,
                 )
                 .await?;
-            let _ = status_sync::refresh_thread_topic_title(bot, state, &record).await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                state,
+                &record,
+                "image_analysis_codex_failed",
+            )
+            .await;
             return Err(error);
         }
     };

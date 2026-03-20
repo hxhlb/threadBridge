@@ -586,7 +586,13 @@ pub(crate) async fn run_command(
                         ),
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(bot, state, &record).await;
+                    let _ = status_sync::refresh_thread_topic_title(
+                        bot,
+                        state,
+                        &record,
+                        "bind_workspace",
+                    )
+                    .await;
                 }
                 Err(error) => {
                     send_scoped_message(
@@ -669,7 +675,8 @@ pub(crate) async fn run_command(
                         "Started a fresh Codex session for this workspace.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(bot, state, &record).await;
+                    let _ =
+                        status_sync::refresh_thread_topic_title(bot, state, &record, "new").await;
                 }
                 Err(error) => {
                     let _ = state
@@ -776,7 +783,13 @@ pub(crate) async fn run_command(
                         "Codex session reconnected for this thread.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+                    let _ = status_sync::refresh_thread_topic_title(
+                        bot,
+                        state,
+                        &updated,
+                        "reconnect_codex_verified",
+                    )
+                    .await;
                 }
                 Err(error) => {
                     let updated = state
@@ -790,7 +803,13 @@ pub(crate) async fn run_command(
                         "Codex session revalidation failed. Use /new to start a fresh one or /reconnect_codex to retry.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+                    let _ = status_sync::refresh_thread_topic_title(
+                        bot,
+                        state,
+                        &updated,
+                        "reconnect_codex_broken",
+                    )
+                    .await;
                 }
             }
         }
@@ -951,7 +970,13 @@ pub(crate) async fn run_command(
                 ),
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                state,
+                &updated,
+                "attach_cli_session",
+            )
+            .await;
         }
         Command::ThreadInfo => {
             if is_control_chat(msg) {
@@ -1083,7 +1108,13 @@ pub(crate) async fn run_command(
                         "Codex session is unavailable. Use /reconnect_codex or /new.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+                    let _ = status_sync::refresh_thread_topic_title(
+                        bot,
+                        state,
+                        &updated,
+                        "generate_title_broken",
+                    )
+                    .await;
                     return Ok(());
                 }
             };
@@ -1103,6 +1134,15 @@ pub(crate) async fn run_command(
             .await?;
             updated.metadata.title = Some(title.clone());
             let updated = state.repository.update_metadata(updated).await?;
+            info!(
+                event = "telegram.generate_title.completed",
+                thread_key = %updated.metadata.thread_key,
+                chat_id = updated.metadata.chat_id,
+                message_thread_id = updated.metadata.message_thread_id.unwrap_or_default(),
+                codex_thread_id = existing_thread_id,
+                generated_title = %title,
+                "generated Telegram topic title from Codex conversation"
+            );
             state
                 .repository
                 .append_log(
@@ -1112,7 +1152,13 @@ pub(crate) async fn run_command(
                     None,
                 )
                 .await?;
-            let _ = status_sync::refresh_thread_topic_title(bot, state, &updated).await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                state,
+                &updated,
+                "generate_title",
+            )
+            .await;
             send_scoped_message(
                 bot,
                 msg.chat.id,
@@ -1511,7 +1557,13 @@ async fn execute_text_turn(
                 "Codex session is unavailable. Use /reconnect_codex to retry or /new to start a fresh one.",
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(bot, state, &record).await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                state,
+                &record,
+                "thread_message_codex_failed",
+            )
+            .await;
         }
     }
 

@@ -18,6 +18,8 @@
 - 顯式 outbound delivery lane 模型
 - persistent outbound queue
 - 正式的 content / draft / status / edit delivery 規格
+- Telegram 互動 control surface 規格
+- Telegram 文件 / 媒體大小上限規格
 
 ## 問題
 
@@ -34,6 +36,8 @@
 
 - preview、final、status、edit 的關係只能從程式碼猜
 - 哪些訊息應該 FIFO、哪些可以 coalesce，沒有清楚語義
+- 哪些 Telegram 按鈕 / 鍵盤屬於 status，哪些屬於 control，沒有清楚語義
+- attachment / media 若超過 Telegram 限制時，缺少一致的 preflight 與 fallback 語義
 - 之後要做 busy gate、history、Web App observability 時，很難知道「送信層」的責任邊界
 
 ## 定位
@@ -46,6 +50,16 @@
 - inbound user input queue
 - history / unread pagination
 - cross-machine delivery
+
+但這份文件可以明確規範 Telegram 端的互動控制 surface，例如：
+
+- 執行中階段用來替換使用者輸入面的 `ReplyKeyboardMarkup`
+- turn 結束後用來恢復正常輸入面的 `ReplyKeyboardRemove`
+
+也可以明確規範 Telegram 對文件 / 媒體大小上限的 adapter 行為，例如：
+
+- 送出前先做本地檔案大小檢查
+- 超限時要走哪種降級路徑
 
 ## 核心原則
 
@@ -79,6 +93,11 @@
 - workspace outbox text
 - workspace outbox media / document
 
+其中 media / document 類型應再區分：
+
+- 可直接送到 Telegram 的 payload
+- 超過 Telegram 上限、需要 fallback 的 payload
+
 ### `draft`
 
 preview draft surface。
@@ -98,6 +117,16 @@ preview draft surface。
 - busy / unavailable 類 plain text 提示
 - restore 成功提示
 - media batch 狀態提示
+
+### `control`
+
+使用者可直接採取動作的 Telegram 互動面。
+
+包括：
+
+- `running` 階段的 `ReplyKeyboardMarkup`
+- turn 結束時的 `ReplyKeyboardRemove`
+- `STOP ai 回應` 這類 control action
 
 ### `edit`
 
@@ -124,12 +153,21 @@ preview draft surface。
 - 失敗時退回 plain text
 - 過長時改成 notice + `reply.md`
 - 屬於 `content`
+- 但 `reply.md` attachment 仍應受 Telegram 文件大小上限規則約束
 
 ### Plain Control / System Message
 
 - 經由 `send_scoped_message`
 - 不做 rich-text rendering
 - 屬於 `status` 或 `content`，取決於用途
+
+### Busy / Running Control Surface
+
+- busy gate 的提示訊息屬於 `status`
+- `running` 階段替換用戶鍵盤的 `ReplyKeyboardMarkup` 屬於 `control`
+- turn 結束後送出的 `ReplyKeyboardRemove` 屬於 `control`
+- 同一個 thread 在 `running` 結束後，應能明確恢復正常輸入面
+- 這條 control 的核心目標是降低自由輸入，而不是提供附著在訊息上的 inline button 體驗
 
 ### Restore / Media Control Message
 
@@ -144,6 +182,7 @@ preview draft surface。
 - `content` 不允許被 `status` 插隊
 - final reply 發送前，preview heartbeat 與 typing heartbeat 必須停止
 - overflow notice 必須先於 `reply.md` attachment 發出
+- `control` 不得暗中表達 queued user input；它只能操作目前已存在的 runtime 狀態
 
 ### `draft`
 
@@ -157,12 +196,51 @@ preview draft surface。
 - `edit` 以 target message 為 key，較舊的待送 edit 可被覆蓋
 - `edit` 不得重排已經發出去的 `content`
 
+### `control`
+
+- `control` 以 target thread 或 target status message 為 key
+- 舊的 running keyboard 應可被新的 running keyboard 取代
+- turn 結束後，必須送出對應的 `ReplyKeyboardRemove`
+- `ReplyKeyboardMarkup` 的顯示與移除都應記入同一套 control lifecycle
+- forum topic 場景下要明確定義它對同 chat 其他 topic 的影響與限制
+
 ## Parse / Preview 規則
 
 - preview 永遠是 plain text draft
 - final reply 才走 Telegram HTML renderer
 - 所有文字 send / edit 路徑都關閉 link preview
 - final reply 的 render policy 不應隱式套用到 preview、restore page、media control
+
+## Telegram 文件上限語義
+
+Telegram delivery 不應假設 document / media 只要本地存在就能送出。
+
+建議明確定義一層 adapter-aware 的檔案上限規格，至少涵蓋：
+
+- `reply.md` attachment
+- workspace outbox `document`
+- workspace outbox `photo`
+- 未來其他由工具或 runtime 產生的 Telegram 檔案
+
+### 建議的 v1 方向
+
+- 在 Telegram send 之前先做本地檔案大小 preflight
+- 大小門檻應集中在 Telegram adapter config，而不是散落在各個 callsite
+- 檔案超限時不要盲送再等 API 失敗
+- 應回到明確的 fallback / 拒絕路徑
+
+### 可接受的 fallback 類型
+
+- 發送簡短 status，說明該檔案超過 Telegram 上限
+- 若存在較小替代品，改送替代品
+- 若是 final reply attachment，改送更短的 notice 或其他可接受 payload
+- 保留工作區相對路徑或 artifact 說明，讓使用者知道內容仍已生成
+
+### 明確不應做的事
+
+- 在多個送信 helper 裡各自硬編碼不同上限
+- 先嘗試上傳再把 Telegram API failure 當作正常分支
+- 把超限檔案 silently drop 掉
 
 ## Failure Semantics
 
@@ -177,11 +255,40 @@ preview draft surface。
 - HTML 送信失敗時，retry 一次 plain text
 - plain text 若仍失敗，視為 final delivery failure
 - attachment cleanup 是 best-effort
+- 若 attachment 因 Telegram 文件上限無法送出，應走明確 fallback，而不是只留下底層 API 錯誤
+
+### Attachment / Media 類
+
+- 應先做大小檢查，再決定是否送出
+- 若超限，應記錄結構化 log，並進入預定 fallback
+- 同一類型 payload 的超限行為應保持一致，不要 `reply.md`、workspace outbox document、tool 產物各做各的
 
 ### Edit 類
 
 - restore page 或 media control edit 失敗時記 log
 - 失敗不影響已送出的 final content
+
+### Control 類
+
+- reply keyboard 顯示或移除失敗時記 log
+- control action 處理失敗時，應回覆明確但簡短的 Telegram 錯誤提示
+- `STOP ai 回應` 若已來不及生效，也應給使用者一個明確結果，而不是靜默失敗
+
+## Telegram Busy Control v1 建議
+
+建議先把 busy gate 的互動控制面定義成：
+
+- 主要控制面：`ReplyKeyboardMarkup`
+  - 在 `running` 階段直接替換用戶鍵盤
+  - 適合放 `STOP`、`顯示狀態`、`等完成`
+- 退出控制面：`ReplyKeyboardRemove`
+  - 在完成、失敗、stop 收斂後恢復正常輸入面
+
+理由：
+
+- 這條 UX 的目標是替換輸入面，而不是在訊息上附加一個按鈕
+- `ReplyKeyboardMarkup` 比較接近這個目標
+- 但它有殘留在 chat 的風險，所以必須把移除語義一起納入規格
 
 ## 不在這份文件裡解決的事
 
@@ -198,8 +305,10 @@ preview draft surface。
   - 定義 thread 本體狀態；這份只定義 delivery lane
 - `codex-busy-input-gate`
   - 定義 inbound gate；這份不把 outbound lane 等同成 input queue
+  - 但 busy gate 需要的 Telegram control surface 應由這份 delivery 文檔承接
 - `telegram-markdown-adaptation`
   - final reply renderer 屬於這份 delivery 文檔裡的 `content` 規則
+  - `reply.md` attachment 的大小上限 fallback 也應依附這份 delivery 規則，而不是由 renderer 單獨決定
 
 ## 暫定結論
 
@@ -207,5 +316,6 @@ preview draft surface。
 
 - per-thread outbound lane
 - preview draft 與 final reply 分離
-- `content`、`draft`、`status`、`edit` 分類明確
+- `content`、`draft`、`status`、`control`、`edit` 分類明確
+- file / media size limit 是 Telegram adapter delivery 規則的一部分
 - queue 是 outbound delivery queue，不是 user input queue

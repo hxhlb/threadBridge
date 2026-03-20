@@ -21,10 +21,11 @@
 
 - [telegram-markdown-adaptation.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-markdown-adaptation.md)
   - final reply 的 Telegram HTML renderer、plain-text fallback、attachment fallback 已落地
+  - 但 attachment fallback 與 Telegram 文件大小上限的關係仍待收斂
 - [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-busy-input-gate.md)
   - v1 忙碌閘控已落地
   - Telegram 文字 turn / 圖片分析已改成 background 執行，後續輸入現在會命中 reject
-  - 但 queue 模型、更完整的狀態語義，以及更乾淨的 ingress / dispatcher 邊界仍未收斂
+  - 但 queue 模型、更完整的狀態語義、`STOP` / 提示類互動控制面，以及更乾淨的 ingress / dispatcher 邊界仍未收斂
 - [topic-title-status.md](/Volumes/Data/Github/threadBridge/docs/plan/topic-title-status.md)
   - 已落地 `workspace/title + cli/cli!/attach/broken suffix`
   - 已落地新產生的 topic rename service message best-effort cleanup
@@ -42,6 +43,8 @@
   - 狀態語義主規格草稿
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
   - Telegram outbound delivery 主規格草稿
+  - 也承接 busy / running 狀態訊息上的互動 control surface 規格
+  - 以及文件 / 媒體超過 Telegram 上限時的 delivery fallback 規格
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
 - [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)

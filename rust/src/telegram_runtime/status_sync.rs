@@ -223,6 +223,7 @@ pub(crate) async fn refresh_thread_topic_title(
     bot: &Bot,
     state: &AppState,
     record: &ThreadRecord,
+    source: &'static str,
 ) -> Result<()> {
     let Some(message_thread_id) = record.metadata.message_thread_id else {
         return Ok(());
@@ -252,13 +253,54 @@ pub(crate) async fn refresh_thread_topic_title(
             owner_claim.as_ref(),
         ),
     );
-    bot.edit_forum_topic(
-        ChatId(record.metadata.chat_id),
-        thread_id_from_i32(message_thread_id),
+    apply_thread_topic_title(
+        bot,
+        record,
+        workspace_path.as_deref(),
+        message_thread_id,
+        &title,
+        source,
     )
-    .name(title)
-    .await?;
-    Ok(())
+    .await
+}
+
+async fn apply_thread_topic_title(
+    bot: &Bot,
+    record: &ThreadRecord,
+    workspace_path: Option<&Path>,
+    message_thread_id: i32,
+    title: &str,
+    source: &'static str,
+) -> Result<()> {
+    match bot
+        .edit_forum_topic(
+            ChatId(record.metadata.chat_id),
+            thread_id_from_i32(message_thread_id),
+        )
+        .name(title.to_owned())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let workspace = workspace_path
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unbound".to_owned());
+            warn!(
+                event = "telegram.topic_title.refresh_failed",
+                source = source,
+                thread_key = %record.metadata.thread_key,
+                chat_id = record.metadata.chat_id,
+                message_thread_id,
+                workspace = %workspace,
+                stored_title = record.metadata.title.as_deref().unwrap_or(""),
+                desired_title = %title,
+                session_broken = record.metadata.session_broken,
+                error = %error,
+                "failed to update Telegram forum topic title"
+            );
+            Err(error.into())
+        }
+    }
 }
 
 pub(crate) fn busy_text_message(
@@ -497,11 +539,14 @@ async fn sync_workspace_titles_once(
             continue;
         }
 
-        bot.edit_forum_topic(
-            ChatId(record.metadata.chat_id),
-            thread_id_from_i32(message_thread_id),
+        apply_thread_topic_title(
+            bot,
+            &record,
+            workspace_path.as_deref(),
+            message_thread_id,
+            &rendered,
+            "workspace_status_sync",
         )
-        .name(rendered.clone())
         .await?;
         applied_titles.insert(record.conversation_key.clone(), rendered);
     }

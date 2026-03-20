@@ -30,6 +30,7 @@
 - 是否要建立更明確的中間表示，而不是目前 renderer 內部直接輸出 HTML
 - block quote / 更複雜 nested list / 更多 Telegram-specific layout 重建策略
 - 是否要把 debug dump、probe、preview exporter 收斂成正式診斷工具鏈
+- attachment fallback 是否也要納入 Telegram 文件大小上限檢查
 
 ## 問題
 
@@ -187,6 +188,10 @@
 - fallback 與 attachment 路徑都已經存在
 - path / local file references 與普通 URL 不再嘗試保留 Telegram link 呈現
 
+但目前仍缺一個明確規格：
+
+- 若 `reply.md` attachment 本身超過 Telegram 文件大小上限，final reply 應如何降級
+
 ## 與現有功能的關係
 
 這個適配層不只影響普通 assistant 回覆，也會影響：
@@ -227,6 +232,7 @@
 - 如果 renderer 太激進，可能改壞原本文字語意
 - 如果沒有中間表示，後續會變成大量字串 escape 與 patch
 - preview 與 final message 如果使用不同邏輯，會造成觀感不一致
+- 如果 attachment fallback 沒有再經過 Telegram 文件上限檢查，最終仍可能在 delivery 端失敗
 
 ## 開放問題
 
@@ -235,6 +241,7 @@
 - 本地路徑、命令、檔名是否應一律用 monospace？
 - 是否要保留 assistant 原始輸出，以便 debug renderer 問題？
 - 失敗時是否自動 fallback 到純文字模式？
+- attachment fallback 遇到 Telegram 文件大小上限時，應回到純文字、較短 notice，還是其他 artifact 路徑？
 
 其中幾個問題目前已經有程式碼答案：
 
@@ -245,9 +252,14 @@
 - 是否自動 fallback 到純文字
   - 目前已實作
 
+但文件上限這一題目前還沒有明確答案，應由 Telegram delivery 規格來接：
+
+- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
+
 ## 建議的下一步
 
 1. 決定 preview draft 是否也要接到同一套 renderer，或明確維持分離。
 2. 重新評估是否真的需要一個顯式中間表示，而不是持續在 renderer 內部直接輸出 HTML。
 3. 針對真實 `data/` 樣本持續收斂 Telegram-specific 排版問題，特別是 nested list、長 bullet、block quote。
 4. 視需要把 probe / html preview / final dump 收斂成更正式的診斷面。
+5. 把 `reply.md` attachment 與 Telegram 文件大小上限的關係，明確掛回 delivery 規格。
