@@ -2,6 +2,7 @@ pub mod app_server_runtime;
 pub mod codex;
 pub mod config;
 pub mod hcodex_ws_bridge;
+pub mod hcodex_runtime;
 pub mod image_artifacts;
 pub mod logging;
 pub mod repository;

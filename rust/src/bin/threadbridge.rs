@@ -5,6 +5,7 @@ use teloxide::prelude::*;
 use tracing::{info, warn};
 
 use threadbridge_rust::config::load_app_config;
+use threadbridge_rust::hcodex_runtime;
 use threadbridge_rust::hcodex_ws_bridge;
 use threadbridge_rust::logging::init_json_logs;
 use threadbridge_rust::telegram_runtime::{
@@ -14,6 +15,9 @@ use threadbridge_rust::telegram_runtime::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if hcodex_runtime::maybe_run_from_args(std::env::args_os().skip(1).collect()).await? {
+        return Ok(());
+    }
     if hcodex_ws_bridge::maybe_run_from_args(std::env::args_os().skip(1).collect()).await? {
         return Ok(());
     }

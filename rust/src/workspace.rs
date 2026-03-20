@@ -145,6 +145,23 @@ fn build_hcodex_launcher_script(
         "  esac".to_owned(),
         "  shift".to_owned(),
         "done".to_owned(),
+        "ensure_ready_file=\"$(mktemp -t threadbridge-hcodex-runtime-ready.XXXXXX)\"".to_owned(),
+        "\"$THREADBRIDGE_EXECUTABLE\" ensure-hcodex-runtime --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --parent-pid \"$$\" --ready-file \"$ensure_ready_file\" >/dev/null 2>&1 &".to_owned(),
+        "ensure_pid=$!".to_owned(),
+        "ensure_ready_json=\"\"".to_owned(),
+        "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do".to_owned(),
+        "  if [ -s \"$ensure_ready_file\" ]; then".to_owned(),
+        "    ensure_ready_json=\"$(cat \"$ensure_ready_file\")\"".to_owned(),
+        "    break".to_owned(),
+        "  fi".to_owned(),
+        "  sleep 0.05".to_owned(),
+        "done".to_owned(),
+        "rm -f \"$ensure_ready_file\"".to_owned(),
+        "if [ -z \"$ensure_ready_json\" ]; then".to_owned(),
+        "  kill \"$ensure_pid\" >/dev/null 2>&1 || true".to_owned(),
+        "  echo \"hcodex: shared runtime did not become ready\" >&2".to_owned(),
+        "  exit 2".to_owned(),
+        "fi".to_owned(),
         "launch_info=\"\"".to_owned(),
         "if [ -n \"$requested_thread_key\" ]; then".to_owned(),
         "  launch_info=\"$(python3 \"$THREADBRIDGE_HCODEX_RESOLVER\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$requested_thread_key\")\""
@@ -530,6 +547,8 @@ mod tests {
         assert!(hcodex_launcher.contains("THREADBRIDGE_MANAGED_CODEX"));
         assert!(hcodex_launcher.contains(".threadbridge/bin/codex"));
         assert!(hcodex_launcher.contains("remote_ws_url=\"$daemon_ws_url\""));
+        assert!(hcodex_launcher.contains("ensure-hcodex-runtime"));
+        assert!(hcodex_launcher.contains("shared runtime did not become ready"));
         assert!(hcodex_launcher.contains("\"$THREADBRIDGE_EXECUTABLE\" hcodex-ws-bridge"));
         assert!(hcodex_launcher.contains("--remote \"$remote_ws_url\""));
         assert!(hcodex_launcher.contains("codex_bin=\"$(command -v codex 2>/dev/null || true)\""));
