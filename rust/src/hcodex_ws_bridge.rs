@@ -48,9 +48,7 @@ impl BridgeCli {
                     upstream = Some(value.to_owned());
                 }
                 "--ready-file" => {
-                    let value = iter
-                        .next()
-                        .context("missing value for --ready-file")?;
+                    let value = iter.next().context("missing value for --ready-file")?;
                     ready_file = Some(PathBuf::from(value));
                 }
                 other => bail!("unsupported hcodex-ws-bridge argument: {other}"),
@@ -102,16 +100,13 @@ pub async fn run_bridge(upstream_url: &str, ready_file: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn bridge_single_client(
-    stream: tokio::net::TcpStream,
-    upstream_url: &str,
-) -> Result<()> {
+async fn bridge_single_client(stream: tokio::net::TcpStream, upstream_url: &str) -> Result<()> {
     let client_ws = accept_async(stream)
         .await
         .context("failed to accept local hcodex websocket handshake")?;
-    let (upstream_ws, _) = connect_async(upstream_url)
-        .await
-        .with_context(|| format!("failed to connect bridge to upstream websocket {upstream_url}"))?;
+    let (upstream_ws, _) = connect_async(upstream_url).await.with_context(|| {
+        format!("failed to connect bridge to upstream websocket {upstream_url}")
+    })?;
     let (mut client_write, mut client_read) = futures_util::StreamExt::split(client_ws);
     let (mut upstream_write, mut upstream_read) = futures_util::StreamExt::split(upstream_ws);
 
@@ -120,7 +115,9 @@ async fn bridge_single_client(
             let client_message = match client_message {
                 Ok(client_message) => client_message,
                 Err(error) if is_graceful_disconnect(&error) => break,
-                Err(error) => return Err(error).context("failed to read local hcodex websocket message"),
+                Err(error) => {
+                    return Err(error).context("failed to read local hcodex websocket message");
+                }
             };
             let is_close = matches!(client_message, WsMessage::Close(_));
             match futures_util::SinkExt::send(&mut upstream_write, client_message).await {
@@ -144,15 +141,18 @@ async fn bridge_single_client(
             let upstream_message = match upstream_message {
                 Ok(upstream_message) => upstream_message,
                 Err(error) if is_graceful_disconnect(&error) => break,
-                Err(error) => return Err(error).context("failed to read upstream websocket message"),
+                Err(error) => {
+                    return Err(error).context("failed to read upstream websocket message");
+                }
             };
             let is_close = matches!(upstream_message, WsMessage::Close(_));
             match futures_util::SinkExt::send(&mut client_write, upstream_message).await {
                 Ok(()) => {}
                 Err(error) if is_close && is_graceful_disconnect(&error) => break,
                 Err(error) => {
-                    return Err(error)
-                        .context("failed to forward upstream websocket message to local hcodex client");
+                    return Err(error).context(
+                        "failed to forward upstream websocket message to local hcodex client",
+                    );
                 }
             }
             if is_close {

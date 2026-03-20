@@ -173,9 +173,9 @@ impl AppServerClient {
     }
 
     async fn start_websocket(app_server_url: &str) -> Result<Self> {
-        let (stream, _) = connect_async(app_server_url)
-            .await
-            .with_context(|| format!("failed to connect to shared app-server at {app_server_url}"))?;
+        let (stream, _) = connect_async(app_server_url).await.with_context(|| {
+            format!("failed to connect to shared app-server at {app_server_url}")
+        })?;
         let mut client = Self {
             transport: AppServerTransport::WebSocket { stream },
             next_request_id: 0,

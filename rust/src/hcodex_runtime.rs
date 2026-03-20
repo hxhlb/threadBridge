@@ -11,9 +11,7 @@ use tokio::process::Command;
 use crate::app_server_runtime::{WorkspaceRuntimeManager, WorkspaceRuntimeState};
 use crate::repository::ThreadRepository;
 use crate::tui_proxy::TuiProxyManager;
-use crate::workspace_status::{
-    record_hcodex_launcher_ended, record_hcodex_launcher_started,
-};
+use crate::workspace_status::{record_hcodex_launcher_ended, record_hcodex_launcher_started};
 
 pub async fn maybe_run_from_args(args: Vec<OsString>) -> Result<bool> {
     let Some(command) = args.first().and_then(|value| value.to_str()) else {
@@ -223,7 +221,10 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
     )
     .await?;
 
-    let status = child.wait().await.context("failed waiting for codex child")?;
+    let status = child
+        .wait()
+        .await
+        .context("failed waiting for codex child")?;
     record_hcodex_launcher_ended(&config.workspace, &config.thread_key, shell_pid, child_pid)
         .await?;
 
@@ -253,7 +254,9 @@ async fn runtime_state_is_live(workspace: &Path) -> Result<bool> {
     let contents = match fs::read_to_string(&state_path).await {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error).with_context(|| format!("failed to read {}", state_path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", state_path.display()));
+        }
     };
     let state: WorkspaceRuntimeState = serde_json::from_str(&contents)
         .or_else(|_| {

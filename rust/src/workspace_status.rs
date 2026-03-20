@@ -483,7 +483,9 @@ pub async fn record_tui_proxy_connected(
     deactivate_other_tui_proxy_sessions(workspace_path, session_id).await?;
     let mut current = read_session_status(workspace_path, session_id)
         .await?
-        .unwrap_or_else(|| default_session_status(workspace_path, session_id, SessionStatusOwner::Cli));
+        .unwrap_or_else(|| {
+            default_session_status(workspace_path, session_id, SessionStatusOwner::Cli)
+        });
     current.schema_version = STATUS_SCHEMA_VERSION;
     current.workspace_cwd = canonical_workspace_string(workspace_path);
     current.owner = SessionStatusOwner::Cli;
@@ -510,7 +512,9 @@ pub async fn record_tui_proxy_prompt(
     ensure_workspace_status_surface(workspace_path).await?;
     let mut current = read_session_status(workspace_path, session_id)
         .await?
-        .unwrap_or_else(|| default_session_status(workspace_path, session_id, SessionStatusOwner::Cli));
+        .unwrap_or_else(|| {
+            default_session_status(workspace_path, session_id, SessionStatusOwner::Cli)
+        });
     current.schema_version = STATUS_SCHEMA_VERSION;
     current.workspace_cwd = canonical_workspace_string(workspace_path);
     current.owner = SessionStatusOwner::Cli;
@@ -547,7 +551,9 @@ pub async fn record_tui_proxy_completed(
     ensure_workspace_status_surface(workspace_path).await?;
     let mut current = read_session_status(workspace_path, session_id)
         .await?
-        .unwrap_or_else(|| default_session_status(workspace_path, session_id, SessionStatusOwner::Cli));
+        .unwrap_or_else(|| {
+            default_session_status(workspace_path, session_id, SessionStatusOwner::Cli)
+        });
     current.schema_version = STATUS_SCHEMA_VERSION;
     current.workspace_cwd = canonical_workspace_string(workspace_path);
     current.owner = SessionStatusOwner::Cli;

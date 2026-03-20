@@ -702,7 +702,8 @@ fn cli_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {
 }
 
 fn initial_workspace_event_offset(lines: &[String], owner_claim: &CliOwnerClaim) -> usize {
-    lines.iter()
+    lines
+        .iter()
         .position(|line| {
             serde_json::from_str::<WorkspaceStatusEventRecord>(line)
                 .ok()
@@ -796,8 +797,8 @@ mod tests {
         topic_marker_for_snapshot,
     };
     use crate::repository::{
-        SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope,
-        ThreadStatus, TranscriptMirrorOrigin, TranscriptMirrorRole,
+        SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope, ThreadStatus,
+        TranscriptMirrorOrigin, TranscriptMirrorRole,
     };
     use crate::workspace_status::{
         CliOwnerClaim, SessionCurrentStatus, SessionStatusOwner, WorkspaceStatusEventRecord,

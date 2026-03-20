@@ -36,8 +36,12 @@ async fn busy_snapshot_for_binding(
     if Some(tui_session_id) == usable_bound_session_id(Some(binding)) {
         return Ok(None);
     }
-    busy_selected_session_status(&state.workspace_status_cache, &workspace_path, tui_session_id)
-        .await
+    busy_selected_session_status(
+        &state.workspace_status_cache,
+        &workspace_path,
+        tui_session_id,
+    )
+    .await
 }
 
 #[derive(Clone)]
@@ -405,6 +409,8 @@ pub(crate) async fn analyze_pending_image_batch(
         return Ok(());
     }
     let session = state.repository.read_session_binding(&record).await?;
+    let (record, session) =
+        maybe_route_telegram_input_to_tui_session(state, record, session).await?;
     let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
@@ -543,17 +549,12 @@ async fn execute_image_analysis_turn(
     }
     let result = state
         .codex
-        .run_locked_with_events(
-            &codex_workspace,
-            existing_thread_id,
-            input,
-            |event| {
-                let preview = preview.clone();
-                async move {
-                    preview.lock().await.consume(&event).await;
-                }
-            },
-        )
+        .run_locked_with_events(&codex_workspace, existing_thread_id, input, |event| {
+            let preview = preview.clone();
+            async move {
+                preview.lock().await.consume(&event).await;
+            }
+        })
         .await;
     let result = match result {
         Ok(result) => result,

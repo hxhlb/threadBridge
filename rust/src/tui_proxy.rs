@@ -75,9 +75,13 @@ impl TuiProxyManager {
         let daemon_ws_url_for_task = daemon_ws_url.clone();
 
         tokio::spawn(async move {
-            if let Err(error) =
-                run_proxy_listener(listener, repository, workspace_for_task, daemon_ws_url_for_task)
-                    .await
+            if let Err(error) = run_proxy_listener(
+                listener,
+                repository,
+                workspace_for_task,
+                daemon_ws_url_for_task,
+            )
+            .await
             {
                 warn!(event = "tui_proxy.listener.failed", error = %error);
             }
@@ -211,7 +215,8 @@ async fn handle_proxy_connection(
         }
     }
 
-    record_tui_proxy_disconnected(&workspace_path, &thread_key, current_session_id.as_deref()).await?;
+    record_tui_proxy_disconnected(&workspace_path, &thread_key, current_session_id.as_deref())
+        .await?;
     debug!(
         event = "tui_proxy.connection.closed",
         workspace = %workspace_path.display(),
@@ -234,7 +239,9 @@ fn thread_key_from_path(path: &str) -> Result<String> {
 fn track_client_request(message: &WsMessage) -> Result<Option<(i64, &'static str)>> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 client frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 client frame")?
+        }
         _ => return Ok(None),
     };
     let payload: Value = serde_json::from_str(text).context("invalid TUI proxy client json")?;
@@ -263,7 +270,9 @@ async fn maybe_track_server_response(
 ) -> Result<Option<String>> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
         _ => return Ok(None),
     };
     let payload: Value = match serde_json::from_str(text) {
@@ -309,7 +318,9 @@ async fn maybe_track_client_turn_start(
 ) -> Result<()> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 client frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 client frame")?
+        }
         _ => return Ok(()),
     };
     let payload: Value = match serde_json::from_str(text) {
@@ -362,9 +373,13 @@ async fn maybe_track_server_message(
     current_session_id: &mut Option<String>,
     latest_assistant_message: &mut String,
 ) -> Result<()> {
-    if let Some(session_id) =
-        maybe_track_server_response(repository, thread_key, message, tracked_request_method_by_id)
-            .await?
+    if let Some(session_id) = maybe_track_server_response(
+        repository,
+        thread_key,
+        message,
+        tracked_request_method_by_id,
+    )
+    .await?
     {
         record_tui_proxy_connected(workspace_path, thread_key, &session_id).await?;
         *current_session_id = Some(session_id);
@@ -395,7 +410,9 @@ async fn maybe_track_server_message(
 fn maybe_extract_agent_message_text(message: &WsMessage) -> Result<Option<String>> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
         _ => return Ok(None),
     };
     let payload: Value = match serde_json::from_str(text) {
@@ -406,7 +423,10 @@ fn maybe_extract_agent_message_text(message: &WsMessage) -> Result<Option<String
     let params = payload.get("params");
     if method == Some("item/completed") {
         let item = params.and_then(|params| params.get("item"));
-        if item.and_then(|item| item.get("type")).and_then(Value::as_str) == Some("agent_message")
+        if item
+            .and_then(|item| item.get("type"))
+            .and_then(Value::as_str)
+            == Some("agent_message")
         {
             return Ok(item
                 .and_then(|item| item.get("text"))
@@ -426,7 +446,9 @@ fn maybe_extract_agent_message_text(message: &WsMessage) -> Result<Option<String
 fn is_agent_message_delta(message: &WsMessage) -> Result<bool> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
         _ => return Ok(false),
     };
     let payload: Value = match serde_json::from_str(text) {
@@ -439,7 +461,9 @@ fn is_agent_message_delta(message: &WsMessage) -> Result<bool> {
 fn is_turn_completed(message: &WsMessage) -> Result<bool> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
-        WsMessage::Binary(bytes) => std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?,
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
         _ => return Ok(false),
     };
     let payload: Value = match serde_json::from_str(text) {

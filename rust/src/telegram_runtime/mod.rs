@@ -7,13 +7,13 @@ use teloxide::types::{BotCommand, CallbackQuery, LinkPreviewOptions, ThreadId};
 use teloxide::utils::command::BotCommands;
 use tracing::{error, warn};
 
+use crate::app_server_runtime::WorkspaceRuntimeManager;
 pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
 pub(crate) use crate::config::AppConfig;
 pub(crate) use crate::image_artifacts::{
     ImageAnalysisArtifact, ImageAnalysisImage, build_image_analysis_prompt,
     render_pending_image_batch,
 };
-use crate::app_server_runtime::WorkspaceRuntimeManager;
 pub(crate) use crate::repository::{
     AppendPendingImageInput, LogDirection, SessionBinding, ThreadRecord, ThreadRepository,
     ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
@@ -23,7 +23,7 @@ pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 use crate::tui_proxy::TuiProxyManager;
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 pub(crate) use crate::workspace_status::{
-    WorkspaceStatusCache, busy_selected_session_status, read_session_status,
+    WorkspaceStatusCache, busy_selected_session_status, read_cli_owner_claim, read_session_status,
     read_workspace_status_with_cache, record_bot_status_event,
 };
 
@@ -194,7 +194,10 @@ async fn should_cleanup_topic_rename_service_message(
     let Some(thread_id) = topic_rename_service_message_thread_id(msg) else {
         return Ok(false);
     };
-    Ok(repository.find_thread(msg.chat.id.0, thread_id).await?.is_some())
+    Ok(repository
+        .find_thread(msg.chat.id.0, thread_id)
+        .await?
+        .is_some())
 }
 
 fn topic_rename_service_message_thread_id(msg: &Message) -> Option<i32> {
@@ -438,6 +441,70 @@ pub(crate) async fn ensure_bound_workspace_runtime(
     Ok(workspace)
 }
 
+async fn should_route_telegram_input_to_live_tui_session(
+    record: &ThreadRecord,
+    binding: &SessionBinding,
+) -> Result<bool> {
+    let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref() else {
+        return Ok(false);
+    };
+    if Some(tui_session_id) == usable_bound_session_id(Some(binding)) {
+        return Ok(false);
+    }
+    let workspace_path = workspace_path_from_binding(binding)?;
+    let Some(owner_claim) = read_cli_owner_claim(&workspace_path).await? else {
+        return Ok(false);
+    };
+    if owner_claim.thread_key != record.metadata.thread_key
+        || owner_claim.session_id.as_deref() != Some(tui_session_id)
+    {
+        return Ok(false);
+    }
+    let snapshot = read_session_status(&workspace_path, tui_session_id).await?;
+    Ok(snapshot.as_ref().is_some_and(|snapshot| {
+        snapshot.owner == crate::workspace_status::SessionStatusOwner::Cli && snapshot.live
+    }))
+}
+
+pub(crate) async fn maybe_route_telegram_input_to_tui_session(
+    state: &AppState,
+    record: ThreadRecord,
+    session: Option<SessionBinding>,
+) -> Result<(ThreadRecord, Option<SessionBinding>)> {
+    let Some(binding) = session.as_ref() else {
+        return Ok((record, session));
+    };
+    let Some(tui_session_id) = binding.tui_active_codex_thread_id.clone() else {
+        return Ok((record, session));
+    };
+
+    let log_message = if binding.tui_session_adoption_pending {
+        Some(format!(
+            "Auto-adopted pending TUI session `{}` on the next Telegram input.",
+            tui_session_id
+        ))
+    } else if should_route_telegram_input_to_live_tui_session(&record, binding).await? {
+        Some(format!(
+            "Auto-adopted live TUI session `{}` for Telegram input routing.",
+            tui_session_id
+        ))
+    } else {
+        None
+    };
+
+    let Some(log_message) = log_message else {
+        return Ok((record, session));
+    };
+
+    let updated = state.repository.adopt_tui_active_session(record).await?;
+    let session = state.repository.read_session_binding(&updated).await?;
+    state
+        .repository
+        .append_log(&updated, LogDirection::System, log_message, None)
+        .await?;
+    Ok((updated, session))
+}
+
 pub(crate) async fn shared_codex_workspace(
     state: &AppState,
     workspace: PathBuf,
@@ -459,14 +526,23 @@ pub(crate) async fn shared_codex_workspace(
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, command_list, should_cleanup_topic_rename_service_message,
-        topic_rename_service_message_thread_id,
+        AppState, Command, command_list, maybe_route_telegram_input_to_tui_session,
+        should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
     };
-    use crate::repository::ThreadRepository;
+    use crate::app_server_runtime::WorkspaceRuntimeManager;
+    use crate::codex::CodexRunner;
+    use crate::config::{AppConfig, RuntimeConfig};
+    use crate::repository::{SessionBinding, ThreadRepository};
+    use crate::tui_proxy::TuiProxyManager;
+    use crate::workspace_status::{
+        SessionStatusOwner, WorkspaceStatusCache, WorkspaceStatusPhase, read_session_status,
+        record_hcodex_launcher_started, record_tui_proxy_connected,
+    };
     use serde_json::json;
+    use std::collections::HashSet;
     use std::path::PathBuf;
-    use teloxide::utils::command::BotCommands;
     use teloxide::types::Message;
+    use teloxide::utils::command::BotCommands;
     use uuid::Uuid;
 
     fn temp_path() -> PathBuf {
@@ -512,6 +588,10 @@ mod tests {
         .unwrap()
     }
 
+    fn temp_workspace() -> PathBuf {
+        std::env::temp_dir().join(format!("threadbridge-live-tui-{}", Uuid::new_v4()))
+    }
+
     #[test]
     fn command_list_registers_new_but_not_reset_codex_session() {
         let commands = command_list()
@@ -527,6 +607,90 @@ mod tests {
                 .iter()
                 .any(|command| command == "/reset_codex_session")
         );
+    }
+
+    #[tokio::test]
+    async fn telegram_input_auto_adopts_live_tui_session() {
+        let root = temp_path();
+        let workspace = temp_workspace();
+        let repository = ThreadRepository::open(&root).await.unwrap();
+        let record = repository
+            .create_thread(1, 7, "Title".to_owned())
+            .await
+            .unwrap();
+        let record = repository
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+            )
+            .await
+            .unwrap();
+        let _ = repository
+            .set_tui_active_session_for_thread_key(&record.metadata.thread_key, "thr_tui")
+            .await
+            .unwrap();
+        record_hcodex_launcher_started(
+            &workspace,
+            &record.metadata.thread_key,
+            42,
+            77,
+            "codex --remote",
+        )
+        .await
+        .unwrap();
+        record_tui_proxy_connected(&workspace, &record.metadata.thread_key, "thr_tui")
+            .await
+            .unwrap();
+
+        let state = AppState {
+            config: AppConfig {
+                telegram_token: "test".to_owned(),
+                authorized_user_ids: HashSet::from([7_i64]),
+                stream_edit_interval_ms: 10,
+                stream_message_max_chars: 1000,
+                command_output_tail_chars: 1000,
+                workspace_status_poll_interval_ms: 1000,
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                },
+            },
+            repository: repository.clone(),
+            codex: CodexRunner::new(None),
+            app_server_runtime: WorkspaceRuntimeManager::new(),
+            tui_proxy: TuiProxyManager::new(repository.clone()),
+            seed_template_path: root.join("seed.md"),
+            workspace_status_cache: WorkspaceStatusCache::new(),
+        };
+
+        let session: Option<SessionBinding> =
+            repository.read_session_binding(&record).await.unwrap();
+        let (updated, updated_session) =
+            maybe_route_telegram_input_to_tui_session(&state, record, session)
+                .await
+                .unwrap();
+        let binding = repository
+            .read_session_binding(&updated)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(binding.current_codex_thread_id.as_deref(), Some("thr_tui"));
+        assert_eq!(binding.tui_active_codex_thread_id, None);
+        assert!(!binding.tui_session_adoption_pending);
+        assert_eq!(
+            updated_session.unwrap().current_codex_thread_id.as_deref(),
+            Some("thr_tui")
+        );
+        let live_snapshot = read_session_status(&workspace, "thr_tui")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(live_snapshot.owner, SessionStatusOwner::Cli);
+        assert_eq!(live_snapshot.phase, WorkspaceStatusPhase::ShellActive);
     }
 
     #[test]

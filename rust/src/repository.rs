@@ -208,7 +208,6 @@ impl SessionBinding {
             legacy_attachment_state: None,
         }
     }
-
 }
 
 impl ThreadRepository {
@@ -726,7 +725,10 @@ impl ThreadRepository {
         Ok(Some(self.build_record(folder_name, metadata)))
     }
 
-    pub async fn find_active_thread_by_key(&self, thread_key: &str) -> Result<Option<ThreadRecord>> {
+    pub async fn find_active_thread_by_key(
+        &self,
+        thread_key: &str,
+    ) -> Result<Option<ThreadRecord>> {
         let folder_name = folder_name_for(&ThreadScope::Thread, thread_key);
         let metadata_path = self.data_root_path.join(&folder_name).join("metadata.json");
         if !fs::try_exists(&metadata_path).await? {
@@ -824,7 +826,8 @@ impl ThreadRepository {
             .tui_active_codex_thread_id
             .clone()
             .context("tui_active_codex_thread_id is missing")?;
-        self.select_session_binding_session(record, session_id).await
+        self.select_session_binding_session(record, session_id)
+            .await
     }
 
     pub async fn update_metadata(&self, record: ThreadRecord) -> Result<ThreadRecord> {
@@ -1034,10 +1037,7 @@ mod tests {
             .unwrap();
 
         let binding = repo.read_session_binding(&updated).await.unwrap().unwrap();
-        assert_eq!(
-            binding.current_codex_thread_id.as_deref(),
-            Some("thr_123")
-        );
+        assert_eq!(binding.current_codex_thread_id.as_deref(), Some("thr_123"));
         assert_eq!(binding.tui_active_codex_thread_id, None);
         assert!(!binding.tui_session_adoption_pending);
         assert_eq!(binding.workspace_cwd.as_deref(), Some("/tmp/workspace"));
@@ -1059,10 +1059,7 @@ mod tests {
             .await
             .unwrap();
         let binding = repo.read_session_binding(&updated).await.unwrap().unwrap();
-        assert_eq!(
-            binding.current_codex_thread_id.as_deref(),
-            Some("thr_cli")
-        );
+        assert_eq!(binding.current_codex_thread_id.as_deref(), Some("thr_cli"));
         assert_eq!(binding.tui_active_codex_thread_id, None);
         assert!(!binding.tui_session_adoption_pending);
     }
@@ -1087,7 +1084,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let binding = repo.read_session_binding(&record).await.unwrap().unwrap();
-        assert_eq!(binding.tui_active_codex_thread_id.as_deref(), Some("thr_tui"));
+        assert_eq!(
+            binding.tui_active_codex_thread_id.as_deref(),
+            Some("thr_tui")
+        );
         assert!(binding.tui_session_adoption_pending);
 
         let record = repo

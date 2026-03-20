@@ -40,10 +40,7 @@ async fn start_fresh_binding(
     )
     .await?;
     let codex_workspace = shared_codex_workspace(state, workspace_path).await?;
-    let binding = state
-        .codex
-        .start_thread(&codex_workspace)
-        .await?;
+    let binding = state.codex.start_thread(&codex_workspace).await?;
     state
         .repository
         .bind_workspace(record, binding.cwd, binding.thread_id)
@@ -68,39 +65,12 @@ async fn busy_snapshot_for_binding(
     if Some(tui_session_id) == usable_bound_session_id(Some(binding)) {
         return Ok(None);
     }
-    busy_selected_session_status(&state.workspace_status_cache, &workspace_path, tui_session_id)
-        .await
-}
-
-async fn maybe_auto_adopt_tui_session_for_text(
-    state: &AppState,
-    record: ThreadRecord,
-    session: Option<SessionBinding>,
-) -> Result<(ThreadRecord, Option<SessionBinding>)> {
-    let Some(binding) = session.as_ref() else {
-        return Ok((record, session));
-    };
-    if !binding.tui_session_adoption_pending {
-        return Ok((record, session));
-    }
-    let Some(tui_session_id) = binding.tui_active_codex_thread_id.clone() else {
-        return Ok((record, session));
-    };
-    let updated = state.repository.adopt_tui_active_session(record).await?;
-    let session = state.repository.read_session_binding(&updated).await?;
-    state
-        .repository
-        .append_log(
-            &updated,
-            LogDirection::System,
-            format!(
-                "Auto-adopted TUI session `{}` on the next Telegram message.",
-                tui_session_id
-            ),
-            None,
-        )
-        .await?;
-    Ok((updated, session))
+    busy_selected_session_status(
+        &state.workspace_status_cache,
+        &workspace_path,
+        tui_session_id,
+    )
+    .await
 }
 
 async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<String> {
@@ -577,10 +547,7 @@ pub(crate) async fn run_command(
             let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
             let result = state
                 .codex
-                .generate_thread_title_from_session(
-                    &codex_workspace,
-                    existing_thread_id,
-                )
+                .generate_thread_title_from_session(&codex_workspace, existing_thread_id)
                 .await;
             typing.stop().await;
 
@@ -650,13 +617,8 @@ pub(crate) async fn run_command(
                     None,
                 )
                 .await?;
-            let _ = status_sync::refresh_thread_topic_title(
-                bot,
-                state,
-                &updated,
-                "generate_title",
-            )
-            .await;
+            let _ = status_sync::refresh_thread_topic_title(bot, state, &updated, "generate_title")
+                .await;
             send_scoped_message(
                 bot,
                 msg.chat.id,
@@ -742,7 +704,8 @@ pub(crate) async fn run_text_message(
         return Ok(());
     }
     let session = state.repository.read_session_binding(&record).await?;
-    let (record, session) = maybe_auto_adopt_tui_session_for_text(state, record, session).await?;
+    let (record, session) =
+        maybe_route_telegram_input_to_tui_session(state, record, session).await?;
     let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
         send_scoped_message(
             bot,
@@ -914,17 +877,12 @@ async fn execute_text_turn(
 
     let result = state
         .codex
-        .run_locked_prompt_with_events(
-            &codex_workspace,
-            existing_thread_id,
-            text,
-            |event| {
-                let preview = preview.clone();
-                async move {
-                    preview.lock().await.consume(&event).await;
-                }
-            },
-        )
+        .run_locked_prompt_with_events(&codex_workspace, existing_thread_id, text, |event| {
+            let preview = preview.clone();
+            async move {
+                preview.lock().await.consume(&event).await;
+            }
+        })
         .await;
     preview_heartbeat.stop().await;
     typing.stop().await;
