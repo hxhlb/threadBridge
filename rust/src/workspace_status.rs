@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 const STATUS_SCHEMA_VERSION: u32 = 2;
-const STATUS_DIR: &str = ".threadbridge/state/codex-sync";
+const STATUS_DIR: &str = ".threadbridge/state/shared-runtime";
 const CURRENT_FILE: &str = "current.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const SESSIONS_DIR: &str = "sessions";
@@ -688,7 +688,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            fs::try_exists(workspace.join(".threadbridge/state/codex-sync/sessions"))
+            fs::try_exists(workspace.join(".threadbridge/state/shared-runtime/sessions"))
                 .await
                 .unwrap()
         );

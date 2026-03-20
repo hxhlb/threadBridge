@@ -292,7 +292,7 @@ pub(crate) async fn run_command(
                         msg.chat.id,
                         Some(thread_id),
                         format!(
-                            "Bound workspace: `{}`\n\nFor the managed local TUI path in this workspace, run:\n`source {}/.threadbridge/shell/codex-sync.bash`\nThen start:\n`hcodex`",
+                            "Bound workspace: `{}`\n\nFor the managed local TUI path in this workspace, run:\n`{}/.threadbridge/bin/hcodex`",
                             workspace_path.display(),
                             workspace_path.display()
                         ),

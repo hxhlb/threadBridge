@@ -2,26 +2,21 @@
 
 ## 目前進度
 
-這份 Plan 的 `v1` 已完成並已落地到代碼。
+這份 Plan 的 `v1` 曾完成並落地到代碼，但現在已退役。
 
 目前定位已改成：
 
-- shared-runtime 遷移期間的兼容層
-- 仍可提供 workspace-level busy signal 與 legacy CLI mirror
-- 但不再是正式的本地 TUI 主路徑
+- 歷史方案 / archive 參考
+- 用來說明舊的 hook-based CLI sync 曾經如何工作
+- 不再代表當前 runtime surface
 
-目前已實作：
+目前對現況的意義：
 
-- `/bind_workspace` 安裝 `.threadbridge/state/codex-sync/`
-- 安裝 `.threadbridge/shell/codex-sync.bash`
-- 安裝 `.threadbridge/bin/codex_sync_event`
-- 安裝 `.threadbridge/bin/codex_sync_notify`
-- 安裝受管的 `.codex/hooks.json`
-- Telegram background watcher 讀取 shared status 並更新 topic title
-- Telegram busy gate 會阻止和本地 CLI 衝突的新 turn
-- bot 自己發起的文字 / 圖片分析也寫入同一份 shared status
+- 它描述的是已被 shared app-server runtime 取代的舊模型
+- 現在正式路徑是 shared daemon + `./.threadbridge/bin/hcodex` + TUI proxy + adoption flow
+- 文中提到的 `codex-sync.bash`、`codex_sync_event`、`codex_sync_notify`、`.codex/hooks.json` 已不再由現行 `/bind_workspace` 安裝
 
-目前仍有邊界：
+這份歷史方案當時的邊界：
 
 - 只支持 Bash
 - 只追蹤已 source wrapper 的本地 `codex`

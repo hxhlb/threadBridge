@@ -60,23 +60,19 @@ scripts/local_threadbridge.sh restart --codex-source alpha
 - threadBridge installs the following runtime surface into a bound workspace:
   - `AGENTS.md` managed block markers
   - `.threadbridge/bin/build_prompt_config`
-  - `.threadbridge/bin/codex_sync_event`
-  - `.threadbridge/bin/codex_sync_notify`
   - `.threadbridge/bin/generate_image`
+  - `.threadbridge/bin/hcodex`
   - `.threadbridge/bin/send_telegram_media`
-  - `.threadbridge/shell/codex-sync.bash`
   - `.threadbridge/state/app-server/current.json`
-  - `.threadbridge/state/codex-sync/current.json`
-  - `.threadbridge/state/codex-sync/events.jsonl`
+  - `.threadbridge/state/shared-runtime/current.json`
+  - `.threadbridge/state/shared-runtime/events.jsonl`
   - `.threadbridge/tool_requests/`
   - `.threadbridge/tool_results/`
-  - `.codex/hooks.json`
 
 ## Local TUI Path
 
-- After `/bind_workspace`, source `./.threadbridge/shell/codex-sync.bash` inside that workspace and use `hcodex`.
+- After `/bind_workspace`, run `./.threadbridge/bin/hcodex` inside that workspace.
 - With no extra args, `hcodex` resumes the thread's current Codex session through the shared workspace daemon.
-- The shell snippet still installs legacy `codex-sync` hooks and state files as a compatibility layer for status/mirror delivery, but the old `/attach_cli_session` and viewer handoff runtime path has been removed.
 - Raw `codex` launches that bypass `hcodex` are not part of the managed local path.
 
 ## Commands

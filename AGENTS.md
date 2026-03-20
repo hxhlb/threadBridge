@@ -124,16 +124,13 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 
 - threadBridge installs wrapper commands under:
   - `./.threadbridge/bin/build_prompt_config`
-  - `./.threadbridge/bin/codex_sync_event`
-  - `./.threadbridge/bin/codex_sync_notify`
   - `./.threadbridge/bin/generate_image`
+  - `./.threadbridge/bin/hcodex`
   - `./.threadbridge/bin/send_telegram_media`
 - threadBridge installs local shell/runtime sync files under:
-  - `./.threadbridge/shell/codex-sync.bash`
   - `./.threadbridge/state/app-server/current.json`
-  - `./.threadbridge/state/codex-sync/current.json`
-  - `./.threadbridge/state/codex-sync/events.jsonl`
-  - `./.codex/hooks.json`
+  - `./.threadbridge/state/shared-runtime/current.json`
+  - `./.threadbridge/state/shared-runtime/events.jsonl`
 - threadBridge request/result files live under:
   - `./.threadbridge/tool_requests/`
   - `./.threadbridge/tool_results/`
@@ -141,10 +138,9 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 
 ### Local Codex TUI
 
-- Source `./.threadbridge/shell/codex-sync.bash` before using `hcodex` in this workspace.
+- Run `./.threadbridge/bin/hcodex` for the managed local TUI path in this workspace.
 - `hcodex` resolves the shared workspace daemon from `./.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
 - With no extra args, `hcodex` resumes the current Telegram-bound Codex thread for this workspace.
-- The managed `.codex/hooks.json` and `codex-sync` state files are still installed as compatibility surfaces during the migration, but the old viewer/attach handoff runtime path has been removed.
 
 ### `./.threadbridge/bin/build_prompt_config`
 
@@ -255,12 +251,10 @@ The request file must look like this:
 
 - threadBridge-owned runtime surface inside this workspace:
   - `.threadbridge/bin/`
-  - `.threadbridge/shell/`
   - `.threadbridge/state/app-server/`
-  - `.threadbridge/state/codex-sync/`
+  - `.threadbridge/state/shared-runtime/`
   - `.threadbridge/tool_requests/`
   - `.threadbridge/tool_results/`
-  - `.codex/hooks.json`
 - Workspace/project artifacts produced by the tools:
   - `concept.json`
   - `prompts/*.json`

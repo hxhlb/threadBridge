@@ -15,7 +15,6 @@
 
 目前尚未完成：
 
-- `codex-sync` 兼容層的長期去留
 - 與 `runtime-state-machine` 的完整對齊
 
 ## 核心模型
@@ -114,6 +113,5 @@
 
 ## 後續工作
 
-1. 決定 `codex-sync` 兼容層是否保留為長期 shared-runtime surface。
-2. 把 `session-lifecycle`、`session-level-cli-telegram-sync`、`runtime-state-machine` 的狀態語義完全收斂。
-3. 清理仍描述舊 viewer/attach handoff 的歷史文檔。
+1. 把 `session-lifecycle`、`session-level-cli-telegram-sync`、`runtime-state-machine` 的狀態語義完全收斂。
+2. 清理仍描述舊 viewer/attach handoff 的歷史文檔。

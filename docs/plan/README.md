@@ -14,8 +14,8 @@
 
 - [codex-cli-telegram-status-sync-hooks.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-cli-telegram-status-sync-hooks.md)
   - 已完成 v1
-  - Bash wrapper、Codex hooks、notify、workspace shared status、topic title watcher、busy gate 都已落地
-  - 現在已退到 shared-runtime 遷移期的兼容層，不再代表正式的本地 TUI 主路徑
+  - Bash wrapper、Codex hooks、notify、workspace shared status、topic title watcher、busy gate 都曾落地
+  - 現在已退役，只保留作為舊模型參考
 
 ## 部分落地
 
@@ -35,9 +35,9 @@
   - `current_codex_thread_id` 已成為 canonical pointer，`tui_active_codex_thread_id` / adoption 也已進入正式 runtime
   - 剩餘工作主要是兼容層與狀態語義收尾
 - [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
-  - shared app-server daemon、`hcodex -> codex --remote`、TUI proxy、mirror、adoption、auto-adopt 已落地
-  - `/attach_cli_session`、viewer handoff、attach-intent、`.cli/.attach` title 已退場
-  - 仍有 `codex-sync` 兼容層與歷史文檔收尾工作
+  - shared app-server daemon、`./.threadbridge/bin/hcodex`、TUI proxy、mirror、adoption、auto-adopt 已落地
+  - `/attach_cli_session`、viewer handoff、attach-intent、hooks-based CLI sync、`.cli/.attach` title 已退場
+  - 剩餘工作主要是歷史文檔與主規格收尾
 
 ## 純草稿
 
