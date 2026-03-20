@@ -82,12 +82,13 @@ fn build_hcodex_launcher_script(
     );
     let threadbridge_executable =
         shell_single_quote(&threadbridge_executable.display().to_string());
-    let managed_codex = shell_single_quote(
-        &workspace_path
-            .join(".threadbridge/bin/codex")
-            .display()
-            .to_string(),
-    );
+    let managed_codex_path = match codex_source_preference {
+        CodexSourcePreference::Brew => workspace_path.join(".threadbridge/bin/codex"),
+        // Source-built Codex works reliably from the repo-managed cache, but some
+        // workspace-local copies fail after installation. Use the cache directly.
+        CodexSourcePreference::Source => repo_root.join(MANAGED_CODEX_CACHE_BINARY),
+    };
+    let managed_codex = shell_single_quote(&managed_codex_path.display().to_string());
     let codex_source = match codex_source_preference {
         CodexSourcePreference::Brew => "brew",
         CodexSourcePreference::Source => "source",
@@ -395,27 +396,29 @@ pub async fn ensure_workspace_runtime(
     .await?;
     set_mode(&shell_snippet_path, 0o644).await?;
 
-    let managed_codex_source = repo_root.join(MANAGED_CODEX_CACHE_BINARY);
-    if fs::try_exists(&managed_codex_source)
-        .await
-        .with_context(|| {
-            format!(
-                "failed to inspect managed Codex binary: {}",
-                managed_codex_source.display()
-            )
-        })?
-    {
-        let managed_codex_dest = bin_dir.join("codex");
-        fs::copy(&managed_codex_source, &managed_codex_dest)
+    if codex_source_preference == CodexSourcePreference::Brew {
+        let managed_codex_source = repo_root.join(MANAGED_CODEX_CACHE_BINARY);
+        if fs::try_exists(&managed_codex_source)
             .await
             .with_context(|| {
                 format!(
-                    "failed to copy managed Codex binary from {} to {}",
-                    managed_codex_source.display(),
-                    managed_codex_dest.display()
+                    "failed to inspect managed Codex binary: {}",
+                    managed_codex_source.display()
                 )
-            })?;
-        set_mode(&managed_codex_dest, 0o755).await?;
+            })?
+        {
+            let managed_codex_dest = bin_dir.join("codex");
+            fs::copy(&managed_codex_source, &managed_codex_dest)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to copy managed Codex binary from {} to {}",
+                        managed_codex_source.display(),
+                        managed_codex_dest.display()
+                    )
+                })?;
+            set_mode(&managed_codex_dest, 0o755).await?;
+        }
     }
 
     Ok(runtime_root)
@@ -617,6 +620,12 @@ mod tests {
             .unwrap();
         assert!(hcodex_launcher.contains("THREADBRIDGE_CODEX_SOURCE='source'"));
         assert!(hcodex_launcher.contains("if [ -x \"$THREADBRIDGE_MANAGED_CODEX\" ]; then"));
+        assert!(hcodex_launcher.contains(".threadbridge/codex/codex"));
+        assert!(
+            !fs::try_exists(workspace.join(".threadbridge/bin/codex"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -642,6 +651,12 @@ mod tests {
             .unwrap();
         assert!(hcodex_launcher.contains("THREADBRIDGE_CODEX_SOURCE='source'"));
         assert!(hcodex_launcher.contains("if [ -x \"$THREADBRIDGE_MANAGED_CODEX\" ]; then"));
+        assert!(hcodex_launcher.contains(".threadbridge/codex/codex"));
+        assert!(
+            !fs::try_exists(workspace.join(".threadbridge/bin/codex"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
