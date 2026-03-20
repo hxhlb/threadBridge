@@ -210,7 +210,7 @@ fn build_hcodex_shell_compat_script(workspace_path: &Path) -> String {
         "# threadBridge hcodex compatibility shim",
         &format!("export THREADBRIDGE_WORKSPACE_ROOT={}", shell_single_quote(&workspace_path.display().to_string())),
         "hcodex() {",
-        &format!("  \"{launcher}\" \"$@\""),
+        &format!("  {launcher} \"$@\""),
         "}",
         "",
     ]
