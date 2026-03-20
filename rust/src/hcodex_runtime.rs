@@ -6,27 +6,38 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tokio::fs;
 use tokio::net::TcpStream;
+use tokio::process::Command;
 
 use crate::app_server_runtime::{WorkspaceRuntimeManager, WorkspaceRuntimeState};
 use crate::repository::ThreadRepository;
 use crate::tui_proxy::TuiProxyManager;
+use crate::workspace_status::{
+    record_hcodex_launcher_ended, record_hcodex_launcher_started,
+};
 
 pub async fn maybe_run_from_args(args: Vec<OsString>) -> Result<bool> {
     let Some(command) = args.first().and_then(|value| value.to_str()) else {
         return Ok(false);
     };
-    if command != "ensure-hcodex-runtime" {
-        return Ok(false);
+    match command {
+        "ensure-hcodex-runtime" => {
+            let config = EnsureHcodexRuntimeCli::parse(&args[1..])?;
+            ensure_hcodex_runtime_inner(
+                &config.workspace,
+                &config.data_root,
+                config.parent_pid,
+                config.ready_file.as_deref(),
+            )
+            .await?;
+            Ok(true)
+        }
+        "run-hcodex-session" => {
+            let config = RunHcodexSessionCli::parse(&args[1..])?;
+            run_hcodex_session(&config).await?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
-    let config = EnsureHcodexRuntimeCli::parse(&args[1..])?;
-    ensure_hcodex_runtime_inner(
-        &config.workspace,
-        &config.data_root,
-        config.parent_pid,
-        config.ready_file.as_deref(),
-    )
-    .await?;
-    Ok(true)
 }
 
 struct EnsureHcodexRuntimeCli {
@@ -34,6 +45,15 @@ struct EnsureHcodexRuntimeCli {
     data_root: PathBuf,
     parent_pid: Option<u32>,
     ready_file: Option<PathBuf>,
+}
+
+struct RunHcodexSessionCli {
+    workspace: PathBuf,
+    data_root: PathBuf,
+    thread_key: String,
+    codex_bin: PathBuf,
+    remote_ws_url: String,
+    codex_args: Vec<OsString>,
 }
 
 impl EnsureHcodexRuntimeCli {
@@ -85,6 +105,67 @@ impl EnsureHcodexRuntimeCli {
     }
 }
 
+impl RunHcodexSessionCli {
+    fn parse(args: &[OsString]) -> Result<Self> {
+        let mut workspace: Option<PathBuf> = None;
+        let mut data_root: Option<PathBuf> = None;
+        let mut thread_key: Option<String> = None;
+        let mut codex_bin: Option<PathBuf> = None;
+        let mut remote_ws_url: Option<String> = None;
+        let mut codex_args = Vec::new();
+        let mut iter = args.iter();
+        while let Some(flag) = iter.next() {
+            let flag = flag
+                .to_str()
+                .ok_or_else(|| anyhow!("run-hcodex-session arguments must be valid utf-8"))?;
+            match flag {
+                "--workspace" => {
+                    let value = iter.next().context("missing value for --workspace")?;
+                    workspace = Some(PathBuf::from(value));
+                }
+                "--data-root" => {
+                    let value = iter.next().context("missing value for --data-root")?;
+                    data_root = Some(PathBuf::from(value));
+                }
+                "--thread-key" => {
+                    let value = iter
+                        .next()
+                        .context("missing value for --thread-key")?
+                        .to_str()
+                        .context("--thread-key must be valid utf-8")?;
+                    thread_key = Some(value.to_owned());
+                }
+                "--codex-bin" => {
+                    let value = iter.next().context("missing value for --codex-bin")?;
+                    codex_bin = Some(PathBuf::from(value));
+                }
+                "--remote-ws-url" => {
+                    let value = iter
+                        .next()
+                        .context("missing value for --remote-ws-url")?
+                        .to_str()
+                        .context("--remote-ws-url must be valid utf-8")?;
+                    remote_ws_url = Some(value.to_owned());
+                }
+                "--" => {
+                    codex_args.extend(iter.cloned());
+                    break;
+                }
+                other => bail!("unsupported run-hcodex-session argument: {other}"),
+            }
+        }
+
+        Ok(Self {
+            workspace: workspace.context("missing required --workspace")?,
+            data_root: data_root.context("missing required --data-root")?,
+            thread_key: thread_key.context("missing required --thread-key")?,
+            codex_bin: codex_bin.context("missing required --codex-bin")?,
+            remote_ws_url: remote_ws_url.context("missing required --remote-ws-url")?,
+            codex_args,
+        })
+    }
+}
+
 async fn ensure_hcodex_runtime_inner(
     workspace: &Path,
     data_root: &Path,
@@ -111,6 +192,47 @@ async fn ensure_hcodex_runtime_inner(
         }
     }
     Ok(())
+}
+
+async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
+    let mut command = Command::new(&config.codex_bin);
+    command
+        .current_dir(&config.workspace)
+        .arg("--remote")
+        .arg(&config.remote_ws_url)
+        .args(&config.codex_args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", config.codex_bin.display()))?;
+    let child_pid = child.id().context("spawned codex child is missing pid")?;
+    let shell_pid = std::process::id();
+    let child_command = format!(
+        "{} --remote {}",
+        config.codex_bin.display(),
+        config.remote_ws_url
+    );
+    record_hcodex_launcher_started(
+        &config.workspace,
+        &config.thread_key,
+        shell_pid,
+        child_pid,
+        &child_command,
+    )
+    .await?;
+
+    let status = child.wait().await.context("failed waiting for codex child")?;
+    record_hcodex_launcher_ended(&config.workspace, &config.thread_key, shell_pid, child_pid)
+        .await?;
+
+    let repository = ThreadRepository::open(&config.data_root).await?;
+    let _ = repository
+        .mark_tui_adoption_pending_for_thread_key(&config.thread_key)
+        .await?;
+
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 async fn write_ready_file(path: Option<&Path>) -> Result<()> {

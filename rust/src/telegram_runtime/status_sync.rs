@@ -584,9 +584,9 @@ async fn sync_cli_transcript_mirrors_once(
         let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
             continue;
         };
-        let Some(previous_offset) = workspace_event_offsets.get(&workspace_key).copied() else {
-            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
-            continue;
+        let previous_offset = match workspace_event_offsets.get(&workspace_key).copied() {
+            Some(offset) => offset,
+            None => initial_workspace_event_offset(&lines, &owner_claim),
         };
         let new_offset = lines.len();
         for line in lines.iter().skip(previous_offset) {
@@ -701,6 +701,16 @@ fn cli_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {
     format!("{workspace_key}::{session_id}")
 }
 
+fn initial_workspace_event_offset(lines: &[String], owner_claim: &CliOwnerClaim) -> usize {
+    lines.iter()
+        .position(|line| {
+            serde_json::from_str::<WorkspaceStatusEventRecord>(line)
+                .ok()
+                .is_some_and(|event| event.occurred_at >= owner_claim.started_at)
+        })
+        .unwrap_or(lines.len())
+}
+
 fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
     match event.payload.get("client").and_then(Value::as_str) {
         Some("threadbridge-tui-proxy") => TranscriptMirrorOrigin::Tui,
@@ -781,15 +791,16 @@ fn cli_mirror_entry_from_event(
 mod tests {
     use super::{
         CliTopicMarker, STARTUP_STALE_BUSY_RECOVERED_LOG, cli_mirror_entry_from_event,
-        effective_busy_snapshot_for_binding, reconcile_stale_bot_busy_sessions_for_repository,
-        render_topic_title, topic_marker_for_snapshot,
+        effective_busy_snapshot_for_binding, initial_workspace_event_offset,
+        reconcile_stale_bot_busy_sessions_for_repository, render_topic_title,
+        topic_marker_for_snapshot,
     };
     use crate::repository::{
         SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope,
         ThreadStatus, TranscriptMirrorOrigin, TranscriptMirrorRole,
     };
     use crate::workspace_status::{
-        SessionCurrentStatus, SessionStatusOwner, WorkspaceStatusEventRecord,
+        CliOwnerClaim, SessionCurrentStatus, SessionStatusOwner, WorkspaceStatusEventRecord,
         WorkspaceStatusPhase, ensure_workspace_status_surface, read_session_status,
         record_bot_status_event, session_status_path,
     };
@@ -952,6 +963,44 @@ mod tests {
         assert_eq!(entry.origin, TranscriptMirrorOrigin::Tui);
         assert_eq!(entry.role, TranscriptMirrorRole::User);
         assert_eq!(entry.text, "continue the tui session");
+    }
+
+    #[test]
+    fn initial_offset_starts_from_owner_claim_started_at() {
+        let owner_claim = CliOwnerClaim {
+            schema_version: 2,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            thread_key: "thread-key".to_owned(),
+            shell_pid: 42,
+            session_id: Some("thr_tui".to_owned()),
+            child_pid: Some(77),
+            child_pgid: None,
+            child_command: Some("codex --remote".to_owned()),
+            started_at: "2026-03-19T00:00:10.000Z".to_owned(),
+            updated_at: "2026-03-19T00:00:10.000Z".to_owned(),
+        };
+        let lines = vec![
+            serde_json::to_string(&WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "user_prompt_submitted".to_owned(),
+                source: crate::workspace_status::SessionStatusOwner::Cli,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
+                payload: json!({"session_id": "thr_old", "prompt": "old"}),
+            })
+            .unwrap(),
+            serde_json::to_string(&WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "user_prompt_submitted".to_owned(),
+                source: crate::workspace_status::SessionStatusOwner::Cli,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:11.000Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "prompt": "new"}),
+            })
+            .unwrap(),
+        ];
+
+        assert_eq!(initial_workspace_event_offset(&lines, &owner_claim), 1);
     }
 
     #[test]

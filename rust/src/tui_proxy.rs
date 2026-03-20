@@ -212,9 +212,6 @@ async fn handle_proxy_connection(
     }
 
     record_tui_proxy_disconnected(&workspace_path, &thread_key, current_session_id.as_deref()).await?;
-    let _ = repository
-        .mark_tui_adoption_pending_for_thread_key(&thread_key)
-        .await?;
     debug!(
         event = "tui_proxy.connection.closed",
         workspace = %workspace_path.display(),

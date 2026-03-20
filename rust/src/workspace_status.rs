@@ -471,11 +471,16 @@ pub async fn record_tui_proxy_connected(
     session_id: &str,
 ) -> Result<SessionCurrentStatus> {
     ensure_workspace_status_surface(workspace_path).await?;
-    let mut owner_claim = default_cli_owner_claim(workspace_path, thread_key.to_owned(), 0);
+    let mut owner_claim = read_cli_owner_claim(workspace_path)
+        .await?
+        .filter(|claim| claim.thread_key == thread_key)
+        .unwrap_or_else(|| default_cli_owner_claim(workspace_path, thread_key.to_owned(), 0));
+    owner_claim.thread_key = thread_key.to_owned();
     owner_claim.session_id = Some(session_id.to_owned());
     owner_claim.updated_at = now_iso();
     write_cli_owner_claim(workspace_path, &owner_claim).await?;
 
+    deactivate_other_tui_proxy_sessions(workspace_path, session_id).await?;
     let mut current = read_session_status(workspace_path, session_id)
         .await?
         .unwrap_or_else(|| default_session_status(workspace_path, session_id, SessionStatusOwner::Cli));
@@ -484,10 +489,10 @@ pub async fn record_tui_proxy_connected(
     current.owner = SessionStatusOwner::Cli;
     current.live = true;
     current.phase = WorkspaceStatusPhase::ShellActive;
-    current.shell_pid = Some(0);
-    current.child_pid = None;
-    current.child_pgid = None;
-    current.child_command = None;
+    current.shell_pid = Some(owner_claim.shell_pid);
+    current.child_pid = owner_claim.child_pid;
+    current.child_pgid = owner_claim.child_pgid;
+    current.child_command = owner_claim.child_command.clone();
     current.client = Some("threadbridge-tui-proxy".to_owned());
     current.turn_id = None;
     current.updated_at = now_iso();
@@ -576,18 +581,56 @@ pub async fn record_tui_proxy_completed(
 
 pub async fn record_tui_proxy_disconnected(
     workspace_path: &Path,
-    thread_key: &str,
+    _thread_key: &str,
     session_id: Option<&str>,
 ) -> Result<()> {
     ensure_workspace_status_surface(workspace_path).await?;
-    let existing_claim = read_cli_owner_claim(workspace_path).await?;
-    if existing_claim
-        .as_ref()
-        .is_some_and(|claim| claim.thread_key == thread_key)
-    {
-        remove_cli_owner_claim(workspace_path).await?;
-    }
     if let Some(session_id) = session_id
+        && let Some(mut current) = read_session_status(workspace_path, session_id).await?
+    {
+        current.updated_at = now_iso();
+        write_session_status(workspace_path, &current).await?;
+    }
+    let aggregate = read_workspace_aggregate_status(workspace_path).await?;
+    let _ = refresh_workspace_aggregate_status(workspace_path, aggregate).await?;
+    Ok(())
+}
+
+pub async fn record_hcodex_launcher_started(
+    workspace_path: &Path,
+    thread_key: &str,
+    shell_pid: u32,
+    child_pid: u32,
+    child_command: &str,
+) -> Result<()> {
+    ensure_workspace_status_surface(workspace_path).await?;
+    let mut owner_claim = default_cli_owner_claim(workspace_path, thread_key.to_owned(), shell_pid);
+    owner_claim.child_pid = Some(child_pid);
+    owner_claim.child_command = Some(child_command.to_owned());
+    owner_claim.updated_at = now_iso();
+    write_cli_owner_claim(workspace_path, &owner_claim).await?;
+    Ok(())
+}
+
+pub async fn record_hcodex_launcher_ended(
+    workspace_path: &Path,
+    thread_key: &str,
+    shell_pid: u32,
+    child_pid: u32,
+) -> Result<()> {
+    ensure_workspace_status_surface(workspace_path).await?;
+    let Some(owner_claim) = read_cli_owner_claim(workspace_path).await? else {
+        return Ok(());
+    };
+    if owner_claim.thread_key != thread_key
+        || owner_claim.shell_pid != shell_pid
+        || owner_claim.child_pid != Some(child_pid)
+    {
+        return Ok(());
+    }
+
+    remove_cli_owner_claim(workspace_path).await?;
+    if let Some(session_id) = owner_claim.session_id.as_deref()
         && let Some(mut current) = read_session_status(workspace_path, session_id).await?
     {
         current.live = false;
@@ -598,6 +641,26 @@ pub async fn record_tui_proxy_disconnected(
     }
     let aggregate = read_workspace_aggregate_status(workspace_path).await?;
     let _ = refresh_workspace_aggregate_status(workspace_path, aggregate).await?;
+    Ok(())
+}
+
+async fn deactivate_other_tui_proxy_sessions(
+    workspace_path: &Path,
+    active_session_id: &str,
+) -> Result<()> {
+    for mut session in list_all_session_statuses(workspace_path).await? {
+        if session.session_id == active_session_id
+            || session.client.as_deref() != Some("threadbridge-tui-proxy")
+            || !session.live
+        {
+            continue;
+        }
+        session.live = false;
+        session.phase = WorkspaceStatusPhase::Idle;
+        session.turn_id = None;
+        session.updated_at = now_iso();
+        write_session_status(workspace_path, &session).await?;
+    }
     Ok(())
 }
 
@@ -663,8 +726,9 @@ mod tests {
     use super::{
         SessionCurrentStatus, SessionStatusOwner, WorkspaceStatusCache, WorkspaceStatusPhase,
         busy_selected_session_status, current_status_path, ensure_workspace_status_surface,
-        list_live_cli_sessions, read_session_status, read_workspace_aggregate_status,
-        record_bot_status_event, session_status_path,
+        list_live_cli_sessions, read_cli_owner_claim, read_session_status,
+        read_workspace_aggregate_status, record_bot_status_event, record_hcodex_launcher_ended,
+        record_hcodex_launcher_started, record_tui_proxy_connected, session_status_path,
     };
     use std::path::PathBuf;
     use tokio::fs;
@@ -867,5 +931,65 @@ mod tests {
         let sessions = list_live_cli_sessions(&workspace).await.unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "thr_cli");
+    }
+
+    #[tokio::test]
+    async fn tui_proxy_connected_deactivates_previous_tui_session() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
+            .await
+            .unwrap();
+
+        record_tui_proxy_connected(&workspace, "thread-key", "thr_old")
+            .await
+            .unwrap();
+        record_tui_proxy_connected(&workspace, "thread-key", "thr_new")
+            .await
+            .unwrap();
+
+        let old_session = read_session_status(&workspace, "thr_old")
+            .await
+            .unwrap()
+            .unwrap();
+        let new_session = read_session_status(&workspace, "thr_new")
+            .await
+            .unwrap()
+            .unwrap();
+        let owner_claim = read_cli_owner_claim(&workspace).await.unwrap().unwrap();
+        let aggregate = read_workspace_aggregate_status(&workspace).await.unwrap();
+
+        assert!(!old_session.live);
+        assert!(new_session.live);
+        assert_eq!(new_session.shell_pid, Some(42));
+        assert_eq!(new_session.child_pid, Some(77));
+        assert_eq!(owner_claim.session_id.as_deref(), Some("thr_new"));
+        assert_eq!(aggregate.live_cli_session_ids, vec!["thr_new".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn launcher_end_clears_owner_and_marks_session_not_live() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
+            .await
+            .unwrap();
+        record_tui_proxy_connected(&workspace, "thread-key", "thr_new")
+            .await
+            .unwrap();
+
+        record_hcodex_launcher_ended(&workspace, "thread-key", 42, 77)
+            .await
+            .unwrap();
+
+        let owner_claim = read_cli_owner_claim(&workspace).await.unwrap();
+        let session = read_session_status(&workspace, "thr_new")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(owner_claim.is_none());
+        assert!(!session.live);
+        assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
     }
 }
