@@ -16,23 +16,27 @@
 - Telegram bot 已從 per-turn `stdio://` child 改成連共享 websocket app-server
 - `hcodex` 已改成受管 remote TUI 入口：
   - 透過 `resolve_hcodex_launch.py` 解析 workspace daemon 與 bound thread
-  - 實際啟動 `codex --remote <ws-url> ...`
+  - 優先透過 threadBridge websocket proxy 啟動 `codex --remote <ws-url> ...`
+- proxy-backed `hcodex` tracking 已落地：
+  - threadBridge 會攔截 TUI 的 `thread/resume` / `thread/start`
+  - `tui_active_codex_thread_id` 會隨 TUI `resume` 與 `new session` 更新
+- remote TUI turn mirror 已落地：
+  - Telegram 會自動鏡像受管 TUI session 的 user / assistant 對話內容
+  - proxy 事件會被正式標成 `TUI`，不再混用舊 `CLI` 顯示語義
+- adoption flow 已落地：
+  - TUI 結束且 session 不同時，bot 會發 `tui_session_adoption_prompt`
+  - inline buttons 可採納或恢復原對話
+  - 忽略 prompt 後，下一條 Telegram 文字或圖片訊息會 auto-adopt
+- workspace-wide busy 已接入 remote TUI activity：
+  - 只要 `tui_active_codex_thread_id` 的 turn 正在跑，Telegram 會命中 busy gate
 - `/attach_cli_session` 已從 command surface 移除
 - topic title 已從 `.cli/.cli!/.attach` 收斂成 `busy/broken`
+- `threadbridge_viewer` 與 attach-intent handoff plumbing 已從 runtime 中移除
 
 目前仍未完成：
 
-- proxy-backed `hcodex` tracking
-  - threadBridge 還無法攔截 TUI 內部的 `thread/resume` / `thread/start`
-  - 因此 `tui_active_codex_thread_id` 還沒有被正式 runtime 更新
-- remote TUI turn mirror
-  - Telegram 還不能自動鏡像 shared TUI session 的 user / assistant 對話內容
-- adoption flow
-  - TUI 結束後的 `tui_session_adoption_prompt`
-  - inline buttons
-  - ignore prompt 後的 auto-adopt
-- workspace-wide busy 尚未接入 remote TUI activity
-  - 現在的 busy gate 仍主要來自 selected session snapshot 與既有 workspace status surface
+- shared runtime 仍依賴 `codex-sync` workspace status / event surface 作為兼容層
+- 舊 viewer/attach 流程的歷史文檔仍待清理或移入明確的 archive 區
 
 ## 現況定位
 
@@ -85,43 +89,26 @@
   - `· broken`
 - `/attach_cli_session`
   - 已不再是正式控制面
-- `threadbridge_viewer`
-  - 不再是正式 handoff UX 的一部分
+- `threadbridge_viewer` / attach-intent handoff
+  - 已不再存在於 runtime
 
-## 尚未完成的關鍵缺口
+## 剩餘缺口
 
-### 1. TUI runtime 觀測
+### 1. 兼容層收斂
 
-threadBridge 雖然已經把 `hcodex` 接到 shared daemon，但還沒有一層 proxy 或 observer 去精準知道：
+目前 remote TUI mirror / busy / adoption 雖然都已經落地，但仍透過既有 `codex-sync` workspace status / events surface 收斂。
 
-- TUI 連到哪個 thread id
-- TUI 是否在介面內切了 `new session`
-- TUI 何時真正結束
+後續要決定的是：
 
-所以目前 `tui_active_codex_thread_id` 只是資料模型準備完成，尚未進入正式 runtime 寫入路徑。
+- 這層 `codex-sync` 是否保留成長期兼容面
+- 或者改成更明確的 shared-runtime 專用事件面
 
-### 2. Mirror
+### 2. 文檔與術語收尾
 
-產品目標已經固定為：
+runtime 已移除 viewer/attach handoff，但 repo 內仍有部分歷史文檔保留舊模型敘述，後續需要：
 
-- 無論 `tui_active_codex_thread_id` 是否等於 `current_codex_thread_id`
-- Telegram 都應該自動鏡像受管 TUI session 的對話內容
-
-但這條 mirror path 目前尚未完成。
-
-既有 `codex-sync` hooks 仍可提供一部分 legacy CLI transcript mirror，但那不是 shared remote TUI 的正式答案。
-
-### 3. Adoption
-
-當 `tui_active_codex_thread_id != current_codex_thread_id` 且 TUI 結束時，最終目標是：
-
-- bot 發送 `tui_session_adoption_prompt`
-- 提供：
-  - `繼續 TUI 對話`
-  - `恢復原對話`
-- 若使用者忽略 prompt，下一條普通 Telegram 訊息自動採納 `tui_active_codex_thread_id`
-
-這條 adoption flow 目前尚未實作。
+- 標註為 archive / historical
+- 或整理後移出主要閱讀動線
 
 ## 與舊 Hook V1 的關係
 
@@ -141,7 +128,6 @@ threadBridge 雖然已經把 `hcodex` 接到 shared daemon，但還沒有一層 
 
 ## 下一步
 
-1. 為 `hcodex` 補一個 threadBridge-owned websocket proxy，能觀察 `thread/resume`、`thread/start` 與連線關閉事件。
-2. 讓 proxy 正式寫入 `tui_active_codex_thread_id`。
-3. 為 remote TUI 加 mirror observer，把 TUI session 內容同步到 Telegram。
-4. 補 `tui_session_adoption_prompt`、callback handling 與 ignore-prompt auto-adopt。
+1. 決定 `codex-sync` workspace status / event surface 在 shared-runtime 中的長期角色。
+2. 清理或歸檔仍描述 viewer/attach handoff 的歷史文檔。
+3. 視需要再把 TUI mirror / busy / adoption 從兼容層抽成更明確的 runtime surface。

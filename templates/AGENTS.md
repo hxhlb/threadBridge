@@ -33,7 +33,7 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 - Source `./.threadbridge/shell/codex-sync.bash` before using `hcodex` in this workspace.
 - `hcodex` resolves the shared workspace daemon from `./.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
 - With no extra args, `hcodex` resumes the current Telegram-bound Codex thread for this workspace.
-- The managed `.codex/hooks.json` and `codex-sync` state files are still installed as compatibility surfaces during the migration, but viewer handoff and `/attach_cli_session` are no longer part of the supported path.
+- The managed `.codex/hooks.json` and `codex-sync` state files are still installed as compatibility surfaces during the migration, but the old viewer/attach handoff runtime path has been removed.
 
 ### `./.threadbridge/bin/build_prompt_config`
 

@@ -32,11 +32,12 @@
   - context ratio 仍未實作
 - [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
   - `/new_thread`、`/bind_workspace`、`/new`、`/reconnect_codex` 的基本生命週期已存在
-  - `current_codex_thread_id` 已成為 canonical pointer，但 TUI adoption flow 仍待完成
+  - `current_codex_thread_id` 已成為 canonical pointer，`tui_active_codex_thread_id` / adoption 也已進入正式 runtime
+  - 剩餘工作主要是兼容層與狀態語義收尾
 - [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
-  - shared app-server daemon、`hcodex -> codex --remote`、`current_codex_thread_id` 重命名已落地
-  - `/attach_cli_session`、viewer handoff、`.cli/.attach` title 已退場
-  - TUI proxy、`tui_active_codex_thread_id` 真正追蹤、adoption prompt 與 auto-adopt 仍未完成
+  - shared app-server daemon、`hcodex -> codex --remote`、TUI proxy、mirror、adoption、auto-adopt 已落地
+  - `/attach_cli_session`、viewer handoff、attach-intent、`.cli/.attach` title 已退場
+  - 仍有 `codex-sync` 兼容層與歷史文檔收尾工作
 
 ## 純草稿
 

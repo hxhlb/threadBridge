@@ -76,7 +76,7 @@ scripts/local_threadbridge.sh restart --codex-source alpha
 
 - After `/bind_workspace`, source `./.threadbridge/shell/codex-sync.bash` inside that workspace and use `hcodex`.
 - With no extra args, `hcodex` resumes the thread's current Codex session through the shared workspace daemon.
-- The shell snippet still installs legacy `codex-sync` hooks and state files for compatibility while the shared-runtime migration is in progress, but `/attach_cli_session` and viewer handoff are no longer part of the supported command surface.
+- The shell snippet still installs legacy `codex-sync` hooks and state files as a compatibility layer for status/mirror delivery, but the old `/attach_cli_session` and viewer handoff runtime path has been removed.
 - Raw `codex` launches that bypass `hcodex` are not part of the managed local path.
 
 ## Commands

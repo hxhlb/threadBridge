@@ -15,8 +15,7 @@
 
 目前尚未完成：
 
-- `tui_active_codex_thread_id` 的正式 runtime 更新
-- TUI adoption flow
+- `codex-sync` 兼容層的長期去留
 - 與 `runtime-state-machine` 的完整對齊
 
 ## 核心模型
@@ -107,7 +106,7 @@
   - 而是先更新 `tui_active_codex_thread_id`
   - 等 TUI 結束後再走 adoption flow
 
-所以未來的正確語義是：
+所以現在的正確語義是：
 
 - `current_codex_thread_id` 是 Telegram continuity
 - `tui_active_codex_thread_id` 是 TUI runtime state
@@ -115,7 +114,6 @@
 
 ## 後續工作
 
-1. 為 shared remote TUI 補正式 thread tracking。
-2. 讓 `tui_active_codex_thread_id` 不再只是資料模型欄位。
-3. 完成 TUI adoption prompt 與 auto-adopt。
-4. 把 `session-lifecycle`、`session-level-cli-telegram-sync`、`runtime-state-machine` 的狀態語義完全收斂。
+1. 決定 `codex-sync` 兼容層是否保留為長期 shared-runtime surface。
+2. 把 `session-lifecycle`、`session-level-cli-telegram-sync`、`runtime-state-machine` 的狀態語義完全收斂。
+3. 清理仍描述舊 viewer/attach handoff 的歷史文檔。
