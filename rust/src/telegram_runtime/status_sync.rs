@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use serde_json::Value;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ThreadId};
 use tracing::{info, warn};
@@ -156,6 +157,41 @@ pub(crate) fn tui_adoption_prompt_markup(thread_key: &str) -> InlineKeyboardMark
     ]])
 }
 
+async fn effective_busy_snapshot_for_binding(
+    workspace_path: &Path,
+    binding: Option<&SessionBinding>,
+) -> Result<Option<SessionCurrentStatus>> {
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let current_snapshot = if let Some(session_id) = usable_bound_session_id(Some(binding)) {
+        read_session_status(workspace_path, session_id).await?
+    } else {
+        None
+    };
+    if current_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
+    {
+        return Ok(current_snapshot);
+    }
+    let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref() else {
+        return Ok(current_snapshot);
+    };
+    if Some(tui_session_id) == usable_bound_session_id(Some(binding)) {
+        return Ok(current_snapshot);
+    }
+    let tui_snapshot = read_session_status(workspace_path, tui_session_id).await?;
+    if tui_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
+    {
+        Ok(tui_snapshot)
+    } else {
+        Ok(current_snapshot)
+    }
+}
+
 pub(crate) async fn refresh_thread_topic_title(
     bot: &Bot,
     state: &AppState,
@@ -172,12 +208,7 @@ pub(crate) async fn refresh_thread_topic_title(
         .map(PathBuf::from);
     let current_snapshot = if let Some(path) = workspace_path.as_ref() {
         let _ = read_workspace_status_with_cache(&state.workspace_status_cache, path).await?;
-        let current_session_id = usable_bound_session_id(session.as_ref());
-        if let Some(current_session_id) = current_session_id {
-            read_session_status(path, current_session_id).await?
-        } else {
-            None
-        }
+        effective_busy_snapshot_for_binding(path, session.as_ref()).await?
     } else {
         None
     };
@@ -434,10 +465,8 @@ async fn sync_workspace_titles_once(
         } else {
             None
         };
-        let current_snapshot = if let (Some(workspace_path), Some(session_id)) =
-            (workspace_path.as_ref(), usable_bound_session_id(session.as_ref()))
-        {
-            read_session_status(workspace_path, session_id).await?
+        let current_snapshot = if let Some(workspace_path) = workspace_path.as_ref() {
+            effective_busy_snapshot_for_binding(workspace_path, session.as_ref()).await?
         } else {
             None
         };
@@ -615,7 +644,7 @@ async fn sync_cli_transcript_mirrors_once(
                             bot,
                             ChatId(owner_record.metadata.chat_id),
                             Some(thread_id_from_i32(message_thread_id)),
-                            format!("CLI: {}", entry.text),
+                            format!("{}: {}", mirror_prefix_for_entry(&entry), entry.text),
                         )
                         .await?;
                     }
@@ -653,16 +682,11 @@ async fn sync_cli_transcript_mirrors_once(
                     .append_transcript_mirror(&owner_record, &entry)
                     .await?;
                 if let Some(message_thread_id) = owner_record.metadata.message_thread_id {
-                    let prefix = match (entry.origin.clone(), entry.role.clone()) {
-                        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::User) => "CLI",
-                        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::Assistant) => "Codex",
-                        _ => continue,
-                    };
                     send_scoped_message(
                         bot,
                         ChatId(owner_record.metadata.chat_id),
                         Some(thread_id_from_i32(message_thread_id)),
-                        format!("{prefix}: {}", entry.text),
+                        format!("{}: {}", mirror_prefix_for_entry(&entry), entry.text),
                     )
                     .await?;
                 }
@@ -675,6 +699,23 @@ async fn sync_cli_transcript_mirrors_once(
 
 fn cli_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {
     format!("{workspace_key}::{session_id}")
+}
+
+fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
+    match event.payload.get("client").and_then(Value::as_str) {
+        Some("threadbridge-tui-proxy") => TranscriptMirrorOrigin::Tui,
+        _ => TranscriptMirrorOrigin::Cli,
+    }
+}
+
+fn mirror_prefix_for_entry(entry: &TranscriptMirrorEntry) -> &'static str {
+    match (&entry.origin, &entry.role) {
+        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::User) => "CLI",
+        (TranscriptMirrorOrigin::Cli, TranscriptMirrorRole::Assistant) => "Codex",
+        (TranscriptMirrorOrigin::Tui, TranscriptMirrorRole::User) => "TUI",
+        (TranscriptMirrorOrigin::Tui, TranscriptMirrorRole::Assistant) => "TUI Codex",
+        _ => "Codex",
+    }
 }
 
 async fn read_workspace_event_lines(workspace_path: &Path) -> Result<Option<Vec<String>>> {
@@ -704,7 +745,7 @@ fn cli_mirror_entry_from_event(
             Some(TranscriptMirrorEntry {
                 timestamp: event.occurred_at.clone(),
                 session_id: session_id.to_owned(),
-                origin: TranscriptMirrorOrigin::Cli,
+                origin: transcript_origin_from_event(event),
                 role: TranscriptMirrorRole::User,
                 delivery: TranscriptMirrorDelivery::Final,
                 text: text.to_owned(),
@@ -726,7 +767,7 @@ fn cli_mirror_entry_from_event(
             Some(TranscriptMirrorEntry {
                 timestamp: event.occurred_at.clone(),
                 session_id: session_id.to_owned(),
-                origin: TranscriptMirrorOrigin::Cli,
+                origin: transcript_origin_from_event(event),
                 role: TranscriptMirrorRole::Assistant,
                 delivery: TranscriptMirrorDelivery::Final,
                 text: text.to_owned(),
@@ -740,12 +781,12 @@ fn cli_mirror_entry_from_event(
 mod tests {
     use super::{
         CliTopicMarker, STARTUP_STALE_BUSY_RECOVERED_LOG, cli_mirror_entry_from_event,
-        reconcile_stale_bot_busy_sessions_for_repository, render_topic_title,
-        topic_marker_for_snapshot,
+        effective_busy_snapshot_for_binding, reconcile_stale_bot_busy_sessions_for_repository,
+        render_topic_title, topic_marker_for_snapshot,
     };
     use crate::repository::{
-        ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope, ThreadStatus,
-        TranscriptMirrorOrigin, TranscriptMirrorRole,
+        SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope,
+        ThreadStatus, TranscriptMirrorOrigin, TranscriptMirrorRole,
     };
     use crate::workspace_status::{
         SessionCurrentStatus, SessionStatusOwner, WorkspaceStatusEventRecord,
@@ -891,6 +932,26 @@ mod tests {
         assert_eq!(entry.origin, TranscriptMirrorOrigin::Cli);
         assert_eq!(entry.role, TranscriptMirrorRole::User);
         assert_eq!(entry.text, "inspect this repo");
+    }
+
+    #[test]
+    fn tui_user_prompt_event_creates_tui_user_entry() {
+        let event = WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "user_prompt_submitted".to_owned(),
+            source: crate::workspace_status::SessionStatusOwner::Cli,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
+            payload: json!({
+                "session_id": "thr_tui",
+                "prompt": "continue the tui session",
+                "client": "threadbridge-tui-proxy"
+            }),
+        };
+        let entry = cli_mirror_entry_from_event(&event, Some("thr_tui")).expect("tui user entry");
+        assert_eq!(entry.origin, TranscriptMirrorOrigin::Tui);
+        assert_eq!(entry.role, TranscriptMirrorRole::User);
+        assert_eq!(entry.text, "continue the tui session");
     }
 
     #[test]
@@ -1061,5 +1122,79 @@ mod tests {
         assert!(log_b.contains(STARTUP_STALE_BUSY_RECOVERED_LOG));
 
         let _ = fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn effective_busy_snapshot_prefers_tui_when_current_is_idle() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let current = SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: workspace.display().to_string(),
+            session_id: "thr_current".to_owned(),
+            owner: SessionStatusOwner::Bot,
+            live: false,
+            phase: WorkspaceStatusPhase::Idle,
+            shell_pid: None,
+            child_pid: None,
+            child_pgid: None,
+            child_command: None,
+            client: Some("threadbridge".to_owned()),
+            turn_id: None,
+            summary: None,
+            updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
+        };
+        let tui = SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: workspace.display().to_string(),
+            session_id: "thr_tui".to_owned(),
+            owner: SessionStatusOwner::Cli,
+            live: true,
+            phase: WorkspaceStatusPhase::TurnRunning,
+            shell_pid: Some(0),
+            child_pid: None,
+            child_pgid: None,
+            child_command: None,
+            client: Some("threadbridge-tui-proxy".to_owned()),
+            turn_id: Some("turn-1".to_owned()),
+            summary: Some("prompt".to_owned()),
+            updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
+        };
+        fs::write(
+            session_status_path(&workspace, "thr_current"),
+            format!("{}\n", serde_json::to_string_pretty(&current).unwrap()),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            session_status_path(&workspace, "thr_tui"),
+            format!("{}\n", serde_json::to_string_pretty(&tui).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let binding: SessionBinding = serde_json::from_value(serde_json::json!({
+            "schema_version": 3,
+            "current_codex_thread_id": "thr_current",
+            "workspace_cwd": workspace.display().to_string(),
+            "bound_at": null,
+            "initialized_at": null,
+            "last_verified_at": null,
+            "session_broken": false,
+            "session_broken_at": null,
+            "session_broken_reason": null,
+            "tui_active_codex_thread_id": "thr_tui",
+            "tui_session_adoption_pending": false,
+            "tui_session_adoption_prompt_message_id": null,
+            "updated_at": "2026-03-19T00:00:00.000Z"
+        }))
+        .unwrap();
+
+        let snapshot = effective_busy_snapshot_for_binding(&workspace, Some(&binding))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.session_id, "thr_tui");
+        assert_eq!(snapshot.phase, WorkspaceStatusPhase::TurnRunning);
     }
 }

@@ -581,6 +581,7 @@ pub async fn record_tui_proxy_prompt(
         payload: json!({
             "session_id": session_id,
             "prompt": prompt,
+            "client": "threadbridge-tui-proxy",
         }),
     };
     append_status_event(workspace_path, &record).await?;
@@ -620,6 +621,7 @@ pub async fn record_tui_proxy_completed(
         payload: json!({
             "thread-id": session_id,
             "last-assistant-message": last_assistant_message,
+            "client": "threadbridge-tui-proxy",
         }),
     };
     append_status_event(workspace_path, &record).await?;

@@ -228,9 +228,9 @@ build_bot() {
     export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
     export RUSTUP_HOME="$RUSTUP_HOME_DIR"
     if [[ "$BUILD_PROFILE" == "release" ]]; then
-      cargo build --release --bin threadbridge --bin threadbridge_viewer
+      cargo build --release --bin threadbridge
     else
-      cargo build --bin threadbridge --bin threadbridge_viewer
+      cargo build --bin threadbridge
     fi
   )
 }

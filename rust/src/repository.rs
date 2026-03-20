@@ -104,6 +104,7 @@ pub struct ThreadLogEntry {
 pub enum TranscriptMirrorOrigin {
     Cli,
     Telegram,
+    Tui,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

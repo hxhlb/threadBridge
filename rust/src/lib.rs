@@ -8,6 +8,5 @@ pub mod telegram_probe;
 pub mod telegram_runtime;
 pub mod tool_results;
 pub mod tui_proxy;
-pub mod viewer_text;
 pub mod workspace;
 pub mod workspace_status;
