@@ -78,7 +78,8 @@
 - `hcodex` 會：
   - 讀取 `./.threadbridge/state/app-server/current.json`
   - 讀取 bot-local binding
-  - 預設執行 `codex --remote <ws-url> resume <current_codex_thread_id>`
+  - 預設執行 `codex --remote <ws-url>`
+  - 若要接續既有 session，顯式使用 `hcodex resume <session-id>`
 - `hcodex --thread-key <key>` 可在同 workspace 綁定多個 Telegram threads 時消歧義
 
 ### 3. Title 與 UX

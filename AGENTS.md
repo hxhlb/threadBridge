@@ -140,7 +140,8 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 
 - Run `./.threadbridge/bin/hcodex` for the managed local TUI path in this workspace.
 - `hcodex` resolves the shared workspace daemon from `./.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
-- With no extra args, `hcodex` resumes the current Telegram-bound Codex thread for this workspace.
+- With no extra args, `hcodex` starts a fresh local TUI session for this workspace.
+- Use `hcodex resume <session-id>` when you explicitly want to continue an existing Codex session.
 
 ### `./.threadbridge/bin/build_prompt_config`
 

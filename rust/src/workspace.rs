@@ -191,7 +191,7 @@ fn build_hcodex_launcher_script(
         "    ;;".to_owned(),
         "esac".to_owned(),
         "if [ \"${#codex_args[@]}\" -eq 0 ]; then".to_owned(),
-        "  exec \"$codex_bin\" --remote \"$remote_ws_url\" resume \"$current_thread_id\"".to_owned(),
+        "  exec \"$codex_bin\" --remote \"$remote_ws_url\"".to_owned(),
         "fi".to_owned(),
         "exec \"$codex_bin\" --remote \"$remote_ws_url\" \"${codex_args[@]}\"".to_owned(),
         "".to_owned(),
