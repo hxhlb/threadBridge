@@ -94,6 +94,11 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 input,
 select {
   border: 1px solid var(--border);

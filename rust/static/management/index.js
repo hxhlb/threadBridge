@@ -34,7 +34,7 @@ function renderWorkspaceCards(items) {
       recent: ${item.recent_codex_sessions.map(x => `<code>${x.session_id}</code>`).join(', ') || 'none'}
       <div style="margin-top:0.75rem;" class="toolbar">
         ${(item.recent_codex_sessions || []).map(session => `
-          <button class="secondary" onclick="launchResumeWithSession('${item.thread_key}', '${session.session_id}')">Resume ${session.session_id}</button>
+          <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="launchResumeWithSession('${item.thread_key}', '${session.session_id}')">Resume ${session.session_id}</button>
         `).join('') || '<span class="muted">No recent sessions to resume.</span>'}
       </div>
       <div style="margin-top:0.75rem;" class="toolbar">
@@ -43,15 +43,15 @@ function renderWorkspaceCards(items) {
       </div>
       <div style="margin-top:0.75rem;">
         <button class="secondary" onclick="openWorkspace('${item.thread_key}')">Open Workspace</button>
-        <button onclick="launchNew('${item.thread_key}')">Launch New</button>
-        <button class="secondary" onclick="reconnectCodex('${item.thread_key}')">Reconnect Codex</button>
+        <button ${item.conflict ? 'disabled' : ''} onclick="launchNew('${item.thread_key}')">Launch New</button>
+        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="reconnectCodex('${item.thread_key}')">Reconnect Codex</button>
         <button class="secondary" onclick="repairRuntime('${item.thread_key}')">Repair Runtime</button>
-        <button onclick="showLaunchConfig('${item.thread_key}')">Show Launch Commands</button>
-        <button onclick="archiveThread('${item.thread_key}')">Archive</button>
+        <button ${item.conflict ? 'disabled' : ''} onclick="showLaunchConfig('${item.thread_key}')">Show Launch Commands</button>
+        <button onclick='archiveThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(item.title || item.thread_key)})'>Archive</button>
       </div>
       <div style="margin-top:0.75rem;">
         <input id="resume-${item.thread_key}" type="text" placeholder="session id to resume" style="min-width:18rem;flex:1" />
-        <button class="secondary" onclick="launchResume('${item.thread_key}')">Launch Resume</button>
+        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="launchResume('${item.thread_key}')">Launch Resume</button>
       </div>
       <pre id="launch-${item.thread_key}" style="display:none;margin-top:0.75rem;"></pre>
     </div>
@@ -123,7 +123,7 @@ function renderArchivedThreads(items) {
       workspace: <code>${item.workspace_cwd || 'unbound'}</code><br />
       archived_at: <code>${item.archived_at || 'unknown'}</code>
       <div style="margin-top:0.75rem;">
-        <button onclick="restoreThread('${item.thread_key}')">Restore</button>
+        <button onclick='restoreThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(item.title || item.thread_key)})'>Restore</button>
       </div>
     </div>
   `).join('');
@@ -264,7 +264,10 @@ async function rejectTuiSession(threadKey) {
   await refresh();
 }
 
-async function archiveThread(threadKey) {
+async function archiveThread(threadKey, label) {
+  if (!window.confirm(`Archive thread "${label}"? This only changes local threadBridge state and Telegram topic state.`)) {
+    return;
+  }
   const response = await fetch(`/api/threads/${threadKey}/archive`, { method: 'POST' });
   const data = await response.json();
   if (!response.ok) {
@@ -274,7 +277,10 @@ async function archiveThread(threadKey) {
   await refresh();
 }
 
-async function restoreThread(threadKey) {
+async function restoreThread(threadKey, label) {
+  if (!window.confirm(`Restore archived thread "${label}"? This restores local metadata and Telegram topic state only.`)) {
+    return;
+  }
   const response = await fetch(`/api/threads/${threadKey}/restore`, { method: 'POST' });
   const data = await response.json();
   if (!response.ok) {

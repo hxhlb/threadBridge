@@ -162,6 +162,8 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 
 若某個 action 有風險，例如 archive / restore，應有明確確認步驟。
 
+目前 web 管理面已開始對 archive / restore 加上顯式確認，且 conflict workspace 的 launch / resume 入口會禁用，而不是繼續允許誤操作。
+
 `Open in Telegram` 不作為 v1 必選 action；只有在驗證出穩定 deep link 方案後才加入。
 
 ### 4. First-Run Onboarding
