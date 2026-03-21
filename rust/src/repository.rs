@@ -369,19 +369,29 @@ impl ThreadRepository {
         &self,
         record: &ThreadRecord,
         entry: &TranscriptMirrorEntry,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let path = record.transcript_mirror_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        let line = format!("{}\n", serde_json::to_string(entry)?);
         let mut existing = String::new();
         if let Ok(content) = fs::read_to_string(&path).await {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let existing_entry: TranscriptMirrorEntry = serde_json::from_str(trimmed)?;
+                if &existing_entry == entry {
+                    return Ok(false);
+                }
+            }
             existing = content;
         }
+        let line = format!("{}\n", serde_json::to_string(entry)?);
         existing.push_str(&line);
         fs::write(path, existing).await?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn read_pending_image_batch(
@@ -1191,7 +1201,11 @@ pub struct AppendPendingImageInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppendPendingImageInput, ThreadRepository, ThreadScope, ThreadStatus};
+    use super::{
+        AppendPendingImageInput, ThreadRepository, ThreadScope, ThreadStatus,
+        TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
+        TranscriptMirrorRole,
+    };
     use crate::image_artifacts::ImageAnalysisArtifact;
     use std::path::PathBuf;
     use tokio::fs;
@@ -1404,6 +1418,42 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn append_transcript_mirror_deduplicates_existing_entry() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let entry = TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            origin: TranscriptMirrorOrigin::Tui,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Final,
+            text: "Hi.".to_owned(),
+        };
+
+        let inserted_first = repo
+            .append_transcript_mirror(&record, &entry)
+            .await
+            .unwrap();
+        let inserted_second = repo
+            .append_transcript_mirror(&record, &entry)
+            .await
+            .unwrap();
+
+        assert!(inserted_first);
+        assert!(!inserted_second);
+
+        let content = fs::read_to_string(record.transcript_mirror_path())
+            .await
+            .unwrap();
+        let lines: Vec<_> = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert_eq!(lines.len(), 1);
     }
 
     #[tokio::test]

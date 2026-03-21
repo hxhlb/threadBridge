@@ -6,6 +6,8 @@ use teloxide::payloads::setters::*;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
+use crate::local_control::LocalControlHandle;
+
 use super::final_reply::send_final_assistant_reply;
 use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
@@ -147,11 +149,46 @@ pub(crate) async fn run_command(
                         None,
                     )
                     .await?;
-                "Control console.\nUse /new_thread to create a Telegram thread."
+                "Control console.\nUse /add_workspace <absolute-path> for the workspace-first flow, or /new_thread to create a Telegram thread manually."
             } else {
                 "Thread workspace.\nUse /bind_workspace <absolute-path> to attach a project."
             };
             send_scoped_message(bot, msg.chat.id, msg.thread_id, text).await?;
+        }
+        Command::AddWorkspace => {
+            if !is_control_chat(msg) {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    msg.thread_id,
+                    "Use /add_workspace <absolute-path> from the main private chat.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let Some(argument) = command_argument_text(msg, "add_workspace") else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Usage: /add_workspace <absolute-path>",
+                )
+                .await?;
+                return Ok(());
+            };
+            let control = LocalControlHandle::new(bot.clone(), state.clone());
+            match control.add_workspace(argument).await {
+                Ok(_) => {}
+                Err(error) => {
+                    send_scoped_message(
+                        bot,
+                        msg.chat.id,
+                        None,
+                        format!("Add workspace failed: {error}"),
+                    )
+                    .await?;
+                }
+            }
         }
         Command::NewThread => {
             if !is_control_chat(msg) {
@@ -713,7 +750,7 @@ pub(crate) async fn run_text_message(
             bot,
             msg.chat.id,
             None,
-            "Main private chat is the control console. Use /new_thread first.",
+            "Main private chat is the control console. Use /add_workspace <absolute-path> or /new_thread first.",
         )
         .await?;
         return Ok(());
@@ -805,7 +842,7 @@ pub(crate) async fn run_text_message(
             msg.from.as_ref().map(|user| user.id.0 as i64),
         )
         .await?;
-    state
+    let _ = state
         .repository
         .append_transcript_mirror(
             &record,
@@ -819,7 +856,6 @@ pub(crate) async fn run_text_message(
             },
         )
         .await?;
-
     record_bot_status_event(
         &workspace_path,
         "bot_turn_started",
@@ -941,7 +977,7 @@ async fn execute_text_turn(
                     None,
                 )
                 .await?;
-            state
+            let _ = state
                 .repository
                 .append_transcript_mirror(
                     &record,

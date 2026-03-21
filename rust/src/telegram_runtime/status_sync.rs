@@ -635,11 +635,13 @@ async fn sync_cli_transcript_mirrors_once(
                     };
                     pending_cli_user_prompts
                         .insert(cli_prompt_tracking_key(&workspace_key, &entry.session_id));
-                    state
+                    let inserted = state
                         .repository
                         .append_transcript_mirror(&owner_record, &entry)
                         .await?;
-                    if let Some(message_thread_id) = owner_record.metadata.message_thread_id {
+                    if inserted
+                        && let Some(message_thread_id) = owner_record.metadata.message_thread_id
+                    {
                         send_scoped_message(
                             bot,
                             ChatId(owner_record.metadata.chat_id),
@@ -677,11 +679,12 @@ async fn sync_cli_transcript_mirrors_once(
             if let Some(entry) =
                 cli_mirror_entry_from_event(&event, owner_claim.session_id.as_deref())
             {
-                state
+                let inserted = state
                     .repository
                     .append_transcript_mirror(&owner_record, &entry)
                     .await?;
-                if let Some(message_thread_id) = owner_record.metadata.message_thread_id {
+                if inserted && let Some(message_thread_id) = owner_record.metadata.message_thread_id
+                {
                     send_scoped_message(
                         bot,
                         ChatId(owner_record.metadata.chat_id),

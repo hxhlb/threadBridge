@@ -40,6 +40,8 @@ mod thread_flow;
 pub enum Command {
     #[command(description = "Show commands for the control chat and bound threads")]
     Start,
+    #[command(description = "Create a Telegram thread and bind it to a workspace path")]
+    AddWorkspace,
     #[command(description = "Create a new Telegram thread")]
     NewThread,
     #[command(description = "Start a fresh Codex session for this thread")]
@@ -717,6 +719,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(commands.iter().any(|command| command == "/new"));
+        assert!(commands.iter().any(|command| command == "/add_workspace"));
         assert!(commands.iter().any(|command| command == "/new_thread"));
         assert!(commands.iter().any(|command| command == "/thread_info"));
         assert!(
@@ -817,6 +820,10 @@ mod tests {
     #[test]
     fn command_parser_distinguishes_new_from_new_thread() {
         assert!(matches!(Command::parse("/new", ""), Ok(Command::New)));
+        assert!(matches!(
+            Command::parse("/add_workspace", ""),
+            Ok(Command::AddWorkspace)
+        ));
         assert!(matches!(
             Command::parse("/new_thread", ""),
             Ok(Command::NewThread)

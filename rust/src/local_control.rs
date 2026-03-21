@@ -6,8 +6,8 @@ use teloxide::types::{MessageId, ThreadId};
 
 use crate::repository::{LogDirection, SessionBinding, ThreadRecord};
 use crate::telegram_runtime::{
-    AppState, ensure_bound_workspace_runtime, prepare_workspace_runtime_for_control, status_sync,
-    thread_id_to_i32,
+    AppState, ensure_bound_workspace_runtime, prepare_workspace_runtime_for_control,
+    send_scoped_message, status_sync, thread_id_to_i32,
 };
 use crate::workspace::ensure_workspace_runtime;
 
@@ -79,6 +79,20 @@ impl LocalControlHandle {
                 None,
             )
             .await?;
+        send_scoped_message(
+            &self.bot,
+            ChatId(main_thread.metadata.chat_id),
+            None,
+            format!("Created thread \"{}\".", topic.name),
+        )
+        .await?;
+        send_scoped_message(
+            &self.bot,
+            ChatId(main_thread.metadata.chat_id),
+            Some(topic.thread_id),
+            "Thread created.\n\nUse /bind_workspace <absolute-path> in this thread.",
+        )
+        .await?;
         Ok(CreatedThread {
             record,
             title: topic.name,
@@ -174,6 +188,26 @@ impl LocalControlHandle {
                 None,
             )
             .await?;
+        if let Some(message_thread_id) = updated.metadata.message_thread_id {
+            send_scoped_message(
+                &self.bot,
+                ChatId(updated.metadata.chat_id),
+                Some(ThreadId(MessageId(message_thread_id))),
+                format!(
+                    "Bound workspace: `{}`\n\nFor the managed local TUI path in this workspace, run:\n`{}/.threadbridge/bin/hcodex`",
+                    workspace_path.display(),
+                    workspace_path.display()
+                ),
+            )
+            .await?;
+            let _ = status_sync::refresh_thread_topic_title(
+                &self.bot,
+                &self.state,
+                &updated,
+                "local_bind_workspace",
+            )
+            .await;
+        }
         Ok(updated)
     }
 
@@ -374,6 +408,27 @@ impl LocalControlHandle {
                 None,
             )
             .await?;
+        send_scoped_message(
+            &self.bot,
+            ChatId(restored.metadata.chat_id),
+            None,
+            format!("Restored into \"{}\". Continue there.", topic.name),
+        )
+        .await?;
+        send_scoped_message(
+            &self.bot,
+            ChatId(restored.metadata.chat_id),
+            Some(topic.thread_id),
+            "This thread has been restored from archive.",
+        )
+        .await?;
+        let _ = status_sync::refresh_thread_topic_title(
+            &self.bot,
+            &self.state,
+            &restored,
+            "local_restore",
+        )
+        .await;
         Ok(restored)
     }
 
