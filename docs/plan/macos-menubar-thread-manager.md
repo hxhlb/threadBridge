@@ -32,7 +32,7 @@
   - macOS-first `tray-icon` 常駐入口
   - top-level tray menu 會列出 managed workspace submenu
   - 每個 workspace submenu 會列出 `Start New hcodex Session` 與最近 5 個 session id
-- `Settings` 會打開內嵌 webview 並載入本地 management UI
+- `Settings` 會在預設瀏覽器中打開本地 management UI
 - managed Codex health 已開始暴露真實 source / binary path / version，且本地管理面可切換 Codex source preference 並同步已綁定 workspace 的 launcher
 - desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並主動 ensure shared app-server 與 TUI proxy；同時也提供單 workspace 的 `repair runtime` control action
 - 本地管理面已開始提供 machine-level 的 runtime owner reconcile action，可一次對所有非 conflict workspace 做全域 repair / ensure
@@ -69,13 +69,13 @@
 這裡說的「托盤」在產品形態上應理解為：
 
 - `tray-icon` 提供極簡入口
-- webview 承接完整管理面
+- 瀏覽器管理頁承接完整管理面
 - threadBridge 提供 local server 與 runtime owner
 
 這份 plan 應處理：
 
-- thread list 與 archived thread list
-- thread 級 control action
+- workspace-first 管理面與 archived workspace 歷史列表
+- thread 級 control action 的 runtime / debug 邊界
 - workspace 級 `hcodex` 啟動入口
 - machine-level runtime / managed Codex health view
 - workspace `ws` runtime owner 的責任邊界
@@ -110,7 +110,14 @@
 
 ### 2. Web 管理面
 
-webview 是正式管理面，不是單純 token 設定頁。
+瀏覽器管理面是正式管理面，不是單純 token 設定頁。
+
+v1 的主模型固定為：
+
+- `workspace = thread`
+- `Workspaces` 是唯一主實體列表
+- `Archived Workspaces` 是唯一歷史列表
+- `ThreadStateView` 保留給 runtime / debug 視角，不再作為普通用戶主區塊
 
 首頁至少顯示：
 
@@ -130,35 +137,36 @@ webview 是正式管理面，不是單純 token 設定頁。
 - running thread 數量
 - Telegram polling 狀態
 
-thread / workspace 管理頁至少顯示：
+workspace 管理頁至少顯示：
 
-- title
-- `thread_key`
 - workspace label 或 path 摘要
 - `binding_status`
 - `run_status`
-- `current_codex_thread_id`
-- `tui_active_codex_thread_id`
-- `tui_session_adoption_pending`
-- archived 與否
+- recent session
 - `last_used_at`
+- continuity / runtime recovery hint
 
-目前代碼已開始同時暴露 `GET /api/threads`、`GET /api/workspaces`、`GET /api/archived-threads`，但 web 管理面的視圖層仍偏簡單，還沒有收斂成更正式的前端模組。
+技術欄位例如 `thread_key`、`current_codex_thread_id`、`tui_active_codex_thread_id` 可以存在，但應降到 advanced / debug 區，而不是主卡片第一層。
 
-### 3. Thread 快捷操作
+目前代碼已開始同時暴露 `GET /api/threads`、`GET /api/workspaces`、`GET /api/archived-threads`，但主 UI 應以 `GET /api/workspaces` 與 `GET /api/archived-threads` 為準；`GET /api/threads` 不再作為普通用戶的一級列表。
+
+### 3. Workspace 快捷操作
 
 web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 
-- create thread
-- bind workspace
+- add workspace
 - open workspace
 - reconcile runtime owner
-- adopt pending TUI handoff
-- reject pending TUI handoff
+- repair continuity
 - launch new `hcodex`
-- reconnect Codex
-- archive thread
-- restore archived thread
+- archive workspace
+- restore archived workspace
+
+其中：
+
+- `Add Workspace` 應走 native folder picker，而不是要求普通用戶輸入絕對路徑
+- `repair continuity` 應按狀態自動選擇 `Adopt TUI` 或 `Reconnect Codex`
+- raw `bind workspace` / `reject TUI` 可以保留，但只應存在於 advanced / debug 區
 
 若某個 action 有風險，例如 archive / restore，應有明確確認步驟。
 
@@ -168,14 +176,9 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 
 ### 4. First-Run Onboarding
 
-第一次使用時，desktop runtime 必須能在沒有 Telegram 憑據時先啟動，並由 web 管理面完成引導。
+暫不提供。
 
-最低限度要覆蓋：
-
-- `TELEGRAM_BOT_TOKEN`
-- `AUTHORIZED_TELEGRAM_USER_IDS`
-- 首個 workspace 建立 / 綁定
-- runtime ready 檢查
+目前 desktop runtime 雖然仍可在沒有 Telegram 憑據時先啟動，但在真正可用的一次使用引導完成前，web 管理面不應再暴露半成品 onboarding 區塊。設定與 workspace 管理先直接放在正式頁面中處理。
 
 ## 建議的資料模型
 
@@ -212,6 +215,8 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 - `archived_at`
 - `last_used_at`
 
+但在產品層定位上，`ThreadStateView` 是 runtime / debug 視角，不是普通用戶主列表。
+
 `ManagedCodexView` 至少應包含：
 
 - `binary_path`
@@ -229,6 +234,11 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
   - `workspace_state`
 - `heartbeat_last_checked_at`
 - `heartbeat_last_error`
+- `session_broken_reason`
+
+`SetupStateView` 還應暴露 desktop 能力位，至少包含：
+
+- `native_workspace_picker_available`
 
 `RuntimeHealthView` 除了 machine-level aggregate status，也應暴露：
 
@@ -244,12 +254,12 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 
 ### 1. Rust runtime 繼續作為 source of truth
 
-tray / webview 不應直接改寫 repository 檔案，也不應模擬發送 Telegram 命令來完成操作。
+tray / 瀏覽器管理頁不應直接改寫 repository 檔案，也不應模擬發送 Telegram 命令來完成操作。
 
 比較穩定的做法是：
 
 - threadBridge runtime 暴露本地 management API
-- tray / webview 只做 query、render、control action 送出
+- tray / 瀏覽器管理頁只做 query、render、control action 送出
 
 ### 2. desktop runtime 作為正式的 workspace `ws` runtime owner
 
@@ -365,4 +375,4 @@ v1 明確限制：
 1. 先把 [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md) 補成可支撐這份管理面的最小 view / action 草稿。
 2. 先把 [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md) 補上 desktop runtime owner 的最新責任邊界。
 3. 先在 runtime 裡補齊 local query / control API 與 managed Codex update 能力。
-4. 在 API 穩定後，再落 tray-icon UI 與 webview shell。
+4. 在 API 穩定後，再持續收斂 tray-icon UI 與 workspace-first 瀏覽器管理頁。

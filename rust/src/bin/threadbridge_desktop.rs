@@ -6,18 +6,18 @@ fn main() -> anyhow::Result<()> {
 #[cfg(target_os = "macos")]
 mod macos_app {
     use std::collections::HashMap;
+    use std::ffi::OsStr;
+    use std::process::Command;
     use std::sync::Arc;
     use std::time::Duration;
 
-    use anyhow::Result;
-    use tao::event::{Event, StartCause, WindowEvent};
+    use anyhow::{Result, anyhow};
+    use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-    use tao::window::{Window, WindowBuilder};
     use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
     use tracing::{info, warn};
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
-    use wry::{WebView, WebViewBuilder};
 
     use threadbridge_rust::bot_runner::spawn_bot_runtime_from_env_with_runtimes;
     use threadbridge_rust::config::load_runtime_config;
@@ -29,6 +29,10 @@ mod macos_app {
         spawn_management_api,
     };
     use threadbridge_rust::runtime_owner::DesktopRuntimeOwner;
+
+    const TRAY_ICON_SIZE: u32 = 32;
+    const TRAY_ICON_RGBA: &[u8] =
+        include_bytes!("../../static/tray/point_3_filled_connected_trianglepath_dotted.rgba");
 
     #[derive(Debug, Clone)]
     enum UserEvent {
@@ -63,6 +67,7 @@ mod macos_app {
     #[derive(Debug, Clone)]
     enum TrayAction {
         OpenSettings,
+        OpenAddWorkspace,
         Quit,
         LaunchNew {
             thread_key: String,
@@ -78,18 +83,12 @@ mod macos_app {
         actions: HashMap<MenuId, TrayAction>,
     }
 
-    struct SettingsWindow {
-        window: Window,
-        _webview: WebView,
-    }
-
     struct DesktopApp {
         runtime: Arc<Runtime>,
         management_api: ManagementApiHandle,
         owner: Arc<DesktopRuntimeOwner>,
         tray_icon: Option<TrayIcon>,
         tray_actions: HashMap<MenuId, TrayAction>,
-        settings_window: Option<SettingsWindow>,
         latest_snapshot: Option<DesktopSnapshot>,
         latest_tray_signature: Option<TraySnapshotSignature>,
     }
@@ -112,6 +111,7 @@ mod macos_app {
         let runtime_config = load_runtime_config()?;
         let _guard = init_json_logs(&runtime_config.debug_log_path)?;
         let management_api = runtime.block_on(spawn_management_api(runtime_config.clone()))?;
+        runtime.block_on(management_api.set_native_workspace_picker_available(true));
         let owner = Arc::new(runtime.block_on(DesktopRuntimeOwner::new(runtime_config.clone()))?);
         runtime.block_on(management_api.set_runtime_owner(Some((*owner).clone())));
         runtime.block_on(reconcile_runtime_owner(&management_api, &owner));
@@ -160,12 +160,11 @@ mod macos_app {
             owner,
             tray_icon: None,
             tray_actions: HashMap::new(),
-            settings_window: None,
             latest_snapshot: None,
             latest_tray_signature: None,
         };
 
-        event_loop.run(move |event, event_loop_window_target, control_flow| {
+        event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
             match event {
                 Event::NewEvents(StartCause::Init) => {
@@ -196,23 +195,12 @@ mod macos_app {
                     );
                 }
                 Event::UserEvent(UserEvent::ShowSettings) => {
-                    if let Err(error) = show_settings_window(&mut app, event_loop_window_target) {
+                    if let Err(error) = open_settings_url(&app) {
                         warn!(event = "desktop_runtime.settings.open_failed", error = %error);
                     }
                 }
                 Event::UserEvent(UserEvent::Quit) => {
                     *control_flow = ControlFlow::Exit;
-                }
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    window_id,
-                    ..
-                } => {
-                    if let Some(settings) = app.settings_window.as_ref()
-                        && settings.window.id() == window_id
-                    {
-                        settings.window.set_visible(false);
-                    }
                 }
                 _ => {}
             }
@@ -226,24 +214,23 @@ mod macos_app {
             .with_menu(Box::new(menu))
             .with_tooltip("threadBridge")
             .with_icon(icon)
+            .with_icon_as_template(true)
             .build()?;
         Ok(tray_icon)
     }
 
     fn build_icon() -> Result<Icon> {
-        let mut rgba = Vec::with_capacity(16 * 16 * 4);
-        for y in 0..16 {
-            for x in 0..16 {
-                let accent = x > 2 && x < 13 && y > 2 && y < 13;
-                let color = if accent {
-                    [155, 77, 34, 255]
-                } else {
-                    [244, 239, 230, 255]
-                };
-                rgba.extend_from_slice(&color);
-            }
-        }
-        Ok(Icon::from_rgba(rgba, 16, 16)?)
+        let expected_len = (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize;
+        anyhow::ensure!(
+            TRAY_ICON_RGBA.len() == expected_len,
+            "invalid tray icon asset length: expected {expected_len}, got {}",
+            TRAY_ICON_RGBA.len()
+        );
+        Ok(Icon::from_rgba(
+            TRAY_ICON_RGBA.to_vec(),
+            TRAY_ICON_SIZE,
+            TRAY_ICON_SIZE,
+        )?)
     }
 
     fn spawn_snapshot_poller(
@@ -402,11 +389,13 @@ mod macos_app {
         if !snapshot.workspaces.is_empty() {
             menu.append(&PredefinedMenuItem::separator())?;
         }
+        let add_workspace = MenuItem::new("Add Workspace", true, None);
+        actions.insert(add_workspace.id().clone(), TrayAction::OpenAddWorkspace);
         let settings = MenuItem::new("Settings", true, None);
         actions.insert(settings.id().clone(), TrayAction::OpenSettings);
         let quit = MenuItem::new("Quit", true, None);
         actions.insert(quit.id().clone(), TrayAction::Quit);
-        menu.append_items(&[&settings, &quit])?;
+        menu.append_items(&[&add_workspace, &settings, &quit])?;
         Ok(MenuModel { menu, actions })
     }
 
@@ -497,6 +486,21 @@ mod macos_app {
             TrayAction::OpenSettings => {
                 let _ = proxy.send_event(UserEvent::ShowSettings);
             }
+            TrayAction::OpenAddWorkspace => {
+                let runtime = app.runtime.clone();
+                let management_api = app.management_api.clone();
+                let proxy = proxy.clone();
+                runtime.spawn(async move {
+                    if let Err(error) = add_workspace_via_tray(&management_api).await {
+                        warn!(event = "desktop_runtime.add_workspace.failed", error = %error);
+                        let _ = show_desktop_notification(
+                            "threadBridge",
+                            &format!("Add workspace failed: {}", short_error_message(&error)),
+                        );
+                    }
+                    let _ = proxy.send_event(UserEvent::Refresh);
+                });
+            }
             TrayAction::Quit => {
                 let _ = proxy.send_event(UserEvent::Quit);
                 *control_flow = ControlFlow::Exit;
@@ -541,27 +545,209 @@ mod macos_app {
         }
     }
 
-    fn show_settings_window(
-        app: &mut DesktopApp,
-        event_loop_window_target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
-    ) -> Result<()> {
-        if let Some(settings) = app.settings_window.as_ref() {
-            settings.window.set_visible(true);
-            settings.window.set_focus();
+    fn open_settings_url(app: &DesktopApp) -> Result<()> {
+        open_management_url(&app.management_api, None)
+    }
+
+    async fn add_workspace_via_tray(management_api: &ManagementApiHandle) -> Result<()> {
+        let Some(workspace_cwd) = tokio::task::spawn_blocking(pick_workspace_folder).await?? else {
+            info!(event = "desktop_runtime.add_workspace.cancelled");
             return Ok(());
-        }
-        let window = WindowBuilder::new()
-            .with_title("threadBridge Settings")
-            .with_inner_size(tao::dpi::LogicalSize::new(1080.0, 760.0))
-            .build(event_loop_window_target)?;
-        let webview = WebViewBuilder::new()
-            .with_url(&app.management_api.base_url)
-            .build(&window)?;
-        app.settings_window = Some(SettingsWindow {
-            window,
-            _webview: webview,
-        });
+        };
+        let result = management_api.add_workspace(&workspace_cwd).await?;
+        let display_name =
+            workspace_display_name(result.workspace_cwd.as_deref(), result.title.as_deref());
+        let notification_body = if result.created {
+            info!(
+                event = "desktop_runtime.add_workspace.created",
+                thread_key = %result.thread_key,
+                workspace_cwd = %workspace_cwd
+            );
+            format!("Added workspace: {display_name}")
+        } else {
+            info!(
+                event = "desktop_runtime.add_workspace.existing",
+                thread_key = %result.thread_key,
+                workspace_cwd = %workspace_cwd
+            );
+            format!("Workspace already managed: {display_name}")
+        };
+        show_desktop_notification("threadBridge", &notification_body)?;
         Ok(())
+    }
+
+    fn open_management_url(
+        management_api: &ManagementApiHandle,
+        anchor: Option<&str>,
+    ) -> Result<()> {
+        let mut url = management_api.base_url.clone();
+        if let Some(anchor) = anchor {
+            url.push_str(anchor);
+        }
+        let status = Command::new("open").arg(&url).status()?;
+        anyhow::ensure!(
+            status.success(),
+            "failed to open management URL in default browser"
+        );
+        Ok(())
+    }
+
+    fn pick_workspace_folder() -> Result<Option<String>> {
+        let script = r#"POSIX path of (choose folder with prompt "Select a workspace to bind to threadBridge")"#;
+        let output = Command::new("/usr/bin/osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+        if output.status.success() {
+            let chosen = parse_choose_folder_output(&String::from_utf8_lossy(&output.stdout));
+            return chosen
+                .map(Some)
+                .ok_or_else(|| anyhow!("workspace selection returned an empty path"));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if apple_script_user_cancelled(output.status.code(), &stderr) {
+            return Ok(None);
+        }
+        Err(anyhow!(
+            "workspace selection failed: {}",
+            stderr.trim().if_empty("unknown osascript error")
+        ))
+    }
+
+    fn parse_choose_folder_output(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed == "/" {
+            return Some("/".to_owned());
+        }
+        Some(trimmed.trim_end_matches('/').to_owned())
+    }
+
+    fn apple_script_user_cancelled(status_code: Option<i32>, stderr: &str) -> bool {
+        matches!(status_code, Some(1) | Some(-128))
+            && stderr.to_ascii_lowercase().contains("user canceled")
+    }
+
+    fn show_desktop_notification(title: &str, body: &str) -> Result<()> {
+        let script = format!(
+            "display notification {} with title {}",
+            apple_script_string(body),
+            apple_script_string(title)
+        );
+        let status = Command::new("/usr/bin/osascript")
+            .arg("-e")
+            .arg(script)
+            .status()?;
+        anyhow::ensure!(status.success(), "failed to show desktop notification");
+        Ok(())
+    }
+
+    fn workspace_display_name(workspace_cwd: Option<&str>, title: Option<&str>) -> String {
+        if let Some(name) = workspace_cwd
+            .and_then(|value| std::path::Path::new(value).file_name())
+            .and_then(OsStr::to_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return name.to_owned();
+        }
+        title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| workspace_cwd.map(ToOwned::to_owned))
+            .unwrap_or_else(|| "workspace".to_owned())
+    }
+
+    fn short_error_message(error: &anyhow::Error) -> String {
+        let message = error
+            .chain()
+            .find_map(|cause| {
+                let text = cause.to_string();
+                if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+            .unwrap_or_else(|| "unknown error".to_owned());
+        truncate_message(&message, 120)
+    }
+
+    fn apple_script_string(value: &str) -> String {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    fn truncate_message(value: &str, max_chars: usize) -> String {
+        if value.chars().count() <= max_chars {
+            return value.to_owned();
+        }
+        let mut truncated = value
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        truncated.push('…');
+        truncated
+    }
+
+    trait IfEmpty {
+        fn if_empty(self, fallback: &str) -> String;
+    }
+
+    impl IfEmpty for &str {
+        fn if_empty(self, fallback: &str) -> String {
+            if self.trim().is_empty() {
+                fallback.to_owned()
+            } else {
+                self.to_owned()
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            apple_script_user_cancelled, parse_choose_folder_output, workspace_display_name,
+        };
+
+        #[test]
+        fn parse_choose_folder_output_trims_trailing_slash() {
+            assert_eq!(
+                parse_choose_folder_output("/tmp/threadBridge/workspaces/Trackly/\n"),
+                Some("/tmp/threadBridge/workspaces/Trackly".to_owned())
+            );
+        }
+
+        #[test]
+        fn parse_choose_folder_output_rejects_blank_values() {
+            assert_eq!(parse_choose_folder_output(" \n"), None);
+        }
+
+        #[test]
+        fn workspace_display_name_prefers_folder_name() {
+            assert_eq!(
+                workspace_display_name(Some("/tmp/threadBridge/workspaces/Trackly"), None),
+                "Trackly"
+            );
+        }
+
+        #[test]
+        fn workspace_display_name_falls_back_to_title() {
+            assert_eq!(
+                workspace_display_name(None, Some("Control Thread")),
+                "Control Thread"
+            );
+        }
+
+        #[test]
+        fn apple_script_user_cancelled_detects_standard_error() {
+            assert!(apple_script_user_cancelled(
+                Some(-128),
+                "execution error: User canceled. (-128)"
+            ));
+        }
     }
 }
 

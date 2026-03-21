@@ -45,10 +45,10 @@
   - local HTTP + SSE 已從草稿變成實際 transport
   - 但 protocol 仍未收斂成正式 transport-neutral 契約
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
-  - `threadbridge_desktop`、macOS-first tray menu、webview settings shell 已開始落地
+  - `threadbridge_desktop`、macOS-first tray menu、workspace-first browser management UI 已開始落地
   - local create / bind / reconnect / archive / restore control 已進入 management API
   - managed Codex source build / cache refresh 已進入 management API
-  - 仍缺 desktop runtime owner 收尾與 web 管理面結構化
+  - 目前新增確認的收斂方向是 `workspace = thread` 主模型與移除暫不可用的 onboarding
 
 ## 純草稿
 

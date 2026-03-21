@@ -137,6 +137,16 @@ pub(crate) async fn run_command(
     match command {
         Command::Start => {
             let text = if is_control_chat(msg) {
+                let record = state.repository.get_main_thread(msg.chat.id.0).await?;
+                state
+                    .repository
+                    .append_log(
+                        &record,
+                        LogDirection::System,
+                        "Control chat initialized from /start.",
+                        None,
+                    )
+                    .await?;
                 "Control console.\nUse /new_thread to create a Telegram thread."
             } else {
                 "Thread workspace.\nUse /bind_workspace <absolute-path> to attach a project."

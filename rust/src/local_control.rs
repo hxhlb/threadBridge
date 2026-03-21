@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use teloxide::prelude::*;
 use teloxide::types::{MessageId, ThreadId};
 
-use crate::repository::{LogDirection, ThreadRecord};
+use crate::repository::{LogDirection, SessionBinding, ThreadRecord};
 use crate::telegram_runtime::{
     AppState, ensure_bound_workspace_runtime, prepare_workspace_runtime_for_control, status_sync,
     thread_id_to_i32,
@@ -23,13 +23,27 @@ pub struct CreatedThread {
     pub title: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum AddWorkspaceOutcome {
+    Created(ThreadRecord),
+    Existing(ThreadRecord),
+}
+
+impl AddWorkspaceOutcome {
+    pub fn record(&self) -> &ThreadRecord {
+        match self {
+            Self::Created(record) | Self::Existing(record) => record,
+        }
+    }
+
+    pub fn created(&self) -> bool {
+        matches!(self, Self::Created(_))
+    }
+}
+
 impl LocalControlHandle {
     pub fn new(bot: Bot, state: AppState) -> Self {
         Self { bot, state }
-    }
-
-    pub fn app_state(&self) -> &AppState {
-        &self.state
     }
 
     pub async fn create_thread(&self, title: Option<String>) -> Result<CreatedThread> {
@@ -79,6 +93,31 @@ impl LocalControlHandle {
         let created = self.create_thread(title).await?;
         self.bind_workspace(&created.record.metadata.thread_key, workspace_cwd)
             .await
+    }
+
+    pub async fn add_workspace(&self, workspace_cwd: &str) -> Result<AddWorkspaceOutcome> {
+        let workspace_path = resolve_workspace_argument(workspace_cwd).await?;
+        let canonical_workspace = workspace_path.display().to_string();
+        let active_threads = self
+            .state
+            .repository
+            .find_active_threads_by_workspace(&canonical_workspace)
+            .await?;
+        if active_threads.len() > 1 {
+            bail!(
+                "Workspace already has multiple active thread bindings: {}",
+                canonical_workspace
+            );
+        }
+        if let Some(record) = active_threads.into_iter().next() {
+            return Ok(AddWorkspaceOutcome::Existing(record));
+        }
+
+        let title = workspace_thread_title(&workspace_path);
+        let record = self
+            .create_thread_and_bind(Some(title), &canonical_workspace)
+            .await?;
+        Ok(AddWorkspaceOutcome::Created(record))
     }
 
     pub async fn bind_workspace(
@@ -149,10 +188,7 @@ impl LocalControlHandle {
         let Some(binding) = session.as_ref() else {
             bail!("This thread is not bound to a workspace yet.");
         };
-        let existing_thread_id = binding
-            .current_codex_thread_id
-            .as_deref()
-            .filter(|_| !binding.session_broken)
+        let existing_thread_id = reconnect_target_thread_id(binding)
             .context("This thread is missing a usable Codex thread id. Use Launch New first.")?;
         let workspace_path = ensure_bound_workspace_runtime(&self.state, binding).await?;
         let codex_workspace =
@@ -374,4 +410,61 @@ fn restored_thread_title(title: Option<&str>, fallback_thread_id: Option<i32>) -
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("Thread {}", fallback_thread_id.unwrap_or_default()));
     format!("{base} · 已恢復")
+}
+
+fn workspace_thread_title(workspace_path: &Path) -> String {
+    workspace_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| workspace_path.display().to_string())
+}
+
+fn reconnect_target_thread_id(binding: &SessionBinding) -> Option<&str> {
+    binding
+        .current_codex_thread_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reconnect_target_thread_id, workspace_thread_title};
+    use crate::repository::SessionBinding;
+    use std::path::Path;
+
+    #[test]
+    fn workspace_thread_title_prefers_folder_name() {
+        let title = workspace_thread_title(Path::new("/tmp/threadBridge/workspaces/Trackly"));
+        assert_eq!(title, "Trackly");
+    }
+
+    #[test]
+    fn workspace_thread_title_falls_back_to_full_path() {
+        let title = workspace_thread_title(Path::new("/"));
+        assert_eq!(title, "/");
+    }
+
+    #[test]
+    fn reconnect_target_thread_id_allows_broken_binding_with_current_id() {
+        let binding: SessionBinding = serde_json::from_value(serde_json::json!({
+            "schema_version": 2,
+            "current_codex_thread_id": "thread-123",
+            "workspace_cwd": "/tmp/workspace",
+            "bound_at": null,
+            "initialized_at": null,
+            "last_verified_at": null,
+            "session_broken": true,
+            "session_broken_at": null,
+            "session_broken_reason": "probe failed",
+            "tui_active_codex_thread_id": null,
+            "tui_session_adoption_pending": false,
+            "tui_session_adoption_prompt_message_id": null,
+            "updated_at": "2026-03-21T00:00:00.000Z"
+        }))
+        .expect("valid session binding fixture");
+        assert_eq!(reconnect_target_thread_id(&binding), Some("thread-123"));
+    }
 }

@@ -69,6 +69,8 @@
 
 ### 1. `ThreadStateView`
 
+這個 view 保留給 runtime / debug / advanced maintenance，不作為普通用戶主列表。
+
 至少包含：
 
 - `thread_key`
@@ -95,6 +97,8 @@
 
 ### 3. `ManagedWorkspaceView`
 
+這是 workspace-first 管理頁的主要 view。
+
 至少包含：
 
 - `workspace_cwd`
@@ -116,6 +120,7 @@
   - `workspace_state`
 - `heartbeat_last_checked_at`
 - `heartbeat_last_error`
+- `session_broken_reason`
 
 ### 4. `RecentCodexSessionView`
 
@@ -169,6 +174,7 @@
 - `authorized_user_count`
 - `telegram_polling_state`
 - `restart_required_after_setup_save`
+- `native_workspace_picker_available`
 
 ## 建議的 control action
 
@@ -178,6 +184,7 @@ v1 至少定義：
 
 - `create_thread`
 - `bind_workspace`
+- `pick_and_add_workspace`
 - `reconnect_codex`
 - `reconcile_runtime_owner`
 - `open_workspace`
@@ -196,6 +203,7 @@ v1 至少定義：
 - `POST /api/threads`
 - `POST /api/threads/create-and-bind`
 - `POST /api/threads/:thread_key/bind-workspace`
+- `POST /api/workspaces/pick-and-add`
 - `POST /api/threads/:thread_key/adopt-tui`
 - `POST /api/threads/:thread_key/reject-tui`
 - `POST /api/workspaces/:thread_key/reconnect`

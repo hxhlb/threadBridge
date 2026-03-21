@@ -65,6 +65,11 @@ impl ManagementApiHandle {
         *current = owner;
     }
 
+    pub async fn set_native_workspace_picker_available(&self, available: bool) {
+        let mut current = self.state.native_workspace_picker_available.write().await;
+        *current = available;
+    }
+
     pub async fn setup_state(&self) -> Result<SetupStateView> {
         self.state.setup_state().await
     }
@@ -98,6 +103,10 @@ impl ManagementApiHandle {
             .launch_workspace_resume(thread_key, session_id)
             .await
     }
+
+    pub async fn add_workspace(&self, workspace_cwd: &str) -> Result<AddWorkspaceResult> {
+        self.state.add_workspace(workspace_cwd).await
+    }
 }
 
 #[derive(Clone)]
@@ -107,6 +116,7 @@ struct ManagementApiState {
     telegram_polling_state: Arc<RwLock<TelegramPollingState>>,
     local_control: Arc<RwLock<Option<LocalControlHandle>>>,
     runtime_owner: Arc<RwLock<Option<DesktopRuntimeOwner>>>,
+    native_workspace_picker_available: Arc<RwLock<bool>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +129,7 @@ pub struct SetupStateView {
     pub restart_required_after_setup_save: bool,
     pub control_chat_ready: bool,
     pub control_chat_id: Option<i64>,
+    pub native_workspace_picker_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,6 +197,7 @@ pub struct ManagedWorkspaceView {
     pub runtime_health_source: &'static str,
     pub heartbeat_last_checked_at: Option<String>,
     pub heartbeat_last_error: Option<String>,
+    pub session_broken_reason: Option<String>,
     pub recovery_hint: Option<String>,
     pub hcodex_path: String,
     pub hcodex_available: bool,
@@ -254,6 +266,16 @@ struct CreatedThreadResponse {
     title: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct PickAndAddWorkspaceResponse {
+    ok: bool,
+    created: bool,
+    cancelled: bool,
+    thread_key: Option<String>,
+    title: Option<String>,
+    workspace_cwd: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct LaunchResumeRequest {
     session_id: String,
@@ -264,6 +286,14 @@ pub struct LaunchWorkspaceResponse {
     pub launched: bool,
     pub thread_key: String,
     pub command: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AddWorkspaceResult {
+    pub created: bool,
+    pub thread_key: String,
+    pub title: Option<String>,
+    pub workspace_cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,6 +404,7 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
         telegram_polling_state: Arc::new(RwLock::new(TelegramPollingState::Disconnected)),
         local_control: Arc::new(RwLock::new(None)),
         runtime_owner: Arc::new(RwLock::new(None)),
+        native_workspace_picker_available: Arc::new(RwLock::new(false)),
     });
     let bind_addr = runtime.management_bind_addr;
     let listener = TcpListener::bind(bind_addr)
@@ -409,6 +440,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
         )
         .route("/api/threads", get(get_threads).post(post_create_thread))
         .route("/api/workspaces", get(get_workspaces))
+        .route(
+            "/api/workspaces/pick-and-add",
+            post(post_pick_and_add_workspace),
+        )
         .route("/api/archived-threads", get(get_archived_threads))
         .route(
             "/api/threads/create-and-bind",
@@ -571,6 +606,12 @@ async fn get_workspaces(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Result<Json<Vec<ManagedWorkspaceView>>, ManagementApiError> {
     Ok(Json(state.workspace_views().await?))
+}
+
+async fn post_pick_and_add_workspace(
+    State(state): State<Arc<ManagementApiState>>,
+) -> Result<Json<PickAndAddWorkspaceResponse>, ManagementApiError> {
+    Ok(Json(state.pick_and_add_workspace().await?))
 }
 
 async fn get_archived_threads(
@@ -747,6 +788,7 @@ impl ManagementApiState {
             restart_required_after_setup_save: self.restart_required_after_setup_save().await,
             control_chat_ready: main_thread.is_some(),
             control_chat_id: main_thread.map(|record| record.metadata.chat_id),
+            native_workspace_picker_available: *self.native_workspace_picker_available.read().await,
         })
     }
 
@@ -1127,11 +1169,17 @@ impl ManagementApiState {
                 .await
                 .unwrap_or_default();
             let session_broken = binding.session_broken || record.metadata.session_broken;
+            let session_broken_reason = binding
+                .session_broken_reason
+                .clone()
+                .or(record.metadata.session_broken_reason.clone());
             let recovery_hint = workspace_recovery_hint(
                 false,
                 session_broken,
+                session_broken_reason.as_deref(),
                 &runtime_status,
                 binding.tui_session_adoption_pending,
+                binding.tui_active_codex_thread_id.as_deref(),
             );
             aggregate.items.push(ManagedWorkspaceView {
                 workspace_cwd: workspace_cwd.clone(),
@@ -1151,6 +1199,7 @@ impl ManagementApiState {
                 runtime_health_source: runtime_status.source,
                 heartbeat_last_checked_at: runtime_status.last_checked_at,
                 heartbeat_last_error: runtime_status.last_error,
+                session_broken_reason,
                 recovery_hint,
                 hcodex_path: hcodex_path.display().to_string(),
                 hcodex_available: hcodex_path.exists(),
@@ -1168,6 +1217,7 @@ impl ManagementApiState {
                     item.recovery_hint = workspace_recovery_hint(
                         true,
                         item.session_broken,
+                        item.session_broken_reason.as_deref(),
                         &WorkspaceRuntimeHealth {
                             app_server_status: item.app_server_status,
                             tui_proxy_status: item.tui_proxy_status,
@@ -1177,6 +1227,7 @@ impl ManagementApiState {
                             last_error: item.heartbeat_last_error.clone(),
                         },
                         item.tui_session_adoption_pending,
+                        item.tui_active_codex_thread_id.as_deref(),
                     );
                     views.push(item);
                 }
@@ -1300,6 +1351,60 @@ impl ManagementApiState {
         Ok(ThreadMutationResponse {
             ok: true,
             thread_key: record.metadata.thread_key,
+        })
+    }
+
+    async fn add_workspace(&self, workspace_cwd: &str) -> Result<AddWorkspaceResult> {
+        let control = self.local_control().await?;
+        let outcome = control.add_workspace(workspace_cwd).await?;
+        let record = outcome.record();
+        let binding = self.repository.read_session_binding(record).await?;
+        let bound_workspace_cwd = binding
+            .as_ref()
+            .and_then(|binding| binding.workspace_cwd.clone())
+            .or_else(|| Some(workspace_cwd.trim().to_owned()));
+        if let Some(workspace_cwd) = bound_workspace_cwd.as_deref() {
+            self.maybe_reconcile_owner_workspace(workspace_cwd).await?;
+        }
+        Ok(AddWorkspaceResult {
+            created: outcome.created(),
+            thread_key: record.metadata.thread_key.clone(),
+            title: record.metadata.title.clone(),
+            workspace_cwd: bound_workspace_cwd,
+        })
+    }
+
+    async fn pick_and_add_workspace(&self) -> Result<PickAndAddWorkspaceResponse> {
+        anyhow::ensure!(
+            *self.native_workspace_picker_available.read().await,
+            "Native workspace picker is unavailable. Start threadBridge in desktop mode."
+        );
+        anyhow::ensure!(
+            *self.telegram_polling_state.read().await == TelegramPollingState::Active,
+            "Telegram bot runtime is not active yet. Wait for desktop runtime to reconnect polling first."
+        );
+        anyhow::ensure!(
+            self.repository.find_main_thread().await?.is_some(),
+            "Control chat is not ready yet. Send /start to the bot from the target Telegram chat first."
+        );
+        let Some(workspace_cwd) = pick_workspace_folder().await? else {
+            return Ok(PickAndAddWorkspaceResponse {
+                ok: true,
+                created: false,
+                cancelled: true,
+                thread_key: None,
+                title: None,
+                workspace_cwd: None,
+            });
+        };
+        let result = self.add_workspace(&workspace_cwd).await?;
+        Ok(PickAndAddWorkspaceResponse {
+            ok: true,
+            created: result.created,
+            cancelled: false,
+            thread_key: Some(result.thread_key),
+            title: result.title,
+            workspace_cwd: result.workspace_cwd,
         })
     }
 
@@ -1569,6 +1674,62 @@ async fn write_env_file(path: &Path, updates: &BTreeMap<String, String>) -> Resu
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
+#[cfg(target_os = "macos")]
+async fn pick_workspace_folder() -> Result<Option<String>> {
+    let script =
+        r#"POSIX path of (choose folder with prompt "Select a workspace to add to threadBridge")"#;
+    let output = Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .await?;
+    if output.status.success() {
+        let chosen = parse_choose_folder_output(&String::from_utf8_lossy(&output.stdout));
+        return chosen
+            .map(Some)
+            .ok_or_else(|| anyhow!("workspace selection returned an empty path"));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if apple_script_user_cancelled(output.status.code(), &stderr) {
+        return Ok(None);
+    }
+    Err(anyhow!(
+        "workspace selection failed: {}",
+        fallback_if_blank(stderr.trim(), "unknown osascript error")
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn pick_workspace_folder() -> Result<Option<String>> {
+    Err(anyhow!(
+        "Native workspace picker is unavailable on this platform."
+    ))
+}
+
+fn parse_choose_folder_output(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "/" {
+        return Some("/".to_owned());
+    }
+    Some(trimmed.trim_end_matches('/').to_owned())
+}
+
+fn apple_script_user_cancelled(status_code: Option<i32>, stderr: &str) -> bool {
+    matches!(status_code, Some(1) | Some(-128))
+        && stderr.to_ascii_lowercase().contains("user canceled")
+}
+
+fn fallback_if_blank(value: &str, fallback: &str) -> String {
+    if value.trim().is_empty() {
+        fallback.to_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -1769,8 +1930,10 @@ impl WorkspaceRuntimeHealth {
 fn workspace_recovery_hint(
     conflict: bool,
     session_broken: bool,
+    session_broken_reason: Option<&str>,
     runtime_status: &WorkspaceRuntimeHealth,
     adoption_pending: bool,
+    tui_active_codex_thread_id: Option<&str>,
 ) -> Option<String> {
     if conflict {
         return Some(
@@ -1793,6 +1956,26 @@ fn workspace_recovery_hint(
     if adoption_pending || runtime_status.handoff_readiness == "pending_adoption" {
         return Some(
             "A live TUI session is waiting for adoption. Adopt TUI from Active Threads, or reject it to keep the original binding."
+                .to_owned(),
+        );
+    }
+    let has_live_tui_session = tui_active_codex_thread_id
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if session_broken && has_live_tui_session {
+        return Some(
+            "The saved Codex session is no longer the best recovery target, but this workspace has a live TUI session. Use Adopt TUI to promote that live session, or Launch New to start fresh."
+                .to_owned(),
+        );
+    }
+    let unloaded_thread = session_broken_reason
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|reason| {
+            reason.contains("thread/read failed") && reason.contains("thread not loaded")
+        });
+    if unloaded_thread {
+        return Some(
+            "The saved Codex session is no longer loaded by app-server. Use Launch New to start a fresh session, or Adopt TUI if this workspace already has a live TUI session."
                 .to_owned(),
         );
     }

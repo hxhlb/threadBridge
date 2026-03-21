@@ -2,71 +2,152 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>threadBridge Management</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>threadBridge Workspace Manager</title>
   <link rel="stylesheet" href="/assets/management.css" />
 </head>
 <body>
-  <h1>threadBridge Management</h1>
-  <p class="muted">Local management API is running at <code>__MANAGEMENT_BIND_ADDR__</code>.</p>
-  <div class="grid">
-    <div class="card">
-      <h2>Setup</h2>
-      <form id="setup-form">
-        <p><label>Telegram Bot Token<br /><input id="telegram-token" type="password" style="width:100%" /></label></p>
-        <p><label>Authorized User IDs (comma separated)<br /><input id="authorized-user-ids" type="text" style="width:100%" /></label></p>
-        <p><button type="submit">Save Setup</button> <span id="setup-status"></span></p>
-      </form>
-      <pre id="setup">loading...</pre>
-    </div>
-    <div class="card">
-      <h2>Global Runtime Summary</h2>
-      <p id="runtime-summary-note" class="muted">loading...</p>
-      <div class="toolbar">
-        <select id="managed-codex-source">
-          <option value="brew">brew</option>
-          <option value="source">source</option>
-        </select>
+  <main class="page-shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Desktop Runtime Control Center</p>
+        <h1>threadBridge</h1>
+        <p class="hero-copy">
+          Local management API is running at <code>__MANAGEMENT_BIND_ADDR__</code>.
+          This page manages workspaces first. Runtime and Telegram setup stay here, but the main object is the workspace.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <button onclick="refresh()">Refresh Snapshot</button>
         <button class="secondary" onclick="reconcileRuntimeOwner()">Reconcile Runtime Owner</button>
-        <button class="secondary" onclick="updateManagedCodexPreference()">Apply Codex Source</button>
-        <button class="secondary" onclick="buildManagedCodexSource()">Build Source Codex</button>
-        <button class="secondary" onclick="refreshManagedCodexCache()">Refresh Managed Cache</button>
-        <span id="managed-codex-status" class="muted"></span>
       </div>
-      <div class="toolbar" style="margin-top:0.75rem;">
-        <input id="managed-codex-source-repo" type="text" placeholder="/abs/codex/repo" style="min-width:20rem;flex:2" />
-        <input id="managed-codex-source-rs-dir" type="text" placeholder="/abs/codex-rs" style="min-width:20rem;flex:2" />
-        <select id="managed-codex-build-profile">
-          <option value="dev">dev</option>
-          <option value="release">release</option>
-        </select>
-        <button class="secondary" onclick="saveManagedCodexBuildDefaults()">Save Build Defaults</button>
+    </section>
+
+    <nav class="section-nav">
+      <a href="#setup-card">Setup</a>
+      <a href="#runtime-card">Runtime</a>
+      <a href="#workspaces-section">Workspaces</a>
+      <a href="#archived-section">Archived</a>
+    </nav>
+
+    <section class="overview-grid">
+      <article id="setup-card" class="card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h2>Setup</h2>
+          </div>
+          <span id="setup-pill" class="badge badge-neutral">loading</span>
+        </div>
+        <form id="setup-form" class="stack">
+          <label class="field">
+            <span>Telegram Bot Token</span>
+            <input id="telegram-token" type="password" placeholder="Configured tokens stay masked." />
+          </label>
+          <label class="field">
+            <span>Authorized User IDs</span>
+            <input id="authorized-user-ids" type="text" placeholder="Comma separated Telegram user IDs" />
+          </label>
+          <div class="toolbar">
+            <button type="submit">Save Setup</button>
+            <span id="setup-status" class="muted"></span>
+          </div>
+        </form>
+        <div id="setup-runtime-note" class="status-note">loading...</div>
+        <details class="raw-panel">
+          <summary>Raw Setup Payload</summary>
+          <pre id="setup">loading...</pre>
+        </details>
+      </article>
+
+      <article id="runtime-card" class="card card-emphasis">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Machine-Level Health</p>
+            <h2>Global Runtime Summary</h2>
+          </div>
+          <span id="owner-pill" class="badge badge-neutral">loading</span>
+        </div>
+        <p id="runtime-summary-note" class="muted">loading...</p>
+        <div id="runtime-recovery-hint" class="hint" style="display:none;"></div>
+        <div id="health-summary" class="summary-grid">loading...</div>
+
+        <div class="subsection">
+          <div class="section-heading compact">
+            <h3>Managed Codex</h3>
+            <span id="managed-codex-pill" class="badge badge-neutral">loading</span>
+          </div>
+          <div class="toolbar">
+            <select id="managed-codex-source">
+              <option value="brew">brew</option>
+              <option value="source">source</option>
+            </select>
+            <button class="secondary" onclick="updateManagedCodexPreference()">Apply Codex Source</button>
+            <button class="secondary" onclick="buildManagedCodexSource()">Build Source Codex</button>
+            <button class="secondary" onclick="refreshManagedCodexCache()">Refresh Managed Cache</button>
+          </div>
+          <div class="toolbar">
+            <input id="managed-codex-source-repo" type="text" placeholder="/abs/codex/repo" />
+            <input id="managed-codex-source-rs-dir" type="text" placeholder="/abs/codex-rs" />
+            <select id="managed-codex-build-profile">
+              <option value="dev">dev</option>
+              <option value="release">release</option>
+            </select>
+            <button class="secondary" onclick="saveManagedCodexBuildDefaults()">Save Build Defaults</button>
+          </div>
+          <p id="managed-codex-status" class="muted"></p>
+        </div>
+
+        <details class="raw-panel">
+          <summary>Raw Runtime Payload</summary>
+          <pre id="health">loading...</pre>
+        </details>
+      </article>
+    </section>
+
+    <section id="workspaces-section" class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Primary Surface</p>
+          <h2>Workspaces</h2>
+        </div>
+        <div class="toolbar">
+          <span id="workspaces-count" class="badge badge-neutral">0</span>
+          <input id="workspace-filter" type="text" placeholder="Filter workspaces" />
+        </div>
       </div>
-      <div id="runtime-recovery-hint" class="hint" style="margin-top:0.75rem;display:none;"></div>
-      <div id="health-summary" class="summary-grid" style="margin-top:0.75rem;">loading...</div>
-      <pre id="health">loading...</pre>
-    </div>
-  </div>
-  <div class="card">
-    <h2>Onboarding</h2>
-    <div class="toolbar">
-      <input id="new-thread-title" type="text" placeholder="Optional new thread title" style="min-width:20rem;flex:1" />
-      <button onclick="createThread()">Create Thread</button>
-    </div>
-    <div class="toolbar" style="margin-top:0.75rem;">
-      <input id="create-bind-title" type="text" placeholder="Optional thread title" style="min-width:18rem;flex:1" />
-      <input id="create-bind-workspace" type="text" placeholder="/absolute/workspace/path" style="min-width:24rem;flex:2" />
-      <button onclick="createAndBindThread()">Create And Bind</button>
-    </div>
-    <p class="muted">First use requires a Telegram control chat. Send <code>/start</code> to the bot from the target chat first, then create or restore a thread here.</p>
-    <pre id="onboarding-status">waiting...</pre>
-  </div>
-  <div class="card"><h2>Active Threads</h2><div id="threads">loading...</div></div>
-  <div class="card">
-    <h2>Managed Workspaces</h2>
-    <p class="muted">Each workspace card shows runtime status from the desktop owner heartbeat when available, otherwise from the workspace-local runtime state file.</p>
-    <div id="workspaces">loading...</div>
-  </div>
-  <div class="card"><h2>Archived Threads</h2><div id="archived">loading...</div></div>
+      <div class="subsection">
+        <div class="section-heading compact">
+          <h3>Add Workspace</h3>
+        </div>
+        <div class="stack">
+          <p class="muted">
+            Adding a workspace creates or reuses the single threadBridge thread for that workspace.
+          </p>
+          <div class="toolbar">
+            <button id="add-workspace-button" onclick="pickAndAddWorkspace()">Add Workspace</button>
+            <span id="add-workspace-status" class="muted"></span>
+          </div>
+        </div>
+      </div>
+      <div class="section-divider" aria-hidden="true"></div>
+      <p class="muted">
+        Workspace cards are the primary management surface. Runtime heartbeat, Codex continuity, and recent sessions are attached to the same workspace card.
+      </p>
+      <div id="workspaces" class="entity-list">loading...</div>
+    </section>
+
+    <section id="archived-section" class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Local History</p>
+          <h2>Archived Workspaces</h2>
+        </div>
+        <span id="archived-count" class="badge badge-neutral">0</span>
+      </div>
+      <div id="archived" class="entity-list">loading...</div>
+    </section>
+  </main>
   <script src="/assets/management.js"></script>
 </body>
 </html>
