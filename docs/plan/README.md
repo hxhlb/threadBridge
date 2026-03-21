@@ -67,6 +67,8 @@
   - 目前已有通用 management API / SSE 骨架，但 thread-level observability API 仍未成形
 - [llm-guidance-and-goals.md](/Volumes/Data/Github/threadBridge/docs/plan/llm-guidance-and-goals.md)
   - secondary LLM 設定、AI 建議與 AI 目標層草稿
+- [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-execution-modes.md)
+  - Codex execution profile / `yolo mode` 草稿
 - [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)
   - appendix 注入可選化草稿
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
