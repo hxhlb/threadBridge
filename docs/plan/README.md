@@ -47,7 +47,8 @@
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
   - `threadbridge_desktop`、macOS-first tray menu、webview settings shell 已開始落地
   - local create / bind / reconnect / archive / restore control 已進入 management API
-  - 仍缺 desktop runtime owner 收尾與 managed Codex update flow
+  - managed Codex source build / cache refresh 已進入 management API
+  - 仍缺 desktop runtime owner 收尾與 web 管理面結構化
 
 ## 純草稿
 

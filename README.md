@@ -10,7 +10,7 @@ Telegram bot that maps Telegram threads to Codex app-server threads bound to rea
 - Starts workspace-scoped shared Codex app-server daemons on loopback websocket and connects the bot over JSON-RPC.
 - Installs a managed runtime appendix and `.threadbridge/` wrapper surface into the bound workspace.
 - Exposes a managed `hcodex` launcher for the bound workspace through `codex --remote <ws-url>`.
-- Starts a local management API for setup, runtime health, and workspace views on loopback HTTP.
+- Starts a local management API for setup, runtime health, active thread views, and workspace views on loopback HTTP.
 - On macOS, also has a desktop runtime entrypoint with a tray menu and embedded settings webview.
 
 ## Requirements
@@ -57,6 +57,7 @@ scripts/local_threadbridge.sh restart --codex-source source
 - Main private chat acts as the control console.
 - If Telegram credentials are missing, threadBridge still starts the local management API but does not start Telegram polling.
 - `threadbridge_desktop` also starts without Telegram credentials; it keeps the tray and local settings UI available for onboarding.
+- In the desktop runtime, saving Telegram setup through the local management UI will trigger a background retry to start polling; a full process restart is no longer the only path.
 - Only Telegram user IDs listed in `AUTHORIZED_TELEGRAM_USER_IDS` can trigger the bot.
 - `/new_thread` creates a Telegram topic and bot-local metadata only.
 - `/bind_workspace <absolute-path>` installs the runtime appendix into the target workspace and starts a fresh Codex thread for it.
@@ -67,7 +68,7 @@ scripts/local_threadbridge.sh restart --codex-source source
 - `hcodex` is the managed local TUI path. It resolves the workspace daemon from `.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
 - The local management API defaults to `http://127.0.0.1:38420` and can be changed with `THREADBRIDGE_MANAGEMENT_BIND_ADDR`.
 - On macOS, the tray menu lists one submenu per managed workspace, `Start New hcodex Session`, and the recent 5 session IDs for resume.
-- The local management UI can repair a workspace runtime and refresh the managed Codex cache from the current `codex` on `PATH`.
+- The local management UI can open a managed workspace in Finder, repair a workspace runtime, refresh the managed Codex cache from the current `codex` on `PATH`, and build a managed source Codex binary from the local Codex Rust workspace.
 
 ## Runtime Layout
 

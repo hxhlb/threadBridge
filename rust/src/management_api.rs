@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::path::Path;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use crate::workspace_status::{read_cli_owner_claim, read_workspace_aggregate_sta
 
 const MANAGED_CODEX_SOURCE_FILE: &str = ".threadbridge/codex/source.txt";
 const MANAGED_CODEX_CACHE_BINARY: &str = ".threadbridge/codex/codex";
+const MANAGED_CODEX_BUILD_INFO_FILE: &str = ".threadbridge/codex/build-info.txt";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +69,10 @@ impl ManagementApiHandle {
 
     pub async fn workspace_views(&self) -> Result<Vec<ManagedWorkspaceView>> {
         self.state.workspace_views().await
+    }
+
+    pub async fn thread_views(&self) -> Result<Vec<ThreadStateView>> {
+        self.state.thread_views().await
     }
 
     pub async fn archived_thread_views(&self) -> Result<Vec<ArchivedThreadView>> {
@@ -125,6 +131,7 @@ pub struct RuntimeHealthView {
 pub struct ManagedCodexView {
     pub source: &'static str,
     pub source_file_path: String,
+    pub build_info_file_path: String,
     pub binary_path: String,
     pub binary_ready: bool,
     pub version: Option<String>,
@@ -148,6 +155,20 @@ pub struct ManagedWorkspaceView {
     pub hcodex_path: String,
     pub hcodex_available: bool,
     pub recent_codex_sessions: Vec<RecentCodexSessionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadStateView {
+    pub thread_key: String,
+    pub title: Option<String>,
+    pub workspace_cwd: Option<String>,
+    pub binding_status: &'static str,
+    pub run_status: &'static str,
+    pub current_codex_thread_id: Option<String>,
+    pub tui_active_codex_thread_id: Option<String>,
+    pub archived_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,6 +202,13 @@ struct ArchiveThreadResponse {
 struct ThreadMutationResponse {
     ok: bool,
     thread_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenWorkspaceResponse {
+    opened: bool,
+    thread_key: String,
+    workspace_cwd: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,6 +261,16 @@ struct RefreshManagedCodexCacheResponse {
     version: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct BuildManagedCodexSourceResponse {
+    built: bool,
+    binary_path: String,
+    version: Option<String>,
+    build_profile: String,
+    source_repo: String,
+    source_rs_dir: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateThreadRequest {
     title: Option<String>,
@@ -281,10 +319,14 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             "/api/managed-codex/refresh-cache",
             post(post_refresh_managed_codex_cache),
         )
+        .route(
+            "/api/managed-codex/build-source",
+            post(post_build_managed_codex_source),
+        )
         .route("/api/runtime-health", get(get_runtime_health))
+        .route("/api/threads", get(get_threads).post(post_create_thread))
         .route("/api/workspaces", get(get_workspaces))
         .route("/api/archived-threads", get(get_archived_threads))
-        .route("/api/threads", post(post_create_thread))
         .route(
             "/api/threads/create-and-bind",
             post(post_create_and_bind_thread),
@@ -300,6 +342,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
         .route(
             "/api/workspaces/:thread_key/reconnect",
             post(post_reconnect_codex),
+        )
+        .route(
+            "/api/workspaces/:thread_key/open",
+            post(post_open_workspace),
         )
         .route(
             "/api/workspaces/:thread_key/repair-runtime",
@@ -387,6 +433,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
           <option value="source">source</option>
         </select>
         <button class="secondary" onclick="updateManagedCodexPreference()">Apply Codex Source</button>
+        <button class="secondary" onclick="buildManagedCodexSource()">Build Source Codex</button>
         <button class="secondary" onclick="refreshManagedCodexCache()">Refresh Managed Cache</button>
         <span id="managed-codex-status" class="muted"></span>
       </div>
@@ -407,6 +454,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
     <p class="muted">First use requires a Telegram control chat. Send <code>/start</code> to the bot from the target chat first, then create or restore a thread here.</p>
     <pre id="onboarding-status">waiting...</pre>
   </div>
+  <div class="card"><h2>Active Threads</h2><div id="threads">loading...</div></div>
   <div class="card"><h2>Managed Workspaces</h2><div id="workspaces">loading...</div></div>
   <div class="card"><h2>Archived Threads</h2><div id="archived">loading...</div></div>
   <script>
@@ -442,6 +490,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
             <button class="secondary" onclick="bindWorkspace('${{item.thread_key}}')">Bind Workspace</button>
           </div>
           <div style="margin-top:0.75rem;">
+            <button class="secondary" onclick="openWorkspace('${{item.thread_key}}')">Open Workspace</button>
             <button onclick="launchNew('${{item.thread_key}}')">Launch New</button>
             <button class="secondary" onclick="reconnectCodex('${{item.thread_key}}')">Reconnect Codex</button>
             <button class="secondary" onclick="repairRuntime('${{item.thread_key}}')">Repair Runtime</button>
@@ -453,6 +502,26 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
             <button class="secondary" onclick="launchResume('${{item.thread_key}}')">Launch Resume</button>
           </div>
           <pre id="launch-${{item.thread_key}}" style="display:none;margin-top:0.75rem;"></pre>
+        </div>
+      `).join('');
+    }}
+    function renderThreads(items) {{
+      const root = document.getElementById('threads');
+      if (!items.length) {{
+        root.innerHTML = '<p>No active threads.</p>';
+        return;
+      }}
+      root.innerHTML = items.map(item => `
+        <div style="border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem;background:white;">
+          <strong>${{item.title || item.thread_key}}</strong><br />
+          thread_key: <code>${{item.thread_key}}</code><br />
+          workspace: <code>${{item.workspace_cwd || 'unbound'}}</code><br />
+          binding: <code>${{item.binding_status}}</code> |
+          run: <code>${{item.run_status}}</code><br />
+          current: <code>${{item.current_codex_thread_id || 'none'}}</code><br />
+          tui: <code>${{item.tui_active_codex_thread_id || 'none'}}</code><br />
+          last_used_at: <code>${{item.last_used_at || 'unknown'}}</code><br />
+          last_error: <code>${{item.last_error || 'none'}}</code>
         </div>
       `).join('');
     }}
@@ -475,9 +544,10 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
       `).join('');
     }}
     async function refresh() {{
-      const [setup, health, workspaces, archived] = await Promise.all([
+      const [setup, health, threads, workspaces, archived] = await Promise.all([
         renderJson('setup', '/api/setup'),
         renderJson('health', '/api/runtime-health'),
+        fetch('/api/threads').then(r => r.json()),
         fetch('/api/workspaces').then(r => r.json()),
         fetch('/api/archived-threads').then(r => r.json()),
       ]);
@@ -486,6 +556,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
       document.getElementById('onboarding-status').textContent = setup.control_chat_ready
         ? `Control chat is ready: ${{setup.control_chat_id}}`
         : 'Control chat is not ready. Send /start to the bot from the target Telegram chat first.';
+      renderThreads(threads);
       renderWorkspaceCards(workspaces);
       renderArchivedThreads(archived);
     }}
@@ -537,6 +608,14 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
         return;
       }}
       await refresh();
+    }}
+    async function openWorkspace(threadKey) {{
+      const response = await fetch(`/api/workspaces/${{threadKey}}/open`, {{ method: 'POST' }});
+      const data = await response.json();
+      if (!response.ok) {{
+        alert(data.error || 'Open workspace failed');
+        return;
+      }}
     }}
     async function repairRuntime(threadKey) {{
       const response = await fetch(`/api/workspaces/${{threadKey}}/repair-runtime`, {{ method: 'POST' }});
@@ -641,6 +720,20 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
       status.textContent = `Cache refreshed: ${{data.version || data.binary_path}}`;
       await refresh();
     }}
+    async function buildManagedCodexSource() {{
+      const status = document.getElementById('managed-codex-status');
+      status.textContent = 'Building source Codex...';
+      const response = await fetch('/api/managed-codex/build-source', {{
+        method: 'POST',
+      }});
+      const data = await response.json();
+      if (!response.ok) {{
+        status.textContent = data.error || 'Build failed';
+        return;
+      }}
+      status.textContent = `Source build ready: ${{data.version || data.binary_path}}`;
+      await refresh();
+    }}
     document.getElementById('setup-form').addEventListener('submit', async event => {{
       event.preventDefault();
       const status = document.getElementById('setup-status');
@@ -712,10 +805,22 @@ async fn post_refresh_managed_codex_cache(
     Ok(Json(state.refresh_managed_codex_cache().await?))
 }
 
+async fn post_build_managed_codex_source(
+    State(state): State<Arc<ManagementApiState>>,
+) -> Result<Json<BuildManagedCodexSourceResponse>, ManagementApiError> {
+    Ok(Json(state.build_managed_codex_source().await?))
+}
+
 async fn get_runtime_health(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Result<Json<RuntimeHealthView>, ManagementApiError> {
     Ok(Json(state.runtime_health().await?))
+}
+
+async fn get_threads(
+    State(state): State<Arc<ManagementApiState>>,
+) -> Result<Json<Vec<ThreadStateView>>, ManagementApiError> {
+    Ok(Json(state.thread_views().await?))
 }
 
 async fn get_workspaces(
@@ -774,6 +879,13 @@ async fn post_reconnect_codex(
     Ok(Json(state.reconnect_codex(&thread_key).await?))
 }
 
+async fn post_open_workspace(
+    State(state): State<Arc<ManagementApiState>>,
+    AxumPath(thread_key): AxumPath<String>,
+) -> Result<Json<OpenWorkspaceResponse>, ManagementApiError> {
+    Ok(Json(state.open_workspace(&thread_key).await?))
+}
+
 async fn post_repair_workspace_runtime(
     State(state): State<Arc<ManagementApiState>>,
     AxumPath(thread_key): AxumPath<String>,
@@ -821,11 +933,13 @@ async fn get_events(
         loop {
             let setup = state.setup_state().await.ok();
             let runtime = state.runtime_health().await.ok();
+            let threads = state.thread_views().await.ok();
             let workspaces = state.workspace_views().await.ok();
             let archived = state.archived_thread_views().await.ok();
             let payload = serde_json::json!({
                 "setup": setup,
                 "runtime": runtime,
+                "threads": threads,
                 "workspaces": workspaces,
                 "archived_threads": archived,
             });
@@ -927,6 +1041,10 @@ impl ManagementApiState {
                 .join(MANAGED_CODEX_SOURCE_FILE)
                 .display()
                 .to_string(),
+            build_info_file_path: repo_root
+                .join(MANAGED_CODEX_BUILD_INFO_FILE)
+                .display()
+                .to_string(),
             binary_path: binary_path
                 .unwrap_or_else(|| repo_root.join(MANAGED_CODEX_CACHE_BINARY))
                 .display()
@@ -1015,6 +1133,113 @@ impl ManagementApiState {
         })
     }
 
+    async fn build_managed_codex_source(&self) -> Result<BuildManagedCodexSourceResponse> {
+        let build = ManagedCodexSourceBuild::from_env()?;
+        if !build.source_rs_dir.is_dir() {
+            return Err(anyhow!(
+                "missing Codex source workspace: {}",
+                build.source_rs_dir.display()
+            ));
+        }
+        let source_manifest = build.source_rs_dir.join("Cargo.toml");
+        if !source_manifest.exists() {
+            return Err(anyhow!(
+                "missing Codex Cargo.toml: {}",
+                source_manifest.display()
+            ));
+        }
+
+        let mut command = Command::new("cargo");
+        command.current_dir(&build.source_rs_dir);
+        command.env("CARGO_HOME", &build.cargo_home);
+        command.env("CARGO_TARGET_DIR", &build.cargo_target_dir);
+        command.env("RUSTUP_HOME", &build.rustup_home);
+        command.arg("build");
+        if build.build_profile == ManagedCodexBuildProfile::Release {
+            command.arg("--release");
+        }
+        command.arg("-p").arg("codex-cli");
+        let output = command.output().await.with_context(|| {
+            format!("failed to build Codex in {}", build.source_rs_dir.display())
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            let detail = if !stderr.is_empty() { stderr } else { stdout };
+            return Err(anyhow!(
+                "source Codex build failed in {}: {}",
+                build.source_rs_dir.display(),
+                detail
+            ));
+        }
+
+        let source_binary = build.built_binary_path();
+        if !source_binary.exists() {
+            return Err(anyhow!(
+                "expected built Codex binary at {}",
+                source_binary.display()
+            ));
+        }
+
+        let managed_dir = self
+            .runtime
+            .codex_working_directory
+            .join(".threadbridge/codex");
+        tokio::fs::create_dir_all(&managed_dir)
+            .await
+            .with_context(|| format!("failed to create {}", managed_dir.display()))?;
+        let dest_path = self
+            .runtime
+            .codex_working_directory
+            .join(MANAGED_CODEX_CACHE_BINARY);
+        tokio::fs::copy(&source_binary, &dest_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to copy source-built Codex from {} to {}",
+                    source_binary.display(),
+                    dest_path.display()
+                )
+            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = tokio::fs::metadata(&dest_path).await?;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o755);
+            tokio::fs::set_permissions(&dest_path, permissions).await?;
+        }
+
+        let git_rev = resolve_git_rev(&build.source_repo)
+            .await
+            .unwrap_or_else(|_| "unknown".to_owned());
+        let build_info = format!(
+            "source_repo={}\nsource_rs_dir={}\nbuild_profile={}\ngit_rev={}\nbinary={}\n",
+            build.source_repo.display(),
+            build.source_rs_dir.display(),
+            build.build_profile.as_str(),
+            git_rev,
+            source_binary.display()
+        );
+        let build_info_path = self
+            .runtime
+            .codex_working_directory
+            .join(MANAGED_CODEX_BUILD_INFO_FILE);
+        tokio::fs::write(&build_info_path, build_info)
+            .await
+            .with_context(|| format!("failed to write {}", build_info_path.display()))?;
+
+        let version = read_codex_version(&dest_path).await.ok();
+        Ok(BuildManagedCodexSourceResponse {
+            built: true,
+            binary_path: dest_path.display().to_string(),
+            version,
+            build_profile: build.build_profile.as_str().to_owned(),
+            source_repo: build.source_repo.display().to_string(),
+            source_rs_dir: build.source_rs_dir.display().to_string(),
+        })
+    }
+
     async fn workspace_views(&self) -> Result<Vec<ManagedWorkspaceView>> {
         let active_threads = self.repository.list_active_threads().await?;
         let mut grouped: BTreeMap<String, WorkspaceAggregateView> = BTreeMap::new();
@@ -1099,6 +1324,63 @@ impl ManagementApiState {
             views.push(item);
         }
         views.sort_by(|a, b| a.workspace_cwd.cmp(&b.workspace_cwd));
+        Ok(views)
+    }
+
+    async fn thread_views(&self) -> Result<Vec<ThreadStateView>> {
+        let active_threads = self.repository.list_active_threads().await?;
+        let mut views = Vec::new();
+        for record in active_threads {
+            let binding = self.repository.read_session_binding(&record).await?;
+            let workspace_cwd = binding
+                .as_ref()
+                .and_then(|binding| binding.workspace_cwd.clone());
+            let run_status = match workspace_cwd.as_deref() {
+                Some(workspace_cwd) => {
+                    let workspace_path = Path::new(workspace_cwd);
+                    let status = read_workspace_aggregate_status(workspace_path)
+                        .await
+                        .unwrap_or_else(|_| {
+                            crate::workspace_status::default_workspace_status(workspace_path)
+                        });
+                    if status.live_cli_session_ids.is_empty() {
+                        "idle"
+                    } else {
+                        "running"
+                    }
+                }
+                None => "unbound",
+            };
+            let session_broken = binding
+                .as_ref()
+                .map(|binding| binding.session_broken)
+                .unwrap_or(record.metadata.session_broken)
+                || record.metadata.session_broken;
+            views.push(ThreadStateView {
+                thread_key: record.metadata.thread_key,
+                title: record.metadata.title,
+                workspace_cwd,
+                binding_status: match binding.as_ref() {
+                    Some(_) if session_broken => "broken",
+                    Some(_) => "healthy",
+                    None => "unbound",
+                },
+                run_status,
+                current_codex_thread_id: binding
+                    .as_ref()
+                    .and_then(|binding| binding.current_codex_thread_id.clone()),
+                tui_active_codex_thread_id: binding
+                    .as_ref()
+                    .and_then(|binding| binding.tui_active_codex_thread_id.clone()),
+                archived_at: record.metadata.archived_at,
+                last_used_at: record.metadata.last_codex_turn_at,
+                last_error: binding
+                    .as_ref()
+                    .and_then(|binding| binding.session_broken_reason.clone())
+                    .or(record.metadata.session_broken_reason),
+            });
+        }
+        views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
         Ok(views)
     }
 
@@ -1240,6 +1522,16 @@ impl ManagementApiState {
         })
     }
 
+    async fn open_workspace(&self, thread_key: &str) -> Result<OpenWorkspaceResponse> {
+        let config = self.workspace_launch_config(thread_key).await?;
+        open_workspace_path(Path::new(&config.workspace_cwd)).await?;
+        Ok(OpenWorkspaceResponse {
+            opened: true,
+            thread_key: thread_key.to_owned(),
+            workspace_cwd: config.workspace_cwd,
+        })
+    }
+
     async fn repair_workspace_runtime(&self, thread_key: &str) -> Result<ThreadMutationResponse> {
         let owner = self
             .runtime_owner
@@ -1378,6 +1670,70 @@ async fn launch_hcodex_via_terminal(command: &str) -> Result<()> {
     }
 }
 
+async fn open_workspace_path(path: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("/usr/bin/open")
+            .arg(path)
+            .status()
+            .await
+            .with_context(|| format!("failed to open workspace {}", path.display()))?;
+        if !status.success() {
+            return Err(anyhow!(
+                "open workspace failed for {} with status {}",
+                path.display(),
+                status
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new("xdg-open")
+            .arg(path)
+            .status()
+            .await
+            .with_context(|| format!("failed to open workspace {}", path.display()))?;
+        if !status.success() {
+            return Err(anyhow!(
+                "open workspace failed for {} with status {}",
+                path.display(),
+                status
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(path)
+            .status()
+            .await
+            .with_context(|| format!("failed to open workspace {}", path.display()))?;
+        if !status.success() {
+            return Err(anyhow!(
+                "open workspace failed for {} with status {}",
+                path.display(),
+                status
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = path;
+        Err(anyhow!(
+            "open workspace is not implemented on this platform"
+        ))
+    }
+}
+
 fn apple_script_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -1500,6 +1856,84 @@ enum ManagedCodexSourcePreference {
     Source,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedCodexBuildProfile {
+    Dev,
+    Release,
+}
+
+impl ManagedCodexBuildProfile {
+    fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "dev" => Ok(Self::Dev),
+            "release" => Ok(Self::Release),
+            other => Err(anyhow!("unsupported CODEX_BUILD_PROFILE: {other}")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Release => "release",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ManagedCodexSourceBuild {
+    source_repo: PathBuf,
+    source_rs_dir: PathBuf,
+    build_profile: ManagedCodexBuildProfile,
+    cargo_home: PathBuf,
+    cargo_target_dir: PathBuf,
+    rustup_home: PathBuf,
+}
+
+impl ManagedCodexSourceBuild {
+    fn from_env() -> Result<Self> {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .context("HOME is not set")?;
+        let default_build_profile = env::var("BUILD_PROFILE").unwrap_or_else(|_| "dev".to_owned());
+        let build_profile = ManagedCodexBuildProfile::parse(
+            &env::var("CODEX_BUILD_PROFILE").unwrap_or(default_build_profile),
+        )?;
+        let source_repo = env::var_os("CODEX_SOURCE_REPO")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/Volumes/Data/Github/codex"));
+        let source_rs_dir = env::var_os("CODEX_SOURCE_RS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| source_repo.join("codex-rs"));
+        let cargo_home = env::var_os("CODEX_CARGO_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cargo"));
+        let cargo_target_dir = env::var_os("CODEX_CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| source_rs_dir.join("target"));
+        let rustup_home = env::var_os("CODEX_RUSTUP_HOME")
+            .or_else(|| env::var_os("RUSTUP_HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".rustup"));
+        Ok(Self {
+            source_repo,
+            source_rs_dir,
+            build_profile,
+            cargo_home,
+            cargo_target_dir,
+            rustup_home,
+        })
+    }
+
+    fn built_binary_path(&self) -> PathBuf {
+        match self.build_profile {
+            ManagedCodexBuildProfile::Dev => self.cargo_target_dir.join("debug").join("codex"),
+            ManagedCodexBuildProfile::Release => {
+                self.cargo_target_dir.join("release").join("codex")
+            }
+        }
+    }
+}
+
 impl ManagedCodexSourcePreference {
     fn parse(value: &str) -> Result<Self> {
         match value.trim() {
@@ -1589,6 +2023,26 @@ async fn resolve_codex_from_path() -> Result<std::path::PathBuf> {
         return Err(anyhow!("could not find `codex` on PATH"));
     }
     Ok(Path::new(&resolved).to_path_buf())
+}
+
+async fn resolve_git_rev(repo_root: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("rev-parse")
+        .arg("--short")
+        .arg("HEAD")
+        .output()
+        .await
+        .with_context(|| format!("failed to read git revision from {}", repo_root.display()))?;
+    if !output.status.success() {
+        return Err(anyhow!("git rev-parse failed for {}", repo_root.display()));
+    }
+    let rev = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if rev.is_empty() {
+        return Err(anyhow!("empty git revision for {}", repo_root.display()));
+    }
+    Ok(rev)
 }
 
 #[derive(Debug)]

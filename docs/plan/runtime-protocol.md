@@ -10,6 +10,7 @@
 - 本地 management API 已開始提供 query / control / SSE：
   - setup
   - runtime health
+  - active thread list
   - managed workspace list
   - archived thread list
   - create / bind / reconnect / archive / restore
@@ -153,11 +154,13 @@ v1 至少定義：
 - `create_thread`
 - `bind_workspace`
 - `reconnect_codex`
+- `open_workspace`
 - `launch_hcodex_new`
 - `launch_hcodex_resume`
 - `archive_thread`
 - `restore_thread`
 - `update_managed_codex`
+- `build_managed_codex_source`
 - `save_telegram_setup`
 
 目前已部分對應到代碼中的 local HTTP endpoint：
@@ -166,6 +169,7 @@ v1 至少定義：
 - `POST /api/threads/create-and-bind`
 - `POST /api/threads/:thread_key/bind-workspace`
 - `POST /api/workspaces/:thread_key/reconnect`
+- `POST /api/workspaces/:thread_key/open`
 - `POST /api/workspaces/:thread_key/launch-new`
 - `POST /api/workspaces/:thread_key/launch-resume`
 - `POST /api/workspaces/:thread_key/repair-runtime`
@@ -174,6 +178,8 @@ v1 至少定義：
 - `PUT /api/setup/telegram`
 - `POST /api/managed-codex/preference`
 - `POST /api/managed-codex/refresh-cache`
+- `POST /api/managed-codex/build-source`
+- `GET /api/threads`
 
 ## 建議的 event model
 

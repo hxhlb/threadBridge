@@ -13,12 +13,14 @@
   - `GET /api/setup`
   - `PUT /api/setup/telegram`
   - `GET /api/runtime-health`
+  - `GET /api/threads`
   - `GET /api/workspaces`
   - `GET /api/archived-threads`
   - `POST /api/threads`
   - `POST /api/threads/create-and-bind`
   - `POST /api/threads/:thread_key/bind-workspace`
   - `POST /api/workspaces/:thread_key/reconnect`
+  - `POST /api/workspaces/:thread_key/open`
   - `POST /api/workspaces/:thread_key/launch-new`
   - `POST /api/workspaces/:thread_key/launch-resume`
   - `POST /api/threads/:thread_key/archive`
@@ -34,13 +36,15 @@
 - managed Codex health 已開始暴露真實 source / binary path / version，且本地管理面可切換 Codex source preference 並同步已綁定 workspace 的 launcher
 - desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並提供單 workspace 的 `repair runtime` control action
 - 本地管理面已開始提供 managed Codex cache refresh，能把目前 `PATH` 上的 `codex` 複製進 repo 管理快取
+- 本地管理面已開始提供 managed Codex source build，可直接從本機 Codex Rust workspace 建出受管 binary 並寫入 build info
+- 本地管理面已開始提供 `open workspace` control action
 - Telegram bot 啟動已抽成可複用 runner，headless `threadbridge` 與 desktop runtime 共用同一套 bot/runtime 啟動邏輯
+- setup 儲存後，desktop runtime 已會在背景重新嘗試拉起 Telegram polling，不再只剩重啟一條路
 
 目前仍缺：
 
-- desktop runtime owner 的 healthcheck / restart / self-heal 收斂
-- managed Codex binary 的更新流程
-- setup 儲存後自動啟動 Telegram polling；目前仍需要重啟 runtime
+- desktop runtime owner 對 TUI proxy / handoff continuity 的 owner 收斂仍不完整
+- managed Codex source build 目前仍是直接呼叫 cargo 的實作骨架，尚未收斂成更正式的 update/install UX
 - web 管理面的 UI 還是內嵌 HTML，尚未拆成更正式的前端結構
 
 ## 問題
@@ -125,6 +129,8 @@ thread / workspace 管理頁至少顯示：
 - `tui_active_codex_thread_id`
 - archived 與否
 - `last_used_at`
+
+目前代碼已開始同時暴露 `GET /api/threads`、`GET /api/workspaces`、`GET /api/archived-threads`，但 web 管理面的視圖層仍偏簡單，還沒有收斂成更正式的前端模組。
 
 ### 3. Thread 快捷操作
 
