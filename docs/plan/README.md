@@ -72,6 +72,8 @@
   - secondary LLM 設定、AI 建議與 AI 目標層草稿
 - [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-execution-modes.md)
   - Codex execution profile / `yolo mode` 草稿
+- [desktop-runtime-tool-bridge.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-tool-bridge.md)
+  - desktop runtime 作為跨沙盒 capability host / tool bridge 草稿
 - [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)
   - appendix 注入可選化草稿
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
