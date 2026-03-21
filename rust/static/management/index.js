@@ -52,6 +52,32 @@ function renderWorkspaceCards(items) {
   `).join('');
 }
 
+function renderHealthSummary(health) {
+  const root = document.getElementById('health-summary');
+  const owner = health.runtime_owner || {};
+  const managedCodex = health.managed_codex || {};
+  const metrics = [
+    ['App Server', health.app_server_status || 'unknown'],
+    ['TUI Proxy', health.tui_proxy_status || 'unknown'],
+    ['Handoff', health.handoff_readiness || 'unknown'],
+    ['Owner State', owner.state || 'inactive'],
+    ['Owner Last Success', owner.last_successful_reconcile_at || 'never'],
+    ['Owner Last Error', owner.last_error || 'none'],
+    ['Running Workspaces', String(health.running_workspaces ?? 0)],
+    ['Broken Threads', String(health.broken_threads ?? 0)],
+    ['Conflicted Workspaces', String(health.conflicted_workspaces ?? 0)],
+    ['Managed Codex Source', managedCodex.source || 'unknown'],
+    ['Managed Codex Version', managedCodex.version || 'unknown'],
+    ['Managed Codex Ready', managedCodex.binary_ready ? 'yes' : 'no'],
+  ];
+  root.innerHTML = metrics.map(([label, value]) => `
+    <div class="metric">
+      <span class="metric-label">${escapeHtml(label)}</span>
+      <span class="metric-value"><code>${escapeHtml(value)}</code></span>
+    </div>
+  `).join('');
+}
+
 function renderThreads(items) {
   const root = document.getElementById('threads');
   if (!items.length) {
@@ -116,6 +142,7 @@ async function refresh() {
   document.getElementById('onboarding-status').textContent = setup.control_chat_ready
     ? `Control chat is ready: ${setup.control_chat_id}`
     : 'Control chat is not ready. Send /start to the bot from the target Telegram chat first.';
+  renderHealthSummary(health);
   renderThreads(threads);
   renderWorkspaceCards(workspaces);
   renderArchivedThreads(archived);

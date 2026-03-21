@@ -139,6 +139,13 @@
   - `pending_adoption`
   - `degraded`
   - `unavailable`
+- `runtime_owner`
+  - `state`
+  - `last_reconcile_started_at`
+  - `last_reconcile_finished_at`
+  - `last_successful_reconcile_at`
+  - `last_error`
+  - `last_report`
 - `broken_threads`
 - `running_workspaces`
 - `conflicted_workspaces`

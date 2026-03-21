@@ -74,6 +74,7 @@ scripts/local_threadbridge.sh restart --codex-source source
 - The desktop runtime owner now proactively ensures both the shared app-server daemon and the workspace TUI proxy for managed workspaces.
 - The management surface now shows TUI adoption-pending state per thread and workspace, so local handoff is visible without reading raw state files.
 - Workspace and aggregate runtime health now surface that same handoff state as `pending_adoption`/degraded readiness instead of reporting a fully ready handoff while TUI adoption is still unresolved.
+- Aggregate runtime health now also exposes desktop runtime owner state, last successful reconcile timestamp, last error, and the last reconcile report through the local management API.
 - The local management UI can now explicitly adopt or reject a pending TUI session handoff instead of waiting for Telegram callback controls or implicit auto-adopt.
 - The local server now serves the management UI from a checked-in static asset instead of embedding the entire page as an inline Rust string.
 

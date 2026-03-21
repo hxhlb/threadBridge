@@ -23,7 +23,7 @@ use crate::app_server_runtime::WorkspaceRuntimeState;
 use crate::config::{RuntimeConfig, load_optional_telegram_config};
 use crate::local_control::LocalControlHandle;
 use crate::repository::{RecentCodexSessionEntry, ThreadRepository};
-use crate::runtime_owner::DesktopRuntimeOwner;
+use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus};
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 use crate::workspace_status::{read_cli_owner_claim, read_workspace_aggregate_status};
 
@@ -129,6 +129,7 @@ pub struct RuntimeHealthView {
     pub app_server_status: &'static str,
     pub tui_proxy_status: &'static str,
     pub handoff_readiness: &'static str,
+    pub runtime_owner: RuntimeOwnerStatus,
     pub managed_codex: ManagedCodexView,
 }
 
@@ -736,6 +737,10 @@ impl ManagementApiState {
                 .iter()
                 .map(|workspace| workspace.handoff_readiness),
         );
+        let runtime_owner = match self.runtime_owner.read().await.clone() {
+            Some(owner) => owner.status().await,
+            None => RuntimeOwnerStatus::inactive(),
+        };
         Ok(RuntimeHealthView {
             management_bind_addr: self.runtime.management_bind_addr.to_string(),
             broken_threads: workspaces
@@ -753,6 +758,7 @@ impl ManagementApiState {
             app_server_status,
             tui_proxy_status,
             handoff_readiness,
+            runtime_owner,
             managed_codex: self.managed_codex_view().await?,
         })
     }

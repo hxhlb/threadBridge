@@ -121,6 +121,10 @@ webview 是正式管理面，不是單純 token 設定頁。
   - `pending_adoption`: 底層 runtime 可用，但目前有待 adopt/reject 的 TUI handoff
   - `degraded`: 只有部分 runtime surface 可用
   - `unavailable`: handoff 目前不可用
+- desktop runtime owner state
+  - last reconcile started / finished / successful timestamps
+  - last reconcile error
+  - last reconcile report
 - broken thread 數量
 - running thread 數量
 - Telegram polling 狀態
