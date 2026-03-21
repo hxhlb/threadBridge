@@ -42,12 +42,8 @@ pub enum Command {
     Start,
     #[command(description = "Create a Telegram thread and bind it to a workspace path")]
     AddWorkspace,
-    #[command(description = "Create a new Telegram thread")]
-    NewThread,
     #[command(description = "Start a fresh Codex session for this thread")]
     New,
-    #[command(description = "Bind this Telegram thread to a workspace path")]
-    BindWorkspace,
     #[command(description = "Generate a title for the current thread from chat history")]
     GenerateTitle,
     #[command(description = "Archive the current thread")]
@@ -450,7 +446,9 @@ pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static
         Some(_) => {
             "This thread is missing a usable Codex thread id. Use /new to start a fresh one."
         }
-        None => "This thread is not bound to a workspace yet. Use /bind_workspace <absolute-path>.",
+        None => {
+            "This thread is not bound to a workspace yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
+        }
     }
 }
 
@@ -720,7 +718,6 @@ mod tests {
 
         assert!(commands.iter().any(|command| command == "/new"));
         assert!(commands.iter().any(|command| command == "/add_workspace"));
-        assert!(commands.iter().any(|command| command == "/new_thread"));
         assert!(commands.iter().any(|command| command == "/thread_info"));
         assert!(
             !commands
@@ -824,10 +821,8 @@ mod tests {
             Command::parse("/add_workspace", ""),
             Ok(Command::AddWorkspace)
         ));
-        assert!(matches!(
-            Command::parse("/new_thread", ""),
-            Ok(Command::NewThread)
-        ));
+        assert!(Command::parse("/new_thread", "").is_err());
+        assert!(Command::parse("/bind_workspace", "").is_err());
         assert!(matches!(
             Command::parse("/thread_info", ""),
             Ok(Command::ThreadInfo)

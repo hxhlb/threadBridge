@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use teloxide::payloads::setters::*;
 use tokio::sync::Mutex;
 use tracing::{error, info};
@@ -14,20 +14,6 @@ use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
 use super::status_sync;
 use super::*;
-
-async fn resolve_workspace_argument(raw: &str) -> Result<PathBuf> {
-    let input = PathBuf::from(raw.trim());
-    if !input.is_absolute() {
-        bail!("Workspace path must be absolute.");
-    }
-    let metadata = tokio::fs::metadata(&input)
-        .await
-        .with_context(|| format!("workspace path does not exist: {}", input.display()))?;
-    if !metadata.is_dir() {
-        bail!("Workspace path must point to a directory.");
-    }
-    Ok(input.canonicalize().unwrap_or(input))
-}
 
 async fn start_fresh_binding(
     state: &AppState,
@@ -149,9 +135,9 @@ pub(crate) async fn run_command(
                         None,
                     )
                     .await?;
-                "Control console.\nUse /add_workspace <absolute-path> for the workspace-first flow, or /new_thread to create a Telegram thread manually."
+                "Control console.\nUse /add_workspace <absolute-path> for the workspace-first flow."
             } else {
-                "Thread workspace.\nUse /bind_workspace <absolute-path> to attach a project."
+                "Thread workspace.\nUse /new, /reconnect_codex, /archive_thread, or /generate_title here."
             };
             send_scoped_message(bot, msg.chat.id, msg.thread_id, text).await?;
         }
@@ -190,170 +176,6 @@ pub(crate) async fn run_command(
                 }
             }
         }
-        Command::NewThread => {
-            if !is_control_chat(msg) {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    msg.thread_id,
-                    "Use /new_thread from the main private chat.",
-                )
-                .await?;
-                return Ok(());
-            }
-            let title = format!("Thread {}", chrono::Local::now().format("%m-%d %H:%M"));
-            let topic = bot.create_forum_topic(msg.chat.id, title.clone()).await?;
-            let record = state
-                .repository
-                .create_thread(
-                    msg.chat.id.0,
-                    thread_id_to_i32(topic.thread_id),
-                    title.clone(),
-                )
-                .await?;
-            send_scoped_message(
-                bot,
-                msg.chat.id,
-                None,
-                format!("Created thread \"{}\".", topic.name),
-            )
-            .await?;
-            state
-                .repository
-                .append_log(
-                    &record,
-                    LogDirection::System,
-                    "Telegram thread created. Awaiting workspace binding.",
-                    None,
-                )
-                .await?;
-            send_scoped_message(
-                bot,
-                msg.chat.id,
-                Some(topic.thread_id),
-                "Thread created.\n\nUse /bind_workspace <absolute-path> in this thread.",
-            )
-            .await?;
-        }
-        Command::BindWorkspace => {
-            if is_control_chat(msg) {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    None,
-                    "Use /bind_workspace <absolute-path> inside a thread.",
-                )
-                .await?;
-                return Ok(());
-            }
-            let Some(argument) = command_argument_text(msg, "bind_workspace") else {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    msg.thread_id,
-                    "Usage: /bind_workspace <absolute-path>",
-                )
-                .await?;
-                return Ok(());
-            };
-            let thread_id = msg.thread_id.context("thread message missing thread id")?;
-            let record = state
-                .repository
-                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
-                .await?;
-            if matches!(record.metadata.status, ThreadStatus::Archived) {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    Some(thread_id),
-                    "This thread is archived.",
-                )
-                .await?;
-                return Ok(());
-            }
-            let existing_binding = state.repository.read_session_binding(&record).await?;
-            if let Some(binding) = existing_binding.as_ref()
-                && binding.workspace_cwd.is_some()
-                && let Some(busy) = busy_snapshot_for_binding(state, binding).await?
-            {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    Some(thread_id),
-                    status_sync::busy_command_message(&busy.snapshot),
-                )
-                .await?;
-                return Ok(());
-            }
-            let workspace_path = resolve_workspace_argument(argument).await?;
-            let conflicting_threads = state
-                .repository
-                .find_active_threads_by_workspace(&workspace_path.display().to_string())
-                .await?;
-            let has_conflict = conflicting_threads
-                .iter()
-                .any(|candidate| candidate.metadata.thread_key != record.metadata.thread_key);
-            if has_conflict {
-                send_scoped_message(
-                    bot,
-                    msg.chat.id,
-                    Some(thread_id),
-                    format!(
-                        "Workspace bind failed: another active thread is already bound to `{}`.",
-                        workspace_path.display()
-                    ),
-                )
-                .await?;
-                return Ok(());
-            }
-            let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
-            let result = start_fresh_binding(state, record.clone(), workspace_path.clone()).await;
-            typing.stop().await;
-
-            match result {
-                Ok(record) => {
-                    state
-                        .repository
-                        .append_log(
-                            &record,
-                            LogDirection::System,
-                            format!(
-                                "Bound Telegram thread to workspace {} and started a fresh Codex thread.",
-                                workspace_path.display()
-                            ),
-                            None,
-                        )
-                        .await?;
-                    send_scoped_message(
-                        bot,
-                        msg.chat.id,
-                        Some(thread_id),
-                        format!(
-                            "Bound workspace: `{}`\n\nFor the managed local TUI path in this workspace, run:\n`{}/.threadbridge/bin/hcodex`",
-                            workspace_path.display(),
-                            workspace_path.display()
-                        ),
-                    )
-                    .await?;
-                    let _ = status_sync::refresh_thread_topic_title(
-                        bot,
-                        state,
-                        &record,
-                        "bind_workspace",
-                    )
-                    .await;
-                }
-                Err(error) => {
-                    send_scoped_message(
-                        bot,
-                        msg.chat.id,
-                        Some(thread_id),
-                        format!("Workspace bind failed: {error}"),
-                    )
-                    .await?;
-                }
-            }
-        }
         Command::New => {
             if is_control_chat(msg) {
                 send_scoped_message(bot, msg.chat.id, None, "Use /new inside a thread.").await?;
@@ -370,7 +192,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    "This thread is not bound yet. Use /bind_workspace <absolute-path>.",
+                    "This thread is not bound to a workspace. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>.",
                 )
                 .await?;
                 return Ok(());
@@ -750,7 +572,7 @@ pub(crate) async fn run_text_message(
             bot,
             msg.chat.id,
             None,
-            "Main private chat is the control console. Use /add_workspace <absolute-path> or /new_thread first.",
+            "Main private chat is the control console. Use /add_workspace <absolute-path> first.",
         )
         .await?;
         return Ok(());

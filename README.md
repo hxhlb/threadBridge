@@ -6,7 +6,7 @@ Telegram bot that maps Telegram threads to Codex app-server threads bound to rea
 
 - Uses Telegram as the UI layer for thread-based interaction.
 - Stores bot-local thread metadata under `data/`.
-- Binds each Telegram thread to a real workspace path with `/bind_workspace <absolute-path>`.
+- Uses `/add_workspace <absolute-path>` from the control chat as the workspace-first thread creation flow.
 - Starts workspace-scoped shared Codex app-server daemons on loopback websocket and connects the bot over JSON-RPC.
 - Installs a managed runtime appendix and `.threadbridge/` wrapper surface into the bound workspace.
 - Exposes a managed `hcodex` launcher for the bound workspace through `codex --remote <ws-url>`.
@@ -66,8 +66,7 @@ scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 - `threadbridge_desktop` also starts without Telegram credentials; it keeps the tray and local management UI available so Telegram setup and workspace management can still happen before polling is active.
 - In the desktop runtime, saving Telegram setup through the local management UI will trigger a background retry to start polling; a full process restart is no longer the only path.
 - Only Telegram user IDs listed in `AUTHORIZED_TELEGRAM_USER_IDS` can trigger the bot.
-- `/new_thread` creates a Telegram topic and bot-local metadata only.
-- `/bind_workspace <absolute-path>` installs the runtime appendix into the target workspace and starts a fresh Codex thread for it.
+- `/add_workspace <absolute-path>` creates a Telegram topic, installs the runtime appendix into the target workspace, and starts a fresh Codex thread for it.
 - Normal thread messages resume the saved `current_codex_thread_id` instead of creating a new one.
 - `/new` starts a fresh Codex thread for the already bound workspace.
 - `/reconnect_codex` verifies that the saved Codex thread still matches the stored workspace path.
@@ -109,7 +108,7 @@ scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 
 ## Local TUI Path
 
-- After `/bind_workspace`, run `./.threadbridge/bin/hcodex` inside that workspace.
+- After `/add_workspace`, run `./.threadbridge/bin/hcodex` inside that workspace.
 - With no extra args, `hcodex` starts a fresh local TUI session through the shared workspace daemon.
 - Use `hcodex resume <session-id>` when you explicitly want to continue an existing Codex session.
 - Raw `codex` launches that bypass `hcodex` are not part of the managed local path.
@@ -117,9 +116,8 @@ scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 ## Commands
 
 - `/start`
-- `/new_thread`
+- `/add_workspace`
 - `/new`
-- `/bind_workspace`
 - `/generate_title`
 - `/archive_thread`
 - `/reconnect_codex`

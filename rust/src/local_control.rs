@@ -90,7 +90,7 @@ impl LocalControlHandle {
             &self.bot,
             ChatId(main_thread.metadata.chat_id),
             Some(topic.thread_id),
-            "Thread created.\n\nUse /bind_workspace <absolute-path> in this thread.",
+            "Thread created from local management UI.",
         )
         .await?;
         Ok(CreatedThread {
