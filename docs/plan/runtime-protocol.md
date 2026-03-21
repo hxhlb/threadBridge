@@ -249,6 +249,13 @@ v1 至少保留：
 - `assistant_final`
 - `error`
 
+目前新增確認的缺口是：
+
+- mirror / observability 若要承接更完整的 Codex 過程文本，event model 之後還需要回答是否正式暴露：
+  - `plan_text`
+  - `tool_text`
+  - 或其他等價的 process transcript event
+
 ## Query / Control / Stream 分離
 
 建議明確切開：

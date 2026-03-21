@@ -18,6 +18,17 @@
 - workspace `ws` runtime 的正式長壽命 owner 尚未完全收斂
 - desktop runtime 對 handoff continuity / adoption 的 owner 職責仍是部分實作
 - `hcodex` self-heal 仍未收斂成純 fallback
+- Codex mirror 目前仍未完整承接 Plan / Tool 過程中的文本
+
+目前新增確認的優先級判斷是：
+
+- owner 責任收斂應視為高優先級工作
+
+原因是：
+
+- 它會直接影響 shared runtime 是否可靠
+- 也會直接影響 reconnect、self-heal、handoff continuity、runtime health 與 mirror 這些能力的語義是否可信
+- 若 owner 邊界不先收斂，其他上層功能很容易繼續建立在過渡性行為上
 
 ## 現況定位
 
@@ -29,6 +40,13 @@
 - `current_codex_thread_id` 是 Telegram continuity
 - `tui_active_codex_thread_id` 是受管 TUI runtime state
 - 本地管理面是新的 owner / control surface 候選，不是新的聊天入口
+
+目前 mirror 的實際能力，仍主要偏向：
+
+- CLI / TUI user prompt
+- final assistant reply
+
+而不是完整的 session transcript replay。
 
 ## 已收斂的術語
 
@@ -51,6 +69,8 @@
 - Telegram turn 在 bot 成功 `ensure` 當下可走 shared websocket daemon
 - 本地 `hcodex` 仍依賴 self-heal 作為 fallback
 - workspace `ws` runtime 的正式 owner 還需要進一步收斂到 desktop runtime
+
+這件事不只是架構清理，而是目前整條 shared runtime 路線的高優先級收斂項。
 
 ## 與本地管理面的關係
 
@@ -81,6 +101,35 @@ tray 或 web 管理面新增 workspace 啟動入口後，不能和現有 `./.thr
 - tray / web 管理面只負責找到 workspace、展示 recent session、發送 launch action
 - `hcodex` self-heal 應逐步收斂成 fallback，而不是長期 owner 模型
 
+## Mirror 文本覆蓋缺口
+
+目前 Codex mirror 已能把部分 CLI / TUI 互動映射回 Telegram thread，但仍不是完整的「Codex session 文本鏡像」。
+
+目前已較明確落地的 mirror 類型主要是：
+
+- user prompt submitted
+- final assistant message
+
+目前缺口是：
+
+- Plan 過程中的文本尚未正式 mirror
+- Tool 執行過程中的文本尚未正式 mirror
+- 因此 Telegram thread 看到的 mirror，仍偏向「輸入 + 最終回覆」，而不是完整的過程文本
+
+這個缺口的影響包括：
+
+- 使用者在 Telegram 端難以理解 Codex 在 Plan / Tool 階段做了什麼
+- mirror 目前更像 continuity assist，而不是 process visibility
+- 若之後要把 mirror 當成 desktop / web / custom surface 的共用 transcript 基礎，現有事件粒度仍不足
+
+比較合理的後續方向是：
+
+- 先明確定義哪些 Plan / Tool 文本值得 mirror
+- 把它們掛回 runtime event / protocol，而不是在 Telegram adapter 內臨時拼接
+- 區分 `final transcript` 與 `process transcript`
+  - `final transcript`：user prompt + final assistant
+  - `process transcript`：plan text、tool text、其他過程事件
+
 ## recent session history
 
 tray menu 需要每個 workspace 最近 5 個 Codex `thread.id`。
@@ -100,9 +149,11 @@ tray menu 需要每個 workspace 最近 5 個 Codex `thread.id`。
   - 定義 tray / web 管理面與 owner 邊界
 - [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
   - 定義管理面應使用的 view / action 命名
+  - 之後若 mirror 要承接 Plan / Tool 文本，應由 protocol 定義事件粒度，而不是只留在 Telegram mirror helper 內部
 
 ## 下一步
 
-1. 繼續把 desktop runtime owner 模型補齊。
+1. 優先把 desktop runtime owner 模型補齊。
 2. 讓本地 management API 成為正式 query / control surface。
 3. 讓 `hcodex` 的 self-heal 逐步收斂成 fallback。
+4. 明確補上 mirror 對 Plan / Tool 過程文本的事件與顯示語義。

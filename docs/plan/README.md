@@ -38,6 +38,7 @@
 - [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
   - shared app-server daemon、`./.threadbridge/bin/hcodex`、TUI proxy、mirror、adoption、auto-adopt 已落地
   - `/attach_cli_session`、viewer handoff、attach-intent、hooks-based CLI sync、`.cli/.attach` title 已退場
+  - owner 責任收斂目前應視為高優先級工作
   - 目前新增確認的缺口是 desktop runtime owner 尚未完全收斂；`hcodex` self-heal 目前仍只是 fallback，bot 重寫出的 ws state 也仍可能 stale
   - local management API 與無 Telegram 憑據先啟動的 groundwork 已開始落地
   - 剩餘工作主要是 runtime ownership 與本地管理面收尾

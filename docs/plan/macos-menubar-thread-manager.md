@@ -58,6 +58,12 @@
 - managed Codex source build 目前仍是直接呼叫 cargo 的實作骨架，尚未收斂成更正式的 update/install UX
 - web 管理面已拆成靜態 HTML/CSS/JS asset，但前端結構仍偏輕量，尚未收斂成更正式的模組化 UI
 
+目前新增確認的優先級判斷是：
+
+- owner 責任收斂應視為這條 plan 的高優先級工作
+
+因為本地管理面真正的價值，不只是多一個 UI，而是讓 desktop runtime 成為可信的本地 runtime owner。
+
 ## 問題
 
 `threadBridge` 目前的主要入口仍是 Telegram，這對對話本身合理，但對 thread 管理、workspace 掃描、本地接手與 machine-level runtime 管理都不夠順手。
