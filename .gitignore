@@ -13,3 +13,4 @@ tools/__pycache__/**
 .codex/
 tmp/
 .agents/
+skills-lock.json
