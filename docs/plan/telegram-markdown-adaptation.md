@@ -31,6 +31,7 @@
 - block quote / 更複雜 nested list / 更多 Telegram-specific layout 重建策略
 - 是否要把 debug dump、probe、preview exporter 收斂成正式診斷工具鏈
 - attachment fallback 是否也要納入 Telegram 文件大小上限檢查
+- diff artifact 是否應例外地以 URL 形式呈現，而不是和普通 Markdown link 一起被降級
 
 ## 問題
 
@@ -113,6 +114,14 @@
 - 檔名
 - 指令
 
+這裡可以進一步區分：
+
+- 普通內文 link
+  - 仍偏向保守處理，不強求保留 Telegram link 呈現
+- artifact link
+  - 例如 diff viewer URL
+  - 這類 link 不應和普通敘述性連結完全混成同一條降級規則
+
 ## 適配策略
 
 ### 策略 1：保守 Markdown
@@ -191,6 +200,27 @@
 但目前仍缺一個明確規格：
 
 - 若 `reply.md` attachment 本身超過 Telegram 文件大小上限，final reply 應如何降級
+- 若使用者真正需要的是查看 diff，Telegram 是否應優先送出 diff URL，而不是正文或 attachment
+
+## Diff URL 想法
+
+目前普通 Markdown link 會被改寫成 `code` 樣式 label。這對一般內容是合理的，因為它能降低 Telegram link 呈現不穩定的問題。
+
+但 diff 比較像一種 artifact，而不是一般段落中的輔助連結。
+
+對 diff 來說，更合理的方向可能是：
+
+- Telegram 端不承擔完整 diff 閱讀面
+- 若已有穩定 diff viewer / artifact URL，優先保留 URL 形式
+- 讓使用者跳到更適合 diff 的 surface 閱讀
+
+這表示未來 renderer 可能要區分：
+
+- 一般內文 link
+- 一般 artifact URL
+- diff URL
+
+而不是單純把所有 link 都套用同一條 rewrite 規則。
 
 ## 與現有功能的關係
 
@@ -233,6 +263,7 @@
 - 如果沒有中間表示，後續會變成大量字串 escape 與 patch
 - preview 與 final message 如果使用不同邏輯，會造成觀感不一致
 - 如果 attachment fallback 沒有再經過 Telegram 文件上限檢查，最終仍可能在 delivery 端失敗
+- 如果 diff URL 沒有穩定 host / viewer，只把它當成一般 URL 發出去，實際體驗可能比 attachment 更差
 
 ## 開放問題
 
@@ -242,6 +273,7 @@
 - 是否要保留 assistant 原始輸出，以便 debug renderer 問題？
 - 失敗時是否自動 fallback 到純文字模式？
 - attachment fallback 遇到 Telegram 文件大小上限時，應回到純文字、較短 notice，還是其他 artifact 路徑？
+- diff URL 應來自哪個正式 surface：management UI、diff viewer，還是其他 artifact host？
 
 其中幾個問題目前已經有程式碼答案：
 
