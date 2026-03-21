@@ -26,11 +26,17 @@ function renderWorkspaceCards(items) {
       binding: <code>${item.binding_status}</code> |
       run: <code>${item.run_status}</code> |
       handoff: <code>${item.handoff_readiness}</code><br />
+      ${item.conflict ? '<strong style="color:var(--accent)">Workspace binding conflict detected. Tray launch is disabled until only one active binding remains.</strong><br />' : ''}
       current: <code>${item.current_codex_thread_id || 'none'}</code><br />
       tui: <code>${item.tui_active_codex_thread_id || 'none'}</code><br />
       adoption_pending: <code>${item.tui_session_adoption_pending ? 'yes' : 'no'}</code><br />
       hcodex: <code>${item.hcodex_path}</code><br />
       recent: ${item.recent_codex_sessions.map(x => `<code>${x.session_id}</code>`).join(', ') || 'none'}
+      <div style="margin-top:0.75rem;" class="toolbar">
+        ${(item.recent_codex_sessions || []).map(session => `
+          <button class="secondary" onclick="launchResumeWithSession('${item.thread_key}', '${session.session_id}')">Resume ${session.session_id}</button>
+        `).join('') || '<span class="muted">No recent sessions to resume.</span>'}
+      </div>
       <div style="margin-top:0.75rem;" class="toolbar">
         <input id="bind-${item.thread_key}" type="text" value="${escapeHtml(item.workspace_cwd)}" style="min-width:18rem;flex:1" />
         <button class="secondary" onclick="bindWorkspace('${item.thread_key}')">Bind Workspace</button>
@@ -175,6 +181,10 @@ async function launchResume(threadKey) {
     alert('Enter a session id first');
     return;
   }
+  await launchResumeWithSession(threadKey, sessionId);
+}
+
+async function launchResumeWithSession(threadKey, sessionId) {
   const response = await fetch(`/api/workspaces/${threadKey}/launch-resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
