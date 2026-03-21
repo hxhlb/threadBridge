@@ -27,6 +27,7 @@
 目前尚未完成的項目：
 
 - preview / draft 是否要共用 renderer
+- `sendMessageDraft` 是否應正式接入和 final message 共用的 HTML render 路線
 - 是否要建立更明確的中間表示，而不是目前 renderer 內部直接輸出 HTML
 - block quote / 更複雜 nested list / 更多 Telegram-specific layout 重建策略
 - 是否要把 debug dump、probe、preview exporter 收斂成正式診斷工具鏈
@@ -246,6 +247,48 @@
 - restore / reconnect / reset 等文案本身的 rich-text 適配
 - workspace outbox 產出的文字內容
 
+目前新增確認的一個方向是：
+
+- `sendMessageDraft` 既然支持 `parse_mode`，preview draft 應重新評估是否直接和 final message 共用 HTML render 路線
+- 先前「draft 保持 plain text，只做 markdown 清洗」的想法不再是優先方向
+
+## Draft 與 Final 共用 HTML 的想法
+
+`sendMessageDraft` 和 final reply 的需求不同。
+
+draft 的重點比較像：
+
+- 快速讓使用者看見 Codex 正在形成中的文本
+- 讓 preview 與 final message 的格式語義不要差太遠
+- 減少「draft 很粗糙、final 才突然變整齊」的觀感落差
+
+既然 `sendMessageDraft` 也支持 `parse_mode`，比較合理的新方向可能不是：
+
+- 另外做一套 draft 專用的 plain-text markdown 清洗
+
+而是：
+
+- 讓 draft 盡量和 final message 共用同一條 HTML render 路線
+- 只在 preview surface 另補必要的截斷、節流、heartbeat prefix 等 draft-specific 處理
+
+這表示 draft / final 比較合理的分工可能是：
+
+- 共用：
+  - Markdown 解析
+  - HTML render
+  - link / path / artifact 的表現策略
+- draft 專有：
+  - heartbeat / animated update
+  - 長度截斷
+  - preview update 節流
+  - 必要時對未完成文本做較保守降級
+
+這樣的好處是：
+
+- preview 與 final message 的格式語義更一致
+- renderer 規則不用在 draft / final 之間分叉太多
+- 後續若要處理 link、diff URL、artifact URL，也比較不需要維護兩套規則
+
 ## 可能的實作位置
 
 比較合理的位置是在 Telegram runtime 層，而不是 Codex runtime 層。
@@ -262,6 +305,7 @@
 - 如果 renderer 太激進，可能改壞原本文字語意
 - 如果沒有中間表示，後續會變成大量字串 escape 與 patch
 - preview 與 final message 如果使用不同邏輯，會造成觀感不一致
+- 如果 draft 直接共用 final HTML renderer，還要確認 `sendMessageDraft` 在動畫更新時的穩定性與限制
 - 如果 attachment fallback 沒有再經過 Telegram 文件上限檢查，最終仍可能在 delivery 端失敗
 - 如果 diff URL 沒有穩定 host / viewer，只把它當成一般 URL 發出去，實際體驗可能比 attachment 更差
 
@@ -269,6 +313,7 @@
 
 - 初版應該用 MarkdownV2 還是 HTML？
 - preview draft 要不要也使用同一套 renderer？
+- `sendMessageDraft` 是否應直接共享 final reply 的 HTML renderer，還是仍保留一層 draft-specific 降級？
 - 本地路徑、命令、檔名是否應一律用 monospace？
 - 是否要保留 assistant 原始輸出，以便 debug renderer 問題？
 - 失敗時是否自動 fallback 到純文字模式？

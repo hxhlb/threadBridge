@@ -149,8 +149,8 @@ preview draft surface。
 ### Preview Draft
 
 - 使用 `sendMessageDraft`
-- 保持 plain text
-- 不做 Telegram HTML render
+- 應重新評估是否直接共享 final reply 的 HTML render 路線
+- draft-specific 差異主要保留在 heartbeat、節流、截斷與 update lifecycle
 - heartbeat 與狀態更新屬於 `draft`
 
 ### Final Assistant Reply
@@ -245,10 +245,11 @@ preview draft surface。
 
 ## Parse / Preview 規則
 
-- preview 永遠是 plain text draft
+- preview 不應再預設永遠是 plain text draft
+- 既然 `sendMessageDraft` 支持 `parse_mode`，preview 應重新評估是否共享 final reply 的 HTML render policy
 - final reply 才走 Telegram HTML renderer
 - 所有文字 send / edit 路徑都關閉 link preview
-- final reply 的 render policy 不應隱式套用到 preview、restore page、media control
+- restore page、media control 仍不應隱式套用 final reply 的 render policy
 
 ## Telegram 文件上限語義
 
