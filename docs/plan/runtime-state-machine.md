@@ -9,6 +9,7 @@
 - `active` / `archived`
 - `healthy` / `broken` / `unbound` 的 session 綁定語義
 - workspace shared status 裡的 `idle` / `shell_active` / `turn_running` / `turn_finalizing`
+- management API 已開始對外暴露 `ThreadStateView` / `ManagedWorkspaceView`，但仍不是完整主規格
 
 目前尚未完成的部分：
 
@@ -108,8 +109,9 @@ source of truth：
 
 source of truth：
 
-- runtime 記憶體態
-- 不是 persistent repository artifact
+- 不是 repository 的 long-term persistent artifact
+- 目前實作主要從 workspace shared status / CLI owner claim 推導
+- 後續仍應收斂成更清楚的 canonical runtime view，而不是讓各 surface 各自讀檔
 
 初版規則：
 
@@ -133,23 +135,25 @@ source of truth：
 - `last_codex_turn_at`
 - `archived_at`
 
-這不是要求目前立刻新增一個對外 API，而是要求後續文件與實作都以這個視圖思考。
+這不是要求目前從零新增 API。
+
+目前代碼中已存在名稱相近的 `ThreadStateView` / `ManagedWorkspaceView`，但欄位與來源仍是過渡狀態；後續應往這份文檔收斂，而不是把現在的回傳 shape 直接當成最終主規格。
 
 ## 狀態轉移
 
 ### 新 thread
 
-`/new_thread` 建立後：
+`/add_workspace` 的 thread 建立部分完成後：
 
 - `lifecycle_status = active`
 - `binding_status = unbound`
 - `run_status = idle`
 
-這一步只建立 bot-local metadata，不建立 Codex thread。
+在目前正式產品流裡，普通使用者主要不是先手動 `/new_thread`，而是走 `/add_workspace` 或本地 management API 的 create-bind 流程。
 
 ### 綁定 workspace
 
-`/bind_workspace <absolute-path>` 成功後：
+`/add_workspace <absolute-path>` 或等價 create-bind control 成功後：
 
 - `lifecycle_status = active`
 - `binding_status = healthy`
@@ -180,7 +184,7 @@ Codex turn 成功完成後：
 - 保留 `workspace_cwd`
 - 記錄 `session_broken_reason`
 
-### `/reconnect_codex`
+### `/repair_session` / reconnect control
 
 成功：
 
@@ -193,7 +197,7 @@ Codex turn 成功完成後：
 - `binding_status = broken`
 - `run_status = idle`
 
-### `/new`
+### `/new_session`
 
 這個操作是 reset 目前 Codex continuity，但保留同一個 workspace binding。
 
@@ -202,7 +206,7 @@ Codex turn 成功完成後：
 - `binding_status = healthy`
 - `run_status = idle`
 - `workspace_cwd` 保持不變
-- `codex_thread_id` 換成新的值
+- `current_codex_thread_id` 換成新的值
 
 ### archive
 
@@ -233,25 +237,25 @@ restore 後：
 - `archived`
   - 拒絕一般 thread 對話
 - `unbound`
-  - 拒絕啟動 Codex turn，提示先 `bind workspace`
+  - 拒絕啟動 Codex turn，提示先走 `/add_workspace` 或等價 create-bind flow
 - `broken`
-  - 拒絕一般 turn，提示 `/reconnect_codex` 或 `/new`
+  - 拒絕一般 turn，提示 `/repair_session` 或 `/new_session`
 - `running`
   - 初版規劃由 busy gate 文檔定義為硬阻止，不在這份文件再延伸成 queue
 
-### `/bind_workspace`
+### `/add_workspace` / create-bind control
 
 - 只允許在 `active` thread 上執行
 - 可以從 `unbound` 進入 `healthy`
 - 若已綁定，屬於顯式替換 binding 的控制操作，不是一般訊息
 
-### `/new`
+### `/new_session`
 
 - 只處理 Codex continuity reset
 - 不改變 `lifecycle_status`
 - 不把 `archived` thread 隱式帶回 `active`
 
-### `/reconnect_codex`
+### `/repair_session` / reconnect control
 
 - 只驗證與修復 binding 狀態
 - 不是 restore

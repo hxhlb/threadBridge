@@ -6,12 +6,12 @@
 
 目前已實作：
 
-- `/new_thread`
-- `/bind_workspace <absolute-path>`
-- `/new`
-- `/reconnect_codex`
+- `/add_workspace <absolute-path>`
+- `/new_session`
+- `/repair_session`
 - `session-binding.json` 持久化 Telegram thread / workspace / Codex thread 關聯
 - canonical pointer 已收斂到 `current_codex_thread_id`
+- 本地 management API / desktop runtime 已開始承接等價的 create-bind / reconnect control flow
 
 目前尚未完成：
 
@@ -24,7 +24,7 @@
 - `Telegram thread`
   - Telegram 裡的 topic / 討論串
 - `Workspace binding`
-  - 由 `/bind_workspace` 選定的真實本地目錄
+  - 由 `/add_workspace` 或本地 management API 選定的真實本地目錄
 - `Codex thread`
   - 由 threadBridge 透過 app-server 建立與續接的 Codex `thread.id`
 - `current_codex_thread_id`
@@ -34,19 +34,16 @@
 
 ## 指令語義
 
-### `/new_thread`
-
-- 只建立 Telegram thread 與 bot-local metadata
-- 不建立 Codex thread
-- 不綁定 workspace
-
-### `/bind_workspace`
+### `/add_workspace`
 
 - 綁定 workspace path
+- 建立或重用 Telegram workspace thread
 - 安裝 runtime appendix 與 `.threadbridge/`
 - 確保共享 app-server daemon 可用
 - 建立 fresh Codex thread
 - 將該 `thread.id` 寫進 `current_codex_thread_id`
+
+本地管理面上的 `pick_and_add_workspace` / 等價 control action，語義上也屬於同一條 lifecycle。
 
 ### 一般延續對話
 
@@ -54,19 +51,20 @@
 - 使用 `current_codex_thread_id`
 - 透過共享 workspace daemon 對同一個 Codex thread 發 turn
 
-### `/new`
+### `/new_session`
 
 - 對同一個 workspace 建立 fresh Codex thread
 - 原子替換 `current_codex_thread_id`
 - 清除殘留的 adoption 狀態
 
-### `/reconnect_codex`
+### `/repair_session`
 
 - 驗證 `current_codex_thread_id` 是否仍能 `thread/read`
 - 驗證返回的 `cwd` 是否仍等於保存的 `workspace_cwd`
 - 成功則清除 broken 狀態
-- 失敗則保留原 binding，但標成 broken，要求 `/new` 或重試
-- `/reconnect_codex` 目前也會重寫 workspace runtime state
+- 失敗則保留原 binding，但標成 broken，要求 `/new_session` 或重試
+- `/repair_session` 對 Telegram 來說是主要 continuity repair 命令
+- 本地 management API 目前也提供等價的 reconnect control action
 - 但現階段不能把它理解成「保證 shared ws endpoint 之後持續存活」
 - 如果 `current.json` 指到 stale endpoint，本地 `hcodex` 會再做 self-heal
 
@@ -96,11 +94,11 @@
 
 已經進入兼容讀取、統一寫回新欄位的過渡狀態。
 
-## `/new` 與 TUI 的關係
+## `/new_session` 與 TUI 的關係
 
 這是目前最容易混淆的點。
 
-- `/new`
+- `/new_session`
   - 永遠代表 Telegram thread 的 canonical continuity 切換
   - 也就是替換 `current_codex_thread_id`
 - TUI 內部的 `new session`
@@ -117,5 +115,5 @@
 ## 後續工作
 
 1. 把 `session-lifecycle`、`session-level-cli-telegram-sync`、`runtime-state-machine` 的狀態語義完全收斂。
-2. 把 `/reconnect_codex`、shared runtime state、實際 runtime owner 的語義收斂成單一主模型。
+2. 把 `/repair_session` / reconnect control、shared runtime state、實際 runtime owner 的語義收斂成單一主模型。
 3. 清理仍描述舊 viewer/attach handoff 的歷史文檔。

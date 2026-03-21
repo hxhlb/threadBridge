@@ -16,18 +16,25 @@
   - `GET /api/threads`
   - `GET /api/workspaces`
   - `GET /api/archived-threads`
-  - `POST /api/threads`
-  - `POST /api/threads/create-and-bind`
-  - `POST /api/threads/:thread_key/bind-workspace`
+  - `POST /api/workspaces/pick-and-add`
+  - `POST /api/runtime-owner/reconcile`
+  - `POST /api/threads/:thread_key/adopt-tui`
+  - `POST /api/threads/:thread_key/reject-tui`
+  - `GET /api/workspaces/:thread_key/launch-config`
   - `POST /api/workspaces/:thread_key/reconnect`
   - `POST /api/workspaces/:thread_key/open`
+  - `POST /api/workspaces/:thread_key/repair-runtime`
   - `POST /api/workspaces/:thread_key/launch-new`
   - `POST /api/workspaces/:thread_key/launch-resume`
   - `POST /api/threads/:thread_key/archive`
   - `POST /api/threads/:thread_key/restore`
+  - `POST /api/managed-codex/preference`
+  - `POST /api/managed-codex/refresh-cache`
+  - `POST /api/managed-codex/build-source`
+  - `POST /api/managed-codex/build-defaults`
   - `GET /api/events`
 - runtime 已開始維護 workspace 維度的 recent Codex session history
-- `/bind_workspace` 已開始拒絕同一 workspace 的第二個 active binding
+- workspace-first create-bind flow 已開始拒絕同一 workspace 的第二個 active binding
 - 已新增 `threadbridge_desktop`：
   - macOS-first `tray-icon` 常駐入口
   - top-level tray menu 會列出 managed workspace submenu

@@ -8,10 +8,11 @@
 
 - Telegram 文字訊息 busy gate
 - 圖片保存後延後分析的 busy gate
-- `/new`、`/reconnect_codex`、已綁定 thread 的 `/bind_workspace` 受 busy 狀態保護
+- `/new_session`、`/repair_session` 受 busy 狀態保護
 - busy 狀態已經不只看 bot 本身，也會讀 workspace shared status
 - Telegram 文字 turn 與圖片分析改成 background 執行；handler 會先寫入 busy，再快速返回
 - 因此同一 Telegram chat / topic 的後續輸入，現在會在 busy gate 被明確拒絕，而不再主要表現成長 handler 造成的隱性串行化
+- bot 啟動時已開始做 startup stale busy reconciliation，會回收上一個進程留下的 bot-owned stale busy
 
 目前尚未實作：
 
@@ -29,10 +30,10 @@
 - `teloxide` 預設仍按 `ChatId` 分發 update；在 forum topic 場景下，同一個 supergroup 內的 topic 共享同一個 chat id
 - 現在靠「先寫 busy、再把長 turn 丟到 background」已經能讓後續輸入命中 reject，但底層 dispatcher 仍不是 thread-aware 的併發模型
 - 也就是說，目前已經解決了「同 chat 連發看起來像排隊」這個主要 UX 問題，但 Telegram ingress 語義仍未被正式抽象成獨立層
-- bot-owned selected-session gate 目前仍信任 workspace 內的 per-session snapshot
+- bot-owned selected-session gate 目前主要仍信任 workspace 內的 per-session snapshot
   - `bot_turn_started` 會把 session 狀態寫成 `turn_running`
-  - gate 判斷目前只看 snapshot 是否仍是 busy，沒有額外驗證 bot process / task 是否仍活著
-  - 如果 bot 進程在 turn 結束前被意外終止，這個 session 可能停留在 stale `running`，導致後續 Telegram 文字、圖片分析與 session state 變更命令持續被 busy gate 拒絕
+  - 雖然目前已補上 startup reconciliation，但仍沒有完整的 lease / heartbeat owner 模型
+  - 也就是說，「bot crash 後永久卡死」這個最糟情況已開始有修復路徑，但 stale busy recovery 的語義仍未完全收斂
 
 ## 背景
 
@@ -66,7 +67,7 @@
 - 同一 thread 同一時間只允許一個 active Codex turn
 - 如果 thread 正在執行中，新進文字訊息直接回覆 busy 提示，不寫入 Codex turn
 - 如果 thread 正在執行中，新進圖片只允許保存為待處理素材，不能立即啟動分析
-- `/new`、`/reconnect_codex`、`/bind_workspace` 這類命令也應該定義是否受 busy 狀態保護
+- `/new_session`、`/repair_session` 這類命令也應該定義是否受 busy 狀態保護
 - busy gate 應明確區分：
   - `reject` 新輸入
   - `control` 目前正在執行的 turn

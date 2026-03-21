@@ -10,12 +10,13 @@
 - debug log
 - workspace shared status
 - Telegram topic title 狀態同步
+- 本地 management API 的 query / SSE 骨架
 
 目前仍缺：
 
 - Web App UI
 - thread / turn / tool timeline 展示
-- 正式對外的觀測 API
+- 面向 observability 的 thread-level API 與 timeline / artifact view
 
 ## 問題
 
@@ -230,7 +231,7 @@ Telegram Web App 不應該直接去讀本地檔案系統。
 
 比較合理的方式是：
 
-- threadBridge bot 或附加的本地 HTTP server 提供只讀 API
+- threadBridge runtime 提供只讀 API
 - Web App 只調用這些 API
 - API 負責把本地資料整理成可展示的 view model
 
@@ -243,6 +244,8 @@ Telegram Web App 不應該直接去讀本地檔案系統。
 - workspace `.threadbridge/tool_results/`
 
 ## 建議 API 面
+
+目前已落地的是通用 management API / SSE；這份文檔提的仍是更偏 observability 的 thread-level API。
 
 可以先想成下面幾類只讀 API：
 

@@ -13,7 +13,11 @@
   - active thread list
   - managed workspace list
   - archived thread list
-  - create / bind / reconnect / archive / restore
+  - pick-and-add / reconnect / open / archive / restore
+  - runtime-owner reconcile
+  - managed Codex preference / cache refresh / source build / build-defaults
+  - workspace launch config
+  - adopt / reject pending TUI handoff
   - `launch_hcodex_new` / `launch_hcodex_resume`
 - `threadbridge_desktop` 已開始直接依賴這些本地 view / action
 - transport-neutral 的正式 view / action 命名仍未完全收斂
@@ -137,6 +141,8 @@
 - `binary_ready`
 - `source`
 - `version` 或 `revision`
+- `build_config_file_path`
+- `build_defaults`
 - `build_info_file_path`
 - `build_info`
 
@@ -170,10 +176,14 @@
 
 至少包含：
 
-- `telegram_configured`
+- `telegram_token_configured`
+- `authorized_user_ids`
 - `authorized_user_count`
 - `telegram_polling_state`
+- `management_base_url`
 - `restart_required_after_setup_save`
+- `control_chat_ready`
+- `control_chat_id`
 - `native_workspace_picker_available`
 
 ## 建議的 control action
@@ -195,17 +205,18 @@ v1 至少定義：
 - `archive_thread`
 - `restore_thread`
 - `update_managed_codex`
+- `refresh_managed_codex_cache`
 - `build_managed_codex_source`
+- `update_managed_codex_build_defaults`
 - `save_telegram_setup`
 
 目前已部分對應到代碼中的 local HTTP endpoint：
 
-- `POST /api/threads`
-- `POST /api/threads/create-and-bind`
-- `POST /api/threads/:thread_key/bind-workspace`
 - `POST /api/workspaces/pick-and-add`
+- `POST /api/runtime-owner/reconcile`
 - `POST /api/threads/:thread_key/adopt-tui`
 - `POST /api/threads/:thread_key/reject-tui`
+- `GET /api/workspaces/:thread_key/launch-config`
 - `POST /api/workspaces/:thread_key/reconnect`
 - `POST /api/workspaces/:thread_key/open`
 - `POST /api/workspaces/:thread_key/launch-new`
@@ -217,7 +228,13 @@ v1 至少定義：
 - `POST /api/managed-codex/preference`
 - `POST /api/managed-codex/refresh-cache`
 - `POST /api/managed-codex/build-source`
+- `POST /api/managed-codex/build-defaults`
 - `GET /api/threads`
+- `GET /api/workspaces`
+- `GET /api/archived-threads`
+- `GET /api/runtime-health`
+- `GET /api/setup`
+- `GET /api/events`
 
 ## 建議的 event model
 

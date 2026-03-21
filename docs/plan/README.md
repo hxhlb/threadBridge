@@ -25,13 +25,14 @@
 - [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-busy-input-gate.md)
   - v1 忙碌閘控已落地
   - Telegram 文字 turn / 圖片分析已改成 background 執行，後續輸入現在會命中 reject
-  - 但 queue 模型、更完整的狀態語義、`STOP` / 提示類互動控制面、更乾淨的 ingress / dispatcher 邊界，以及 bot crash 後 stale busy gate recovery 仍未收斂
+  - bot 啟動時的 stale busy reconciliation 已開始落地
+  - 但 queue 模型、更完整的狀態語義、`STOP` / 提示類互動控制面、更乾淨的 ingress / dispatcher 邊界，以及更完整的 stale busy owner 模型仍未收斂
 - [topic-title-status.md](/Volumes/Data/Github/threadBridge/docs/plan/topic-title-status.md)
   - 已落地 `workspace/title + busy/broken suffix`
   - 已落地新產生的 topic rename service message best-effort cleanup
   - context ratio 仍未實作
 - [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
-  - `/new_thread`、`/bind_workspace`、`/new`、`/reconnect_codex` 的基本生命週期已存在
+  - `/add_workspace`、`/new_session`、`/repair_session` 的正式生命週期已存在
   - `current_codex_thread_id` 已成為 canonical pointer，`tui_active_codex_thread_id` / adoption 也已進入正式 runtime
   - 剩餘工作主要是兼容層與狀態語義收尾
 - [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
@@ -43,11 +44,12 @@
 - [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
   - 本地 management API 已開始承接它的 view / action 命名
   - local HTTP + SSE 已從草稿變成實際 transport
+  - 近期已再補上 runtime-owner reconcile、managed Codex build defaults、workspace launch config 等 control / view
   - 但 protocol 仍未收斂成正式 transport-neutral 契約
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
   - `threadbridge_desktop`、macOS-first tray menu、workspace-first browser management UI 已開始落地
-  - local create / bind / reconnect / archive / restore control 已進入 management API
-  - managed Codex source build / cache refresh 已進入 management API
+  - pick-and-add、adopt / reject TUI、runtime-owner reconcile、launch config 等 control 已進入 management API
+  - managed Codex source build / cache refresh / build defaults 已進入 management API
   - 目前新增確認的收斂方向是 `workspace = thread` 主模型與移除暫不可用的 onboarding
 
 ## 純草稿
@@ -60,6 +62,7 @@
   - 以及文件 / 媒體超過 Telegram 上限時的 delivery fallback 規格
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
+  - 目前已有通用 management API / SSE 骨架，但 thread-level observability API 仍未成形
 - [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)
   - appendix 注入可選化草稿
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
