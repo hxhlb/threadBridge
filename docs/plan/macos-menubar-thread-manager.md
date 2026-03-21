@@ -31,6 +31,7 @@
   - top-level tray menu 會列出 managed workspace submenu
   - 每個 workspace submenu 會列出 `Start New hcodex Session` 與最近 5 個 session id
   - `Settings` 會打開內嵌 webview 並載入本地 management UI
+- managed Codex health 已開始暴露真實 source / binary path / version，且本地管理面可切換 Codex source preference 並同步已綁定 workspace 的 launcher
 - Telegram bot 啟動已抽成可複用 runner，headless `threadbridge` 與 desktop runtime 共用同一套 bot/runtime 啟動邏輯
 
 目前仍缺：

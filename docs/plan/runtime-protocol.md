@@ -171,6 +171,7 @@ v1 至少定義：
 - `POST /api/threads/:thread_key/archive`
 - `POST /api/threads/:thread_key/restore`
 - `PUT /api/setup/telegram`
+- `POST /api/managed-codex/preference`
 
 ## 建議的 event model
 

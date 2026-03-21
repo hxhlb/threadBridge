@@ -21,7 +21,11 @@ use crate::app_server_runtime::WorkspaceRuntimeState;
 use crate::config::{RuntimeConfig, load_optional_telegram_config};
 use crate::local_control::LocalControlHandle;
 use crate::repository::{RecentCodexSessionEntry, ThreadRepository};
+use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 use crate::workspace_status::{read_cli_owner_claim, read_workspace_aggregate_status};
+
+const MANAGED_CODEX_SOURCE_FILE: &str = ".threadbridge/codex/source.txt";
+const MANAGED_CODEX_CACHE_BINARY: &str = ".threadbridge/codex/codex";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +117,7 @@ pub struct RuntimeHealthView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedCodexView {
     pub source: &'static str,
+    pub source_file_path: String,
     pub binary_path: String,
     pub binary_ready: bool,
     pub version: Option<String>,
@@ -203,6 +208,18 @@ struct UpdateTelegramSetupResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateManagedCodexPreferenceRequest {
+    source: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateManagedCodexPreferenceResponse {
+    updated: bool,
+    source: String,
+    synced_workspaces: usize,
+}
+
+#[derive(Debug, Deserialize)]
 struct CreateThreadRequest {
     title: Option<String>,
 }
@@ -241,6 +258,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
         .route("/", get(index))
         .route("/api/setup", get(get_setup))
         .route("/api/setup/telegram", put(put_telegram_setup))
+        .route(
+            "/api/managed-codex/preference",
+            post(post_update_managed_codex_preference),
+        )
         .route("/api/runtime-health", get(get_runtime_health))
         .route("/api/workspaces", get(get_workspaces))
         .route("/api/archived-threads", get(get_archived_threads))
@@ -319,7 +340,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
     .muted {{ color: var(--muted); }}
     button {{ background: var(--accent); color: white; border: 0; border-radius: 999px; padding: 0.55rem 0.9rem; cursor: pointer; }}
     button.secondary {{ background: transparent; color: var(--accent); border: 1px solid var(--border); }}
-    input {{ border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.7rem; background: white; }}
+    input, select {{ border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.7rem; background: white; }}
   </style>
 </head>
 <body>
@@ -337,6 +358,14 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
     </div>
     <div class="card">
       <h2>Runtime Health</h2>
+      <div class="toolbar">
+        <select id="managed-codex-source">
+          <option value="brew">brew</option>
+          <option value="source">source</option>
+        </select>
+        <button class="secondary" onclick="updateManagedCodexPreference()">Apply Codex Source</button>
+        <span id="managed-codex-status" class="muted"></span>
+      </div>
       <pre id="health">loading...</pre>
     </div>
   </div>
@@ -421,13 +450,14 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
       `).join('');
     }}
     async function refresh() {{
-      const [setup, _, workspaces, archived] = await Promise.all([
+      const [setup, health, workspaces, archived] = await Promise.all([
         renderJson('setup', '/api/setup'),
         renderJson('health', '/api/runtime-health'),
         fetch('/api/workspaces').then(r => r.json()),
         fetch('/api/archived-threads').then(r => r.json()),
       ]);
       document.getElementById('authorized-user-ids').value = (setup.authorized_user_ids || []).join(',');
+      document.getElementById('managed-codex-source').value = health.managed_codex?.source || 'brew';
       document.getElementById('onboarding-status').textContent = setup.control_chat_ready
         ? `Control chat is ready: ${{setup.control_chat_id}}`
         : 'Control chat is not ready. Send /start to the bot from the target Telegram chat first.';
@@ -547,6 +577,22 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
       document.getElementById('create-bind-workspace').value = '';
       await refresh();
     }}
+    async function updateManagedCodexPreference() {{
+      const status = document.getElementById('managed-codex-status');
+      status.textContent = 'Applying...';
+      const response = await fetch('/api/managed-codex/preference', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ source: document.getElementById('managed-codex-source').value }}),
+      }});
+      const data = await response.json();
+      if (!response.ok) {{
+        status.textContent = data.error || 'Apply failed';
+        return;
+      }}
+      status.textContent = `Applied. Synced ${{data.synced_workspaces}} workspaces.`;
+      await refresh();
+    }}
     document.getElementById('setup-form').addEventListener('submit', async event => {{
       event.preventDefault();
       const status = document.getElementById('setup-status');
@@ -599,6 +645,17 @@ async fn put_telegram_setup(
         saved: true,
         restart_required: true,
     }))
+}
+
+async fn post_update_managed_codex_preference(
+    State(state): State<Arc<ManagementApiState>>,
+    Json(payload): Json<UpdateManagedCodexPreferenceRequest>,
+) -> Result<Json<UpdateManagedCodexPreferenceResponse>, ManagementApiError> {
+    Ok(Json(
+        state
+            .update_managed_codex_preference(&payload.source)
+            .await?,
+    ))
 }
 
 async fn get_runtime_health(
@@ -790,23 +847,75 @@ impl ManagementApiState {
             app_server_status,
             tui_proxy_status,
             handoff_readiness,
-            managed_codex: self.managed_codex_view(),
+            managed_codex: self.managed_codex_view().await?,
         })
     }
 
-    fn managed_codex_view(&self) -> ManagedCodexView {
-        let managed_codex_path = self
-            .runtime
-            .codex_working_directory
-            .join(".threadbridge")
-            .join("codex")
-            .join("codex");
-        ManagedCodexView {
-            source: "threadbridge_managed",
-            binary_path: managed_codex_path.display().to_string(),
-            binary_ready: managed_codex_path.exists(),
-            version: None,
+    async fn managed_codex_view(&self) -> Result<ManagedCodexView> {
+        let repo_root = &self.runtime.codex_working_directory;
+        let source = read_managed_codex_source_preference(repo_root).await?;
+        let binary_path = resolve_managed_codex_binary_path(repo_root, source).await?;
+        let binary_ready = binary_path.as_ref().is_some_and(|path| path.exists());
+        let version = match binary_path.as_deref() {
+            Some(path) if path.exists() => read_codex_version(path).await.ok(),
+            _ => None,
+        };
+        Ok(ManagedCodexView {
+            source: source.as_str(),
+            source_file_path: repo_root
+                .join(MANAGED_CODEX_SOURCE_FILE)
+                .display()
+                .to_string(),
+            binary_path: binary_path
+                .unwrap_or_else(|| repo_root.join(MANAGED_CODEX_CACHE_BINARY))
+                .display()
+                .to_string(),
+            binary_ready,
+            version,
+        })
+    }
+
+    async fn update_managed_codex_preference(
+        &self,
+        source: &str,
+    ) -> Result<UpdateManagedCodexPreferenceResponse> {
+        let source = ManagedCodexSourcePreference::parse(source)?;
+        write_managed_codex_source_preference(&self.runtime.codex_working_directory, source)
+            .await?;
+        let seed_template_path = validate_seed_template(
+            &self
+                .runtime
+                .codex_working_directory
+                .join("templates")
+                .join("AGENTS.md"),
+        )?;
+        let mut synced_workspaces = 0usize;
+        let mut seen = BTreeMap::new();
+        for record in self.repository.list_active_threads().await? {
+            let Some(binding) = self.repository.read_session_binding(&record).await? else {
+                continue;
+            };
+            let Some(workspace_cwd) = binding.workspace_cwd else {
+                continue;
+            };
+            if seen.contains_key(&workspace_cwd) {
+                continue;
+            }
+            ensure_workspace_runtime(
+                &self.runtime.codex_working_directory,
+                &self.runtime.data_root_path,
+                &seed_template_path,
+                Path::new(&workspace_cwd),
+            )
+            .await?;
+            seen.insert(workspace_cwd, true);
+            synced_workspaces += 1;
         }
+        Ok(UpdateManagedCodexPreferenceResponse {
+            updated: true,
+            source: source.as_str().to_owned(),
+            synced_workspaces,
+        })
     }
 
     async fn workspace_views(&self) -> Result<Vec<ManagedWorkspaceView>> {
@@ -1269,6 +1378,102 @@ fn aggregate_handoff_status<'a>(statuses: impl Iterator<Item = &'a str>) -> &'st
         return "degraded";
     }
     "ready"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedCodexSourcePreference {
+    Brew,
+    Source,
+}
+
+impl ManagedCodexSourcePreference {
+    fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "brew" => Ok(Self::Brew),
+            "alpha" | "source" => Ok(Self::Source),
+            other => Err(anyhow!(
+                "unsupported managed Codex source preference: {other}"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Brew => "brew",
+            Self::Source => "source",
+        }
+    }
+}
+
+async fn read_managed_codex_source_preference(
+    repo_root: &Path,
+) -> Result<ManagedCodexSourcePreference> {
+    let path = repo_root.join(MANAGED_CODEX_SOURCE_FILE);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => ManagedCodexSourcePreference::parse(contents.trim()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ManagedCodexSourcePreference::Brew)
+        }
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+async fn write_managed_codex_source_preference(
+    repo_root: &Path,
+    source: ManagedCodexSourcePreference,
+) -> Result<()> {
+    let path = repo_root.join(MANAGED_CODEX_SOURCE_FILE);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    tokio::fs::write(&path, format!("{}\n", source.as_str()))
+        .await
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+async fn resolve_managed_codex_binary_path(
+    repo_root: &Path,
+    source: ManagedCodexSourcePreference,
+) -> Result<Option<std::path::PathBuf>> {
+    match source {
+        ManagedCodexSourcePreference::Source => {
+            Ok(Some(repo_root.join(MANAGED_CODEX_CACHE_BINARY)))
+        }
+        ManagedCodexSourcePreference::Brew => {
+            let output = Command::new("/bin/sh")
+                .arg("-lc")
+                .arg("command -v codex 2>/dev/null || true")
+                .output()
+                .await
+                .context("failed to resolve codex from PATH")?;
+            let resolved = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if resolved.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(Path::new(&resolved).to_path_buf()))
+            }
+        }
+    }
+}
+
+async fn read_codex_version(binary_path: &Path) -> Result<String> {
+    let output = Command::new(binary_path)
+        .arg("--version")
+        .output()
+        .await
+        .with_context(|| format!("failed to run {} --version", binary_path.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let version = if !stdout.is_empty() { stdout } else { stderr };
+    if version.is_empty() {
+        return Err(anyhow!(
+            "{} --version returned empty output",
+            binary_path.display()
+        ));
+    }
+    Ok(version)
 }
 
 #[derive(Debug)]
