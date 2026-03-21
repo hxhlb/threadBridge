@@ -1052,7 +1052,10 @@ impl ManagementApiState {
                     crate::workspace_status::default_workspace_status(workspace_path)
                 });
             let has_live_cli = !workspace_status.live_cli_session_ids.is_empty();
-            let runtime_status = read_workspace_runtime_health(workspace_path).await;
+            let mut runtime_status = read_workspace_runtime_health(workspace_path).await;
+            if binding.tui_session_adoption_pending && runtime_status.handoff_readiness == "ready" {
+                runtime_status.handoff_readiness = "pending_adoption";
+            }
             let recent_sessions = self
                 .repository
                 .read_recent_workspace_sessions(&workspace_cwd)
@@ -1640,6 +1643,7 @@ fn aggregate_handoff_status<'a>(statuses: impl Iterator<Item = &'a str>) -> &'st
         saw_any = true;
         match status {
             "ready" => {}
+            "pending_adoption" => has_degraded = true,
             "degraded" => has_degraded = true,
             _ => has_unavailable = true,
         }
@@ -1948,5 +1952,22 @@ impl IntoResponse for ManagementApiError {
             "error": self.0.to_string(),
         });
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_handoff_status;
+
+    #[test]
+    fn aggregate_handoff_status_treats_pending_adoption_as_degraded() {
+        assert_eq!(
+            aggregate_handoff_status(["ready", "pending_adoption"].into_iter()),
+            "degraded"
+        );
+        assert_eq!(
+            aggregate_handoff_status(["pending_adoption"].into_iter()),
+            "degraded"
+        );
     }
 }

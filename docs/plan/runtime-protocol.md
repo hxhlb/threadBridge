@@ -135,6 +135,10 @@
 - `app_server_status`
 - `tui_proxy_status`
 - `handoff_readiness`
+  - `ready`
+  - `pending_adoption`
+  - `degraded`
+  - `unavailable`
 - `broken_threads`
 - `running_workspaces`
 - `conflicted_workspaces`
