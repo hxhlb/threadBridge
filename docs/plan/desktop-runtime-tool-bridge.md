@@ -18,6 +18,10 @@
 - 這類 capability 的權限、審計、回傳 artifact 模型
 - `desktop screenshot` 之類能力的正式 API / tool contract
 
+目前新增確認的一個核心要求是：
+
+- 只要是跨沙盒 capability，就需要 desktop runtime 的授權確認
+
 ## 問題
 
 現在 `threadBridge` 的工具面大多還是：
@@ -98,6 +102,14 @@
 
 而不是一開始就暴露通用 `run_anything_outside_sandbox`。
 
+而且這些 capability 不應默默執行。
+
+較合理的 v1 語義是：
+
+- request 先送到 desktop runtime
+- desktop runtime 顯示或持有授權確認
+- 確認後才真正執行 capability
+
 ### 3. capability 應先經過 threadBridge protocol，而不是直接 shell 掉
 
 這表示較合理的呼叫鏈路是：
@@ -111,6 +123,23 @@
 而不是：
 
 - workspace script 直接繞過 runtime 去碰 desktop 層
+
+### 4. 跨沙盒能力預設需要授權確認
+
+這條線最重要的新限制是：
+
+- 只要 capability 跨出 workspace 沙盒，就預設需要 desktop runtime 授權確認
+
+也就是說，v1 不應採用：
+
+- desktop runtime 啟著就自動允許所有跨沙盒 capability
+
+比較合理的方向是：
+
+- runtime 先收到 capability request
+- desktop runtime 以 machine-local UX 顯示 pending request
+- 使用者顯式允許或拒絕
+- threadBridge 再把結果回傳給 workspace / Codex / adapter
 
 ## 初版能力：`desktop_screenshot`
 
@@ -147,6 +176,8 @@
   - `management_ui`
   - `runtime`
 - `requested_at`
+- `requires_desktop_approval`
+- `approval_reason`
 
 ### `DesktopCapabilityResult`
 
@@ -162,6 +193,8 @@
 - `summary`
 - `error`
 - `completed_at`
+- `approved_at`
+- `approved_by`
 
 ### `DesktopScreenshotArtifact`
 
@@ -204,11 +237,45 @@
 - 是否要限制只有 desktop runtime owner 存在時才能執行
 - 是否要把 capability 呼叫記進 runtime event / audit log
 
-初版比較合理的策略是：
+目前新增確認的 v1 策略應是：
 
 - allowlist capability
+- 跨沙盒 capability 預設 `requires_desktop_approval = true`
 - 明確 request / result schema
 - 先不支持任意 shell / arbitrary command
+
+也就是說，像 `desktop_screenshot` 這種能力，v1 預設就應被視為：
+
+- 需要 desktop runtime 顯式確認
+
+而不是：
+
+- 只要 request 進來就直接執行
+
+## 授權確認模型
+
+比較合理的 v1 授權流程應是：
+
+1. workspace tool / runtime 發出 capability request。
+2. desktop runtime 把它記成 pending approval。
+3. 使用者在 desktop runtime surface 明確允許或拒絕。
+4. threadBridge 寫回 `completed` / `denied` result。
+
+這個確認面不一定一開始就要是複雜 UI，但至少要滿足：
+
+- 在 machine-local desktop runtime 發生
+- 不依賴 Telegram 端確認
+- 有可審計的 allow / deny 結果
+
+這條限制很重要，因為它直接把：
+
+- cross-sandbox capability
+
+和：
+
+- ordinary workspace tool
+
+清楚分開。
 
 ## 與 owner 收斂的關係
 
@@ -243,6 +310,7 @@
 - 若把 desktop runtime 寫成通用越獄出口，會直接破壞 sandbox / owner 邊界
 - 若 artifact 邊界不清，結果很容易散落在 desktop temp、workspace、Telegram delivery 之間
 - 若 capability 沒有 audit / consent 模型，使用者很難信任這條能力面
+- 若跨沙盒 capability 沒有 desktop runtime 的本地授權確認，owner 與 sandbox 邊界會再次變得模糊
 - 若這條線直接寫死成 macOS only UI helper，之後很難抽成 runtime capability
 
 ## 開放問題
@@ -250,12 +318,13 @@
 - v1 是否只做 `desktop_screenshot`？
 - capability request 應該走 local HTTP control action、workspace tool request file，還是另一條專用通道？
 - artifact 應先落在 workspace，還是由 desktop runtime 保管再導出？
-- 桌面截圖是否需要使用者顯式確認，還是只要 desktop runtime 啟用即可？
+- desktop runtime 的授權確認 v1 應該放在 tray、管理頁，還是原生通知 / dialog？
 - 這條能力面未來是否應擴展到更多 desktop capability，例如視窗選取、檔案 picker、通知、UI automation？
 
 ## 建議的下一步
 
 1. 先把這條能力面收斂成「desktop runtime capability host」而不是泛化的 sandbox escape。
-2. 先以 `desktop_screenshot` 定義最小 request / result / artifact 模型。
-3. 把 capability request / result 掛回 `runtime-protocol` 的 action / event 命名。
-4. 再決定它是走 management API、workspace tool bridge，還是兩者共用的統一通道。
+2. 明確規定跨沙盒 capability 的 v1 默認需要 desktop runtime 授權確認。
+3. 先以 `desktop_screenshot` 定義最小 request / result / artifact 模型。
+4. 把 capability request / result / approval state 掛回 `runtime-protocol` 的 action / event 命名。
+5. 再決定它是走 management API、workspace tool bridge，還是兩者共用的統一通道。

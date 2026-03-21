@@ -228,6 +228,15 @@ v1 至少定義：
 - `update_managed_codex_build_defaults`
 - `save_telegram_setup`
 
+如果之後引入 desktop runtime capability bridge，這一層還需要回答：
+
+- capability request
+- capability approval
+- capability deny
+- capability result
+
+尤其是跨沙盒 capability，v1 應預設需要 desktop runtime 的 machine-local 授權確認，而不是把它當成普通 control action 一樣自動執行。
+
 目前已部分對應到代碼中的 local HTTP endpoint：
 
 - `POST /api/workspaces/pick-and-add`
@@ -266,6 +275,13 @@ v1 至少保留：
 - `managed_codex_changed`
 - `assistant_final`
 - `error`
+
+如果引入 desktop capability bridge，之後也需要考慮：
+
+- `capability_requested`
+- `capability_approval_required`
+- `capability_completed`
+- `capability_denied`
 
 目前新增確認的缺口是：
 
