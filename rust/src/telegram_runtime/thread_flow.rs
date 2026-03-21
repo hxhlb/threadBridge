@@ -137,7 +137,7 @@ pub(crate) async fn run_command(
                     .await?;
                 "Control console.\nUse /add_workspace <absolute-path> for the workspace-first flow."
             } else {
-                "Thread workspace.\nUse /new, /reconnect_codex, /archive_thread, or /generate_title here."
+                "Workspace thread.\nUse /new_session, /repair_session, /archive_workspace, /workspace_info, or /rename_workspace here."
             };
             send_scoped_message(bot, msg.chat.id, msg.thread_id, text).await?;
         }
@@ -176,9 +176,15 @@ pub(crate) async fn run_command(
                 }
             }
         }
-        Command::New => {
+        Command::NewSession => {
             if is_control_chat(msg) {
-                send_scoped_message(bot, msg.chat.id, None, "Use /new inside a thread.").await?;
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Use /new_session inside a workspace thread.",
+                )
+                .await?;
                 return Ok(());
             }
             let thread_id = msg.thread_id.context("thread message missing thread id")?;
@@ -192,7 +198,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    "This thread is not bound to a workspace. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>.",
+                    "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>.",
                 )
                 .await?;
                 return Ok(());
@@ -251,13 +257,13 @@ pub(crate) async fn run_command(
                 }
             }
         }
-        Command::ReconnectCodex => {
+        Command::RepairSession => {
             if is_control_chat(msg) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     None,
-                    "Use /reconnect_codex inside a thread.",
+                    "Use /repair_session inside a workspace thread.",
                 )
                 .await?;
                 return Ok(());
@@ -321,7 +327,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        "Codex session reconnected for this thread.",
+                        "Codex session continuity verified for this workspace.",
                     )
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
@@ -341,7 +347,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        "Codex session revalidation failed. Use /new to start a fresh one or /reconnect_codex to retry.",
+                        "Codex session repair failed. Use /new_session to start fresh or /repair_session to retry.",
                     )
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
@@ -354,10 +360,15 @@ pub(crate) async fn run_command(
                 }
             }
         }
-        Command::ThreadInfo => {
+        Command::WorkspaceInfo => {
             if is_control_chat(msg) {
-                send_scoped_message(bot, msg.chat.id, None, "Use /thread_info inside a thread.")
-                    .await?;
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Use /workspace_info inside a workspace thread.",
+                )
+                .await?;
                 return Ok(());
             }
             let thread_id = msg.thread_id.context("thread message missing thread id")?;
@@ -373,13 +384,13 @@ pub(crate) async fn run_command(
             )
             .await?;
         }
-        Command::GenerateTitle => {
+        Command::RenameWorkspace => {
             if is_control_chat(msg) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     None,
-                    "Use /generate_title inside a thread.",
+                    "Use /rename_workspace inside a workspace thread.",
                 )
                 .await?;
                 return Ok(());
@@ -394,7 +405,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    "This thread is archived.",
+                    "This workspace is archived.",
                 )
                 .await?;
                 return Ok(());
@@ -460,7 +471,7 @@ pub(crate) async fn run_command(
                         bot,
                         msg.chat.id,
                         Some(thread_id),
-                        "Codex session is unavailable. Use /reconnect_codex or /new.",
+                        "Codex session is unavailable. Use /repair_session or /new_session.",
                     )
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
@@ -513,17 +524,17 @@ pub(crate) async fn run_command(
                 bot,
                 msg.chat.id,
                 Some(thread_id),
-                format!("Title updated: {title}"),
+                format!("Workspace renamed: {title}"),
             )
             .await?;
         }
-        Command::ArchiveThread => {
+        Command::ArchiveWorkspace => {
             if is_control_chat(msg) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     None,
-                    "Use /archive_thread inside a thread.",
+                    "Use /archive_workspace inside a workspace thread.",
                 )
                 .await?;
                 return Ok(());
@@ -537,16 +548,16 @@ pub(crate) async fn run_command(
             let record = state.repository.archive_thread(record).await?;
             state
                 .repository
-                .append_log(&record, LogDirection::System, "Thread archived.", None)
+                .append_log(&record, LogDirection::System, "Workspace archived.", None)
                 .await?;
         }
-        Command::RestoreThread => {
+        Command::RestoreWorkspace => {
             if !is_control_chat(msg) {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     msg.thread_id,
-                    "Use /restore_thread from the main private chat.",
+                    "Use /restore_workspace from the main private chat.",
                 )
                 .await?;
                 return Ok(());
@@ -588,7 +599,7 @@ pub(crate) async fn run_text_message(
             bot,
             msg.chat.id,
             Some(thread_id),
-            "This thread is archived.",
+            "This workspace is archived.",
         )
         .await?;
         return Ok(());
@@ -866,7 +877,7 @@ async fn execute_text_turn(
                 bot,
                 chat_id,
                 Some(thread_id),
-                "Codex session is unavailable. Use /reconnect_codex to retry or /new to start a fresh one.",
+                "Codex session is unavailable. Use /repair_session to retry or /new_session to start a fresh one.",
             )
             .await?;
             let _ = status_sync::refresh_thread_topic_title(

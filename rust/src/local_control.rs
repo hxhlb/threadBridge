@@ -222,8 +222,9 @@ impl LocalControlHandle {
         let Some(binding) = session.as_ref() else {
             bail!("This thread is not bound to a workspace yet.");
         };
-        let existing_thread_id = reconnect_target_thread_id(binding)
-            .context("This thread is missing a usable Codex thread id. Use Launch New first.")?;
+        let existing_thread_id = reconnect_target_thread_id(binding).context(
+            "This workspace is missing a usable Codex session id. Use New Session first.",
+        )?;
         let workspace_path = ensure_bound_workspace_runtime(&self.state, binding).await?;
         let codex_workspace =
             prepare_workspace_runtime_for_control(&self.state, workspace_path).await?;

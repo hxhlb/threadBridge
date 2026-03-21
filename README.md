@@ -66,10 +66,10 @@ scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 - `threadbridge_desktop` also starts without Telegram credentials; it keeps the tray and local management UI available so Telegram setup and workspace management can still happen before polling is active.
 - In the desktop runtime, saving Telegram setup through the local management UI will trigger a background retry to start polling; a full process restart is no longer the only path.
 - Only Telegram user IDs listed in `AUTHORIZED_TELEGRAM_USER_IDS` can trigger the bot.
-- `/add_workspace <absolute-path>` creates a Telegram topic, installs the runtime appendix into the target workspace, and starts a fresh Codex thread for it.
-- Normal thread messages resume the saved `current_codex_thread_id` instead of creating a new one.
-- `/new` starts a fresh Codex thread for the already bound workspace.
-- `/reconnect_codex` verifies that the saved Codex thread still matches the stored workspace path.
+- `/add_workspace <absolute-path>` creates a Telegram topic, installs the runtime appendix into the target workspace, and starts a fresh Codex session for it.
+- Normal workspace-thread messages resume the saved `current_codex_thread_id` instead of creating a new one.
+- `/new_session` starts a fresh Codex session for the already bound workspace.
+- `/repair_session` verifies that the saved Codex session still matches the stored workspace path.
 - Topic titles currently reflect `busy` and `broken` state.
 - `hcodex` is the managed local TUI path. It resolves the workspace daemon from `.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
 - The local management API defaults to `http://127.0.0.1:38420` and can be changed with `THREADBRIDGE_MANAGEMENT_BIND_ADDR`.
@@ -117,11 +117,12 @@ scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 
 - `/start`
 - `/add_workspace`
-- `/new`
-- `/generate_title`
-- `/archive_thread`
-- `/reconnect_codex`
-- `/restore_thread`
+- `/new_session`
+- `/workspace_info`
+- `/archive_workspace`
+- `/restore_workspace`
+- `/rename_workspace`
+- `/repair_session`
 
 ## Development
 

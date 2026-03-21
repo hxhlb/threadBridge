@@ -230,8 +230,8 @@ function renderWorkspaceCards(items) {
 
       <div class="actions-grid">
         <button class="secondary" onclick="openWorkspace('${item.thread_key}')">Open Workspace</button>
-        <button ${item.conflict ? 'disabled' : ''} onclick="launchNew('${item.thread_key}')">Launch New</button>
-        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', ${item.session_broken ? 'true' : 'false'}, ${item.tui_active_codex_thread_id ? 'true' : 'false'})">${item.tui_active_codex_thread_id ? 'Adopt TUI' : 'Reconnect Codex'}</button>
+        <button ${item.conflict ? 'disabled' : ''} onclick="launchNew('${item.thread_key}')">New Session</button>
+        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', ${item.session_broken ? 'true' : 'false'}, ${item.tui_active_codex_thread_id ? 'true' : 'false'})">${item.tui_active_codex_thread_id ? 'Adopt TUI' : 'Repair Session'}</button>
         <button class="secondary" onclick="repairRuntime('${item.thread_key}')">Repair Runtime</button>
         <button ${item.conflict ? 'disabled' : ''} onclick="showLaunchConfig('${item.thread_key}')">Show Launch Commands</button>
         <button onclick='archiveThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(workspacePrimaryLabel(item))})'>Archive</button>
@@ -271,7 +271,7 @@ function renderArchivedThreads(items) {
   const root = document.getElementById('archived');
   document.getElementById('archived-count').textContent = String(items.length);
   if (!items.length) {
-    root.innerHTML = '<p class="muted">No archived threads.</p>';
+    root.innerHTML = '<p class="muted">No archived workspaces.</p>';
     return;
   }
   root.innerHTML = items.map(item => `
@@ -433,7 +433,7 @@ async function rejectTuiSession(threadKey) {
 }
 
 async function archiveThread(threadKey, label) {
-  if (!window.confirm(`Archive thread "${label}"? This only changes local threadBridge state and Telegram topic state.`)) {
+  if (!window.confirm(`Archive workspace "${label}"? This only changes local threadBridge state and Telegram topic state.`)) {
     return;
   }
   const response = await fetch(`/api/threads/${threadKey}/archive`, { method: 'POST' });
@@ -446,7 +446,7 @@ async function archiveThread(threadKey, label) {
 }
 
 async function restoreThread(threadKey, label) {
-  if (!window.confirm(`Restore archived thread "${label}"? This restores local metadata and Telegram topic state only.`)) {
+  if (!window.confirm(`Restore archived workspace "${label}"? This restores local metadata and Telegram topic state only.`)) {
     return;
   }
   const response = await fetch(`/api/threads/${threadKey}/restore`, { method: 'POST' });

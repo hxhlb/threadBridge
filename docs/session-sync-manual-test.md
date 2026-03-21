@@ -32,7 +32,7 @@
   - `q` / `quit`
   - `help`
   - `reload`
-- `/thread_info` 會暴露 `thread_key`、selected session、marker 和 owner 狀態
+- `/workspace_info` 會暴露 `thread_key`、selected session、marker 和 owner 狀態
 
 目前還沒有落地的是：
 
@@ -57,7 +57,7 @@
 在對應的 Telegram thread 執行：
 
 ```text
-/thread_info
+/workspace_info
 ```
 
 檢查點：
@@ -132,7 +132,7 @@ hi
    - `CLI: <你的 prompt>`
    - `Codex: <最終回覆>`
 2. 其他同 workspace thread 不應收到這些鏡像文本
-3. 若你在 Telegram thread 執行 `/thread_info`：
+3. 若你在 Telegram thread 執行 `/workspace_info`：
    - `marker` 應是 `.cli`
    - `is_owner_thread` 應是 `yes`
 
@@ -224,7 +224,7 @@ hcodex resume <session-id> --thread-key <thread-key>
 ```
 
 3. Telegram topic title 從 `· attach` 回到 `· cli`
-4. 在 Telegram owner thread 執行 `/thread_info`：
+4. 在 Telegram owner thread 執行 `/workspace_info`：
    - `marker` 應回到 `.cli`
    - `attachment_state` 應回到 `none`
 
@@ -255,7 +255,7 @@ hcodex resume <session-id> --thread-key <thread-key>
 
 如果同一 workspace 綁了多個 active Telegram threads：
 
-1. 在任一 thread 執行 `/thread_info`，拿到不同的 `thread_key`
+1. 在任一 thread 執行 `/workspace_info`，拿到不同的 `thread_key`
 2. 本地終端執行：
 
 ```bash
@@ -332,7 +332,7 @@ rg -n 'user_prompt_submitted|turn_completed' .threadbridge/state/codex-sync/even
 以及 Telegram thread：
 
 ```text
-/thread_info
+/workspace_info
 ```
 
 檢查：
@@ -372,7 +372,7 @@ cat .threadbridge/state/codex-sync/attach-intent.json
 - `hcodex`
 - owner claim / `thread_key`
 - `.cli` / `.cli!` / `.attach`
-- `/thread_info`
+- `/workspace_info`
 - `.cli` 下的 `CLI user + assistant final` 鏡像到 owner thread
 - `/attach_cli_session` handoff
 - `.attach` 下 viewer 顯示 `Telegram user + assistant final`

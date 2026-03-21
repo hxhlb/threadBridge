@@ -38,13 +38,12 @@ The operational flow is: Telegram thread -> Rust bot -> Codex app-server thread 
 
 From a maintainer perspective:
 
-- `/new_thread` creates a Telegram topic and a bot-local folder under `data/<thread-key>/`.
-- `/bind_workspace <absolute-path>` installs the runtime appendix and `.threadbridge/` surface into that real workspace, then starts a fresh Codex thread for that workspace through app-server.
+- `/add_workspace <absolute-path>` creates or reuses the Telegram workspace thread, installs the runtime appendix and `.threadbridge/` surface into that real workspace, and starts a fresh Codex session for that workspace through app-server.
 - `session-binding.json` stores the mapping between the Telegram thread, the real workspace path, and the current Codex `thread.id`.
 - Normal thread messages resume the saved Codex thread through app-server and run turns in the bound workspace.
 - Uploaded images are stored under `data/<thread-key>/state/`, accumulated into a pending batch, and analyzed by Codex in the same bound workspace context.
-- If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/reconnect_codex` or `/new`.
-- `/restore_thread` is Telegram/local-state only. It restores an archived Telegram topic and local metadata; it does not recreate Codex continuity by itself.
+- If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/repair_session` or `/new_session`.
+- `/restore_workspace` is Telegram/local-state only. It restores an archived Telegram topic and local metadata; it does not recreate Codex continuity by itself.
 
 ## Artifact Boundaries
 Maintain these ownership boundaries:

@@ -165,7 +165,7 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 其中：
 
 - `Add Workspace` 應走 native folder picker，而不是要求普通用戶輸入絕對路徑
-- `repair continuity` 應按狀態自動選擇 `Adopt TUI` 或 `Reconnect Codex`
+- `repair continuity` 應按狀態自動選擇 `Adopt TUI` 或 `Repair Session`
 - raw `bind workspace` / `reject TUI` 可以保留，但只應存在於 advanced / debug 區
 
 若某個 action 有風險，例如 archive / restore，應有明確確認步驟。
@@ -308,8 +308,8 @@ tray menu 需要每個 workspace 最近 5 個 Codex `thread.id`。
 更新來源至少包括：
 
 - Telegram 正常 turn
-- `/new`
-- `/reconnect_codex`
+- `/new_session`
+- `/repair_session`
 - 受管 TUI `thread/start`
 - 受管 TUI `thread/resume`
 - adoption 成功後切換
@@ -344,11 +344,11 @@ v1 明確限制：
 目前已存在、可被管理面承接的能力包括：
 
 - `./.threadbridge/bin/hcodex`
-- `/bind_workspace`
-- `/new`
-- `/reconnect_codex`
-- `/archive_thread`
-- `/restore_thread`
+- `/add_workspace`
+- `/new_session`
+- `/repair_session`
+- `/archive_workspace`
+- `/restore_workspace`
 
 ## 與其他計劃的關係
 

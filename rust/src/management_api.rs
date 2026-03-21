@@ -260,13 +260,6 @@ struct OpenWorkspaceResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct CreatedThreadResponse {
-    ok: bool,
-    thread_key: String,
-    title: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
 struct PickAndAddWorkspaceResponse {
     ok: bool,
     created: bool,
@@ -374,22 +367,6 @@ struct ManagedCodexBuildConfigFile {
     build_profile: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateThreadRequest {
-    title: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BindWorkspaceRequest {
-    workspace_cwd: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateAndBindThreadRequest {
-    title: Option<String>,
-    workspace_cwd: String,
-}
-
 #[derive(Debug)]
 struct WorkspaceAggregateView {
     workspace_cwd: String,
@@ -438,21 +415,13 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             "/api/runtime-owner/reconcile",
             post(post_reconcile_runtime_owner),
         )
-        .route("/api/threads", get(get_threads).post(post_create_thread))
+        .route("/api/threads", get(get_threads))
         .route("/api/workspaces", get(get_workspaces))
         .route(
             "/api/workspaces/pick-and-add",
             post(post_pick_and_add_workspace),
         )
         .route("/api/archived-threads", get(get_archived_threads))
-        .route(
-            "/api/threads/create-and-bind",
-            post(post_create_and_bind_thread),
-        )
-        .route(
-            "/api/threads/:thread_key/bind-workspace",
-            post(post_bind_workspace),
-        )
         .route(
             "/api/threads/:thread_key/adopt-tui",
             post(post_adopt_tui_session),
@@ -618,36 +587,6 @@ async fn get_archived_threads(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Result<Json<Vec<ArchivedThreadView>>, ManagementApiError> {
     Ok(Json(state.archived_thread_views().await?))
-}
-
-async fn post_create_thread(
-    State(state): State<Arc<ManagementApiState>>,
-    Json(payload): Json<CreateThreadRequest>,
-) -> Result<Json<CreatedThreadResponse>, ManagementApiError> {
-    Ok(Json(state.create_thread(payload.title).await?))
-}
-
-async fn post_create_and_bind_thread(
-    State(state): State<Arc<ManagementApiState>>,
-    Json(payload): Json<CreateAndBindThreadRequest>,
-) -> Result<Json<ThreadMutationResponse>, ManagementApiError> {
-    Ok(Json(
-        state
-            .create_thread_and_bind(payload.title, &payload.workspace_cwd)
-            .await?,
-    ))
-}
-
-async fn post_bind_workspace(
-    State(state): State<Arc<ManagementApiState>>,
-    AxumPath(thread_key): AxumPath<String>,
-    Json(payload): Json<BindWorkspaceRequest>,
-) -> Result<Json<ThreadMutationResponse>, ManagementApiError> {
-    Ok(Json(
-        state
-            .bind_workspace(&thread_key, &payload.workspace_cwd)
-            .await?,
-    ))
 }
 
 async fn post_adopt_tui_session(
@@ -1330,30 +1269,6 @@ impl ManagementApiState {
         Ok(views)
     }
 
-    async fn create_thread(&self, title: Option<String>) -> Result<CreatedThreadResponse> {
-        let control = self.local_control().await?;
-        let created = control.create_thread(title).await?;
-        Ok(CreatedThreadResponse {
-            ok: true,
-            thread_key: created.record.metadata.thread_key,
-            title: Some(created.title),
-        })
-    }
-
-    async fn create_thread_and_bind(
-        &self,
-        title: Option<String>,
-        workspace_cwd: &str,
-    ) -> Result<ThreadMutationResponse> {
-        self.maybe_reconcile_owner_workspace(workspace_cwd).await?;
-        let control = self.local_control().await?;
-        let record = control.create_thread_and_bind(title, workspace_cwd).await?;
-        Ok(ThreadMutationResponse {
-            ok: true,
-            thread_key: record.metadata.thread_key,
-        })
-    }
-
     async fn add_workspace(&self, workspace_cwd: &str) -> Result<AddWorkspaceResult> {
         let control = self.local_control().await?;
         let outcome = control.add_workspace(workspace_cwd).await?;
@@ -1405,20 +1320,6 @@ impl ManagementApiState {
             thread_key: Some(result.thread_key),
             title: result.title,
             workspace_cwd: result.workspace_cwd,
-        })
-    }
-
-    async fn bind_workspace(
-        &self,
-        thread_key: &str,
-        workspace_cwd: &str,
-    ) -> Result<ThreadMutationResponse> {
-        self.maybe_reconcile_owner_workspace(workspace_cwd).await?;
-        let control = self.local_control().await?;
-        let record = control.bind_workspace(thread_key, workspace_cwd).await?;
-        Ok(ThreadMutationResponse {
-            ok: true,
-            thread_key: record.metadata.thread_key,
         })
     }
 
@@ -1964,7 +1865,7 @@ fn workspace_recovery_hint(
         .is_some_and(|value| !value.is_empty());
     if session_broken && has_live_tui_session {
         return Some(
-            "The saved Codex session is no longer the best recovery target, but this workspace has a live TUI session. Use Adopt TUI to promote that live session, or Launch New to start fresh."
+            "The saved Codex session is no longer the best recovery target, but this workspace has a live TUI session. Use Adopt TUI to promote that live session, or New Session to start fresh."
                 .to_owned(),
         );
     }
@@ -1975,13 +1876,13 @@ fn workspace_recovery_hint(
         });
     if unloaded_thread {
         return Some(
-            "The saved Codex session is no longer loaded by app-server. Use Launch New to start a fresh session, or Adopt TUI if this workspace already has a live TUI session."
+            "The saved Codex session is no longer loaded by app-server. Use New Session to start a fresh session, or Adopt TUI if this workspace already has a live TUI session."
                 .to_owned(),
         );
     }
     if session_broken {
         return Some(
-            "Codex continuity is marked broken. Use Reconnect Codex after the runtime surface is healthy."
+            "Codex continuity is marked broken. Use Repair Session after the runtime surface is healthy."
                 .to_owned(),
         );
     }

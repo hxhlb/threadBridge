@@ -38,22 +38,22 @@ mod thread_flow;
 #[derive(Clone, BotCommands)]
 #[command(rename_rule = "snake_case")]
 pub enum Command {
-    #[command(description = "Show commands for the control chat and bound threads")]
+    #[command(description = "Show commands for the control chat and managed workspaces")]
     Start,
-    #[command(description = "Create a Telegram thread and bind it to a workspace path")]
+    #[command(description = "Add a workspace and create or reuse its Telegram thread")]
     AddWorkspace,
-    #[command(description = "Start a fresh Codex session for this thread")]
-    New,
-    #[command(description = "Generate a title for the current thread from chat history")]
-    GenerateTitle,
-    #[command(description = "Archive the current thread")]
-    ArchiveThread,
-    #[command(description = "Show archived threads and restore one interactively")]
-    RestoreThread,
-    #[command(description = "Revalidate the current bound Codex session for this thread")]
-    ReconnectCodex,
-    #[command(description = "Show this thread's key, workspace, session, and CLI owner state")]
-    ThreadInfo,
+    #[command(description = "Start a fresh Codex session for this workspace")]
+    NewSession,
+    #[command(description = "Rename the current workspace from chat history")]
+    RenameWorkspace,
+    #[command(description = "Archive the current workspace")]
+    ArchiveWorkspace,
+    #[command(description = "Show archived workspaces and restore one interactively")]
+    RestoreWorkspace,
+    #[command(description = "Repair the current workspace's Codex session continuity")]
+    RepairSession,
+    #[command(description = "Show this workspace's key, path, session, and CLI owner state")]
+    WorkspaceInfo,
 }
 
 #[derive(Clone)]
@@ -441,13 +441,13 @@ pub(crate) fn workspace_path_from_binding(session: &SessionBinding) -> Result<Pa
 pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static str {
     match session {
         Some(session) if session.session_broken => {
-            "This thread's Codex session is invalid. Use /reconnect_codex to verify it again or /new to start a fresh one for the same workspace."
+            "This workspace's Codex session is invalid. Use /repair_session to verify it again or /new_session to start a fresh one for the same workspace."
         }
         Some(_) => {
-            "This thread is missing a usable Codex thread id. Use /new to start a fresh one."
+            "This workspace is missing a usable Codex session id. Use /new_session to start a fresh one."
         }
         None => {
-            "This thread is not bound to a workspace yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
+            "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
         }
     }
 }
@@ -710,15 +710,31 @@ mod tests {
     }
 
     #[test]
-    fn command_list_registers_new_but_not_reset_codex_session() {
+    fn command_list_registers_workspace_first_commands() {
         let commands = command_list()
             .into_iter()
             .map(|command| command.command)
             .collect::<Vec<_>>();
 
-        assert!(commands.iter().any(|command| command == "/new"));
+        assert!(commands.iter().any(|command| command == "/new_session"));
         assert!(commands.iter().any(|command| command == "/add_workspace"));
-        assert!(commands.iter().any(|command| command == "/thread_info"));
+        assert!(commands.iter().any(|command| command == "/workspace_info"));
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "/archive_workspace")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "/restore_workspace")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "/rename_workspace")
+        );
+        assert!(commands.iter().any(|command| command == "/repair_session"));
         assert!(
             !commands
                 .iter()
@@ -815,18 +831,43 @@ mod tests {
     }
 
     #[test]
-    fn command_parser_distinguishes_new_from_new_thread() {
-        assert!(matches!(Command::parse("/new", ""), Ok(Command::New)));
+    fn command_parser_uses_workspace_first_names() {
+        assert!(matches!(
+            Command::parse("/new_session", ""),
+            Ok(Command::NewSession)
+        ));
         assert!(matches!(
             Command::parse("/add_workspace", ""),
             Ok(Command::AddWorkspace)
         ));
+        assert!(matches!(
+            Command::parse("/workspace_info", ""),
+            Ok(Command::WorkspaceInfo)
+        ));
+        assert!(matches!(
+            Command::parse("/archive_workspace", ""),
+            Ok(Command::ArchiveWorkspace)
+        ));
+        assert!(matches!(
+            Command::parse("/restore_workspace", ""),
+            Ok(Command::RestoreWorkspace)
+        ));
+        assert!(matches!(
+            Command::parse("/rename_workspace", ""),
+            Ok(Command::RenameWorkspace)
+        ));
+        assert!(matches!(
+            Command::parse("/repair_session", ""),
+            Ok(Command::RepairSession)
+        ));
+        assert!(Command::parse("/new", "").is_err());
+        assert!(Command::parse("/generate_title", "").is_err());
+        assert!(Command::parse("/reconnect_codex", "").is_err());
+        assert!(Command::parse("/thread_info", "").is_err());
+        assert!(Command::parse("/archive_thread", "").is_err());
+        assert!(Command::parse("/restore_thread", "").is_err());
         assert!(Command::parse("/new_thread", "").is_err());
         assert!(Command::parse("/bind_workspace", "").is_err());
-        assert!(matches!(
-            Command::parse("/thread_info", ""),
-            Ok(Command::ThreadInfo)
-        ));
         assert!(Command::parse("/reset_codex_session", "").is_err());
     }
 
