@@ -45,11 +45,15 @@ Or use the local helper script:
 scripts/local_threadbridge.sh build
 scripts/local_threadbridge.sh build --codex-source source
 scripts/local_threadbridge.sh start
+scripts/local_threadbridge.sh start --runtime desktop
 scripts/local_threadbridge.sh restart --codex-source brew
 scripts/local_threadbridge.sh restart --codex-source source
+scripts/local_threadbridge.sh restart --runtime desktop --codex-source source
 ```
 
 `--codex-source brew|source` controls which local `codex` binary `hcodex` should prefer. The choice is persisted in `.threadbridge/codex/source.txt` and is picked up the next time a workspace runtime is bootstrapped.
+
+`--runtime headless|desktop` controls which local threadBridge runtime the helper manages. On macOS, `--runtime desktop` starts `threadbridge_desktop` from the repo root in its own tmux session and will stop the conflicting headless runtime first so both owners do not fight over the same local management port.
 
 - `brew`: prefer the system `codex` on `PATH`, with the managed copy as fallback.
 - `source`: build `codex-cli` from the local Codex source tree and cache it under `.threadbridge/codex/codex`, then prefer that managed copy.

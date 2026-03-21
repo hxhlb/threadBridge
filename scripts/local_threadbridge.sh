@@ -5,8 +5,6 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd -P)
 ENV_FILE="$REPO_ROOT/.env.local"
 LOG_DIR="$REPO_ROOT/logs"
-STDOUT_LOG="$LOG_DIR/local-threadbridge.stdout.log"
-STDERR_LOG="$LOG_DIR/local-threadbridge.stderr.log"
 EVENT_LOG="$REPO_ROOT/data/debug/events.jsonl"
 CARGO_HOME_DIR="${CARGO_HOME:-$REPO_ROOT/.cargo}"
 CARGO_TARGET_DIR_PATH="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
@@ -26,7 +24,7 @@ CODEX_RUSTUP_HOME_DIR="${CODEX_RUSTUP_HOME:-$RUSTUP_HOME_DIR}"
 
 usage() {
   cat <<'EOF'
-Usage: local_threadbridge.sh <command> [--codex-source brew|source]
+Usage: local_threadbridge.sh <command> [--runtime headless|desktop] [--codex-source brew|source]
 
 Commands:
   build
@@ -37,6 +35,7 @@ Commands:
   logs
 
 Options:
+  --runtime headless|desktop   Choose which runtime binary to manage. Default: headless
   --codex-source brew|source  Choose which local codex binary hcodex should prefer.
                               The choice is persisted in .threadbridge/codex/source.txt.
 
@@ -196,10 +195,59 @@ should_build_desktop() {
   [[ "$(uname -s)" == "Darwin" ]]
 }
 
+validate_runtime_mode() {
+  local runtime_mode=${1:-headless}
+  case "$runtime_mode" in
+    headless)
+      printf '%s\n' "$runtime_mode"
+      ;;
+    desktop)
+      if ! should_build_desktop; then
+        printf 'desktop runtime is only available on macOS\n' >&2
+        exit 1
+      fi
+      printf '%s\n' "$runtime_mode"
+      ;;
+    *)
+      printf 'Unsupported runtime mode: %s\n' "$runtime_mode" >&2
+      exit 1
+      ;;
+  esac
+}
+
+other_runtime_mode() {
+  local runtime_mode=${1:?missing runtime mode}
+  case "$runtime_mode" in
+    headless) printf '%s\n' desktop ;;
+    desktop) printf '%s\n' headless ;;
+    *) printf 'Unsupported runtime mode: %s\n' "$runtime_mode" >&2; exit 1 ;;
+  esac
+}
+
+runtime_binary_name() {
+  local runtime_mode=${1:?missing runtime mode}
+  case "$runtime_mode" in
+    headless) printf '%s\n' threadbridge ;;
+    desktop) printf '%s\n' threadbridge_desktop ;;
+    *) printf 'Unsupported runtime mode: %s\n' "$runtime_mode" >&2; exit 1 ;;
+  esac
+}
+
+stdout_log_path() {
+  local runtime_mode=${1:?missing runtime mode}
+  printf '%s/local-threadbridge-%s.stdout.log\n' "$LOG_DIR" "$runtime_mode"
+}
+
+stderr_log_path() {
+  local runtime_mode=${1:?missing runtime mode}
+  printf '%s/local-threadbridge-%s.stderr.log\n' "$LOG_DIR" "$runtime_mode"
+}
+
 tmux_session_name() {
+  local runtime_mode=${1:?missing runtime mode}
   local hash
   hash=$(printf '%s' "$REPO_ROOT" | shasum | awk '{print substr($1, 1, 10)}')
-  printf 'threadbridge-%s' "$hash"
+  printf 'threadbridge-%s-%s' "$hash" "$runtime_mode"
 }
 
 tmux_session_exists() {
@@ -214,15 +262,26 @@ tmux_session_pid() {
 
 ensure_layout() {
   mkdir -p "$LOG_DIR" "$REPO_ROOT/data/debug" "$MANAGED_CODEX_DIR"
-  touch "$STDOUT_LOG" "$STDERR_LOG" "$EVENT_LOG"
+  touch \
+    "$(stdout_log_path headless)" \
+    "$(stderr_log_path headless)" \
+    "$EVENT_LOG"
+  if should_build_desktop; then
+    touch \
+      "$(stdout_log_path desktop)" \
+      "$(stderr_log_path desktop)"
+  fi
+}
+
+ensure_env_file() {
+  [[ -f "$ENV_FILE" ]]
 }
 
 ensure_env() {
-  if [[ ! -f "$ENV_FILE" ]]; then
+  if ! ensure_env_file; then
     printf 'Missing env file: %s\n' "$ENV_FILE" >&2
     exit 1
   fi
-
   local token
   token=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' "$ENV_FILE" | head -n 1)
   if [[ -z "$token" ]]; then
@@ -274,12 +333,32 @@ build_local() {
   build_runtime_binaries
 }
 
-start_bot() {
-  local codex_source=${1:-}
+stop_conflicting_runtime() {
+  local runtime_mode=${1:?missing runtime mode}
+  local other_mode
+  other_mode=$(other_runtime_mode "$runtime_mode")
+  if [[ "$other_mode" == "desktop" ]] && ! should_build_desktop; then
+    return 0
+  fi
+  local other_session
+  other_session=$(tmux_session_name "$other_mode")
+  if tmux_session_exists "$other_session"; then
+    log "stopping conflicting $other_mode runtime session: $other_session"
+    tmux kill-session -t "$other_session"
+    sleep 1
+  fi
+}
+
+start_runtime() {
+  local runtime_mode=${1:-headless}
+  local codex_source=${2:-}
   ensure_layout
-  ensure_env
   require_command cargo
   require_command tmux
+  runtime_mode=$(validate_runtime_mode "$runtime_mode")
+  if [[ "$runtime_mode" == "headless" ]]; then
+    ensure_env
+  fi
 
   codex_source=$(resolve_codex_source "$codex_source")
   write_codex_source_preference "$codex_source"
@@ -291,15 +370,19 @@ start_bot() {
   fi
   build_runtime_binaries
 
-  local bot_binary
-  bot_binary=$(binary_path threadbridge)
-  if [[ ! -x "$bot_binary" ]]; then
-    printf 'Missing built binary: %s\n' "$bot_binary" >&2
+  local runtime_binary_name_value runtime_binary stdout_log stderr_log
+  runtime_binary_name_value=$(runtime_binary_name "$runtime_mode")
+  runtime_binary=$(binary_path "$runtime_binary_name_value")
+  stdout_log=$(stdout_log_path "$runtime_mode")
+  stderr_log=$(stderr_log_path "$runtime_mode")
+  if [[ ! -x "$runtime_binary" ]]; then
+    printf 'Missing built binary: %s\n' "$runtime_binary" >&2
     exit 1
   fi
 
   local session_name
-  session_name=$(tmux_session_name)
+  session_name=$(tmux_session_name "$runtime_mode")
+  stop_conflicting_runtime "$runtime_mode"
   if tmux_session_exists "$session_name"; then
     log "stopping existing tmux session: $session_name"
     tmux kill-session -t "$session_name"
@@ -307,16 +390,17 @@ start_bot() {
   fi
 
   local launch_command
-  launch_command=$(printf 'cd %q && export PATH=%q CARGO_HOME=%q CARGO_TARGET_DIR=%q RUSTUP_HOME=%q && set -a && source %q && set +a && exec %q >>%q 2>>%q' \
+  launch_command=$(printf 'cd %q && export PATH=%q CARGO_HOME=%q CARGO_TARGET_DIR=%q RUSTUP_HOME=%q && if [[ -f %q ]]; then set -a && source %q && set +a; fi && exec %q >>%q 2>>%q' \
     "$REPO_ROOT" \
     "$RUNTIME_PATH" \
     "$CARGO_HOME_DIR" \
     "$CARGO_TARGET_DIR_PATH" \
     "$RUSTUP_HOME_DIR" \
     "$ENV_FILE" \
-    "$bot_binary" \
-    "$STDOUT_LOG" \
-    "$STDERR_LOG")
+    "$ENV_FILE" \
+    "$runtime_binary" \
+    "$stdout_log" \
+    "$stderr_log")
   tmux new-session -d -s "$session_name" "$(printf 'bash -lc %q' "$launch_command")"
 
   sleep 3
@@ -326,36 +410,40 @@ start_bot() {
     exit 1
   fi
 
-  log "threadbridge started in tmux session: $session_name"
+  log "$runtime_mode runtime started in tmux session: $session_name"
   log "codex source preference: $codex_source"
-  status_bot
+  status_runtime "$runtime_mode"
 }
 
-stop_bot() {
+stop_runtime() {
+  local runtime_mode=${1:-headless}
+  runtime_mode=$(validate_runtime_mode "$runtime_mode")
   local session_name
-  session_name=$(tmux_session_name)
+  session_name=$(tmux_session_name "$runtime_mode")
 
   if ! tmux_session_exists "$session_name"; then
-    log "threadbridge is not running"
+    log "$runtime_mode runtime is not running"
     return 0
   fi
 
   tmux kill-session -t "$session_name"
-  log "threadbridge stopped"
+  log "$runtime_mode runtime stopped"
 }
 
-status_bot() {
+status_runtime() {
+  local runtime_mode=${1:-headless}
+  runtime_mode=$(validate_runtime_mode "$runtime_mode")
   local session_name
-  session_name=$(tmux_session_name)
+  session_name=$(tmux_session_name "$runtime_mode")
   local codex_source
   codex_source=$(resolve_codex_source "")
 
   if ! tmux_session_exists "$session_name"; then
-    log "threadbridge is not running"
+    log "$runtime_mode runtime is not running"
   else
     local pane_pid
     pane_pid=$(tmux_session_pid "$session_name")
-    log "threadbridge running in tmux session: $session_name"
+    log "$runtime_mode runtime running in tmux session: $session_name"
     if [[ -n "$pane_pid" ]]; then
       log "tmux pane PID: $pane_pid"
     fi
@@ -373,10 +461,15 @@ status_bot() {
   fi
 }
 
-logs_bot() {
+logs_runtime() {
+  local runtime_mode=${1:-headless}
+  runtime_mode=$(validate_runtime_mode "$runtime_mode")
   ensure_layout
   local session_name
-  session_name=$(tmux_session_name)
+  session_name=$(tmux_session_name "$runtime_mode")
+  local stdout_log stderr_log
+  stdout_log=$(stdout_log_path "$runtime_mode")
+  stderr_log=$(stderr_log_path "$runtime_mode")
 
   if tmux_session_exists "$session_name"; then
     log "tmux pane"
@@ -384,9 +477,9 @@ logs_bot() {
   fi
 
   log "stdout"
-  tail -n 40 "$STDOUT_LOG" || true
+  tail -n 40 "$stdout_log" || true
   log "stderr"
-  tail -n 40 "$STDERR_LOG" || true
+  tail -n 40 "$stderr_log" || true
   log "events"
   tail -n 40 "$EVENT_LOG" || true
 }
@@ -394,9 +487,18 @@ logs_bot() {
 main() {
   local command=${1:-}
   local codex_source=""
+  local runtime_mode="headless"
   shift || true
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --runtime)
+        shift
+        if [[ $# -eq 0 ]]; then
+          printf 'Missing value for --runtime\n' >&2
+          exit 1
+        fi
+        runtime_mode=$1
+        ;;
       --codex-source)
         shift
         if [[ $# -eq 0 ]]; then
@@ -418,20 +520,20 @@ main() {
       build_local "$codex_source"
       ;;
     start)
-      start_bot "$codex_source"
+      start_runtime "$runtime_mode" "$codex_source"
       ;;
     stop)
-      stop_bot
+      stop_runtime "$runtime_mode"
       ;;
     restart)
-      stop_bot
-      start_bot "$codex_source"
+      stop_runtime "$runtime_mode"
+      start_runtime "$runtime_mode" "$codex_source"
       ;;
     status)
-      status_bot
+      status_runtime "$runtime_mode"
       ;;
     logs)
-      logs_bot
+      logs_runtime "$runtime_mode"
       ;;
     *)
       usage
