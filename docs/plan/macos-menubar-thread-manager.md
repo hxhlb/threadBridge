@@ -218,6 +218,23 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 - `binary_ready`
 - `version` 或 `revision`
 - `source`
+
+`ManagedWorkspaceView` 應同時暴露 workspace runtime heartbeat 的來源與最近一次檢查結果，至少包含：
+
+- `app_server_status`
+- `tui_proxy_status`
+- `handoff_readiness`
+- `runtime_health_source`
+  - `owner_heartbeat`
+  - `workspace_state`
+- `heartbeat_last_checked_at`
+- `heartbeat_last_error`
+
+`RuntimeHealthView` 除了 machine-level aggregate status，也應暴露：
+
+- `ready_workspaces`
+- `degraded_workspaces`
+- `unavailable_workspaces`
 - `build_info_file_path`
 - `build_info`
 

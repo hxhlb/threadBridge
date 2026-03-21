@@ -19,13 +19,18 @@ function renderWorkspaceCards(items) {
     return;
   }
   root.innerHTML = items.map(item => `
-    <div style="border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem;background:white;">
+    <div class="workspace-card">
       <strong>${item.title || item.workspace_cwd}</strong><br />
       <code>${item.workspace_cwd}</code><br />
       thread_key: <code>${item.thread_key || ''}</code><br />
       binding: <code>${item.binding_status}</code> |
       run: <code>${item.run_status}</code> |
+      runtime_source: <code>${item.runtime_health_source || 'unknown'}</code><br />
+      app_server: <code>${item.app_server_status}</code> |
+      tui_proxy: <code>${item.tui_proxy_status}</code> |
       handoff: <code>${item.handoff_readiness}</code><br />
+      owner_checked_at: <code>${item.heartbeat_last_checked_at || 'n/a'}</code><br />
+      owner_last_error: <code>${item.heartbeat_last_error || 'none'}</code><br />
       ${item.conflict ? '<strong style="color:var(--accent)">Workspace binding conflict detected. Tray launch is disabled until only one active binding remains.</strong><br />' : ''}
       current: <code>${item.current_codex_thread_id || 'none'}</code><br />
       tui: <code>${item.tui_active_codex_thread_id || 'none'}</code><br />
@@ -63,15 +68,23 @@ function renderHealthSummary(health) {
   const owner = health.runtime_owner || {};
   const managedCodex = health.managed_codex || {};
   const metrics = [
-    ['App Server', health.app_server_status || 'unknown'],
-    ['TUI Proxy', health.tui_proxy_status || 'unknown'],
-    ['Handoff', health.handoff_readiness || 'unknown'],
+    ['Global App Server', health.app_server_status || 'unknown'],
+    ['Global TUI Proxy', health.tui_proxy_status || 'unknown'],
+    ['Global Handoff', health.handoff_readiness || 'unknown'],
     ['Owner State', owner.state || 'inactive'],
+    ['Owner Last Start', owner.last_reconcile_started_at || 'never'],
+    ['Owner Last Finish', owner.last_reconcile_finished_at || 'never'],
     ['Owner Last Success', owner.last_successful_reconcile_at || 'never'],
     ['Owner Last Error', owner.last_error || 'none'],
     ['Running Workspaces', String(health.running_workspaces ?? 0)],
+    ['Ready Workspaces', String(health.ready_workspaces ?? 0)],
+    ['Degraded Workspaces', String(health.degraded_workspaces ?? 0)],
+    ['Unavailable Workspaces', String(health.unavailable_workspaces ?? 0)],
     ['Broken Threads', String(health.broken_threads ?? 0)],
     ['Conflicted Workspaces', String(health.conflicted_workspaces ?? 0)],
+    ['Owner Scanned Workspaces', String(owner.last_report?.scanned_workspaces ?? 0)],
+    ['Owner Ensured Workspaces', String(owner.last_report?.ensured_workspaces ?? 0)],
+    ['Owner Ensured Proxies', String(owner.last_report?.ensured_proxies ?? 0)],
     ['Managed Codex Source', managedCodex.source || 'unknown'],
     ['Managed Codex Version', managedCodex.version || 'unknown'],
     ['Managed Codex Ready', managedCodex.binary_ready ? 'yes' : 'no'],
@@ -148,6 +161,8 @@ async function refresh() {
   document.getElementById('onboarding-status').textContent = setup.control_chat_ready
     ? `Control chat is ready: ${setup.control_chat_id}`
     : 'Control chat is not ready. Send /start to the bot from the target Telegram chat first.';
+  document.getElementById('runtime-summary-note').textContent =
+    `Global summary is aggregated from managed workspaces. Workspace cards below show the owner heartbeat or workspace-state fallback used for each workspace.`;
   renderHealthSummary(health);
   renderThreads(threads);
   renderWorkspaceCards(workspaces);

@@ -19,7 +19,8 @@
       <pre id="setup">loading...</pre>
     </div>
     <div class="card">
-      <h2>Runtime Health</h2>
+      <h2>Global Runtime Summary</h2>
+      <p id="runtime-summary-note" class="muted">loading...</p>
       <div class="toolbar">
         <select id="managed-codex-source">
           <option value="brew">brew</option>
@@ -59,7 +60,11 @@
     <pre id="onboarding-status">waiting...</pre>
   </div>
   <div class="card"><h2>Active Threads</h2><div id="threads">loading...</div></div>
-  <div class="card"><h2>Managed Workspaces</h2><div id="workspaces">loading...</div></div>
+  <div class="card">
+    <h2>Managed Workspaces</h2>
+    <p class="muted">Each workspace card shows runtime status from the desktop owner heartbeat when available, otherwise from the workspace-local runtime state file.</p>
+    <div id="workspaces">loading...</div>
+  </div>
   <div class="card"><h2>Archived Threads</h2><div id="archived">loading...</div></div>
   <script src="/assets/management.js"></script>
 </body>

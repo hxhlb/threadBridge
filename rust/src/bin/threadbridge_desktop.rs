@@ -411,11 +411,36 @@ mod macos_app {
     }
 
     fn build_tray_snapshot_signature(snapshot: &DesktopSnapshot) -> TraySnapshotSignature {
+        let ready_workspaces = snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.handoff_readiness == "ready")
+            .count();
+        let degraded_workspaces = snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                matches!(workspace.handoff_readiness, "degraded" | "pending_adoption")
+            })
+            .count();
+        let unavailable_workspaces = snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                !matches!(
+                    workspace.handoff_readiness,
+                    "ready" | "degraded" | "pending_adoption"
+                )
+            })
+            .count();
         TraySnapshotSignature {
             tooltip: format!(
-                "threadBridge | polling {:?} | running {} | broken {} | conflicted {}",
+                "threadBridge | owner {} | polling {:?} | ws ready {} degraded {} unavailable {} | broken {} | conflicted {}",
+                snapshot.health.runtime_owner.state,
                 snapshot.setup.telegram_polling_state,
-                snapshot.health.running_workspaces,
+                ready_workspaces,
+                degraded_workspaces,
+                unavailable_workspaces,
                 snapshot.health.broken_threads,
                 snapshot.health.conflicted_workspaces
             ),

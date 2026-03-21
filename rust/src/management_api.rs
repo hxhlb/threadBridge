@@ -127,6 +127,9 @@ pub struct RuntimeHealthView {
     pub broken_threads: usize,
     pub running_workspaces: usize,
     pub conflicted_workspaces: usize,
+    pub ready_workspaces: usize,
+    pub degraded_workspaces: usize,
+    pub unavailable_workspaces: usize,
     pub app_server_status: &'static str,
     pub tui_proxy_status: &'static str,
     pub handoff_readiness: &'static str,
@@ -179,6 +182,9 @@ pub struct ManagedWorkspaceView {
     pub app_server_status: &'static str,
     pub tui_proxy_status: &'static str,
     pub handoff_readiness: &'static str,
+    pub runtime_health_source: &'static str,
+    pub heartbeat_last_checked_at: Option<String>,
+    pub heartbeat_last_error: Option<String>,
     pub hcodex_path: String,
     pub hcodex_available: bool,
     pub recent_codex_sessions: Vec<RecentCodexSessionEntry>,
@@ -777,6 +783,25 @@ impl ManagementApiState {
                 .iter()
                 .filter(|workspace| workspace.conflict)
                 .count(),
+            ready_workspaces: workspaces
+                .iter()
+                .filter(|workspace| workspace.handoff_readiness == "ready")
+                .count(),
+            degraded_workspaces: workspaces
+                .iter()
+                .filter(|workspace| {
+                    matches!(workspace.handoff_readiness, "degraded" | "pending_adoption")
+                })
+                .count(),
+            unavailable_workspaces: workspaces
+                .iter()
+                .filter(|workspace| {
+                    !matches!(
+                        workspace.handoff_readiness,
+                        "ready" | "degraded" | "pending_adoption"
+                    )
+                })
+                .count(),
             app_server_status,
             tui_proxy_status,
             handoff_readiness,
@@ -1107,6 +1132,9 @@ impl ManagementApiState {
                 app_server_status: runtime_status.app_server_status,
                 tui_proxy_status: runtime_status.tui_proxy_status,
                 handoff_readiness: runtime_status.handoff_readiness,
+                runtime_health_source: runtime_status.source,
+                heartbeat_last_checked_at: runtime_status.last_checked_at,
+                heartbeat_last_error: runtime_status.last_error,
                 hcodex_path: hcodex_path.display().to_string(),
                 hcodex_available: hcodex_path.exists(),
                 recent_codex_sessions: recent_sessions,
@@ -1613,11 +1641,14 @@ fn apple_script_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct WorkspaceRuntimeHealth {
     app_server_status: &'static str,
     tui_proxy_status: &'static str,
     handoff_readiness: &'static str,
+    source: &'static str,
+    last_checked_at: Option<String>,
+    last_error: Option<String>,
 }
 
 async fn read_workspace_runtime_health(
@@ -1641,6 +1672,9 @@ async fn read_workspace_runtime_health(
                 app_server_status: "missing",
                 tui_proxy_status: "missing",
                 handoff_readiness: "unavailable",
+                source: "workspace_state",
+                last_checked_at: None,
+                last_error: Some(format!("missing {}", state_path.display())),
             };
         }
     };
@@ -1651,6 +1685,9 @@ async fn read_workspace_runtime_health(
                 app_server_status: "invalid",
                 tui_proxy_status: "invalid",
                 handoff_readiness: "unavailable",
+                source: "workspace_state",
+                last_checked_at: None,
+                last_error: Some(format!("invalid {}", state_path.display())),
             };
         }
     };
@@ -1680,6 +1717,9 @@ async fn read_workspace_runtime_health(
         app_server_status,
         tui_proxy_status,
         handoff_readiness,
+        source: "workspace_state",
+        last_checked_at: None,
+        last_error: None,
     }
 }
 
@@ -1689,6 +1729,9 @@ impl WorkspaceRuntimeHealth {
             app_server_status: heartbeat.app_server_status,
             tui_proxy_status: heartbeat.tui_proxy_status,
             handoff_readiness: heartbeat.handoff_readiness,
+            source: "owner_heartbeat",
+            last_checked_at: Some(heartbeat.last_checked_at),
+            last_error: heartbeat.last_error,
         }
     }
 }

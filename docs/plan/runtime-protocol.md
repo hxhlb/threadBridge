@@ -108,6 +108,14 @@
 - `recent_codex_sessions`
 - `conflict`
 - `last_used_at`
+- `app_server_status`
+- `tui_proxy_status`
+- `handoff_readiness`
+- `runtime_health_source`
+  - `owner_heartbeat`
+  - `workspace_state`
+- `heartbeat_last_checked_at`
+- `heartbeat_last_error`
 
 ### 4. `RecentCodexSessionView`
 
@@ -149,6 +157,9 @@
 - `broken_threads`
 - `running_workspaces`
 - `conflicted_workspaces`
+- `ready_workspaces`
+- `degraded_workspaces`
+- `unavailable_workspaces`
 
 ### 7. `SetupStateView`
 
