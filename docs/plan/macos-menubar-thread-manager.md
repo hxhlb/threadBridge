@@ -34,7 +34,7 @@
   - 每個 workspace submenu 會列出 `Start New hcodex Session` 與最近 5 個 session id
   - `Settings` 會打開內嵌 webview 並載入本地 management UI
 - managed Codex health 已開始暴露真實 source / binary path / version，且本地管理面可切換 Codex source preference 並同步已綁定 workspace 的 launcher
-- desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並提供單 workspace 的 `repair runtime` control action
+- desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並主動 ensure shared app-server 與 TUI proxy；同時也提供單 workspace 的 `repair runtime` control action
 - 本地管理面已開始提供 managed Codex cache refresh，能把目前 `PATH` 上的 `codex` 複製進 repo 管理快取
 - 本地管理面已開始提供 managed Codex source build，可直接從本機 Codex Rust workspace 建出受管 binary 並寫入 build info
 - 本地管理面已開始提供 `open workspace` control action
@@ -43,7 +43,7 @@
 
 目前仍缺：
 
-- desktop runtime owner 對 TUI proxy / handoff continuity 的 owner 收斂仍不完整
+- desktop runtime owner 對 handoff continuity / adoption 狀態的 owner 收斂仍不完整
 - managed Codex source build 目前仍是直接呼叫 cargo 的實作骨架，尚未收斂成更正式的 update/install UX
 - web 管理面的 UI 還是內嵌 HTML，尚未拆成更正式的前端結構
 
@@ -127,6 +127,7 @@ thread / workspace 管理頁至少顯示：
 - `run_status`
 - `current_codex_thread_id`
 - `tui_active_codex_thread_id`
+- `tui_session_adoption_pending`
 - archived 與否
 - `last_used_at`
 

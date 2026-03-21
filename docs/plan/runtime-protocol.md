@@ -78,6 +78,7 @@
 - `run_status`
 - `current_codex_thread_id`
 - `tui_active_codex_thread_id`
+- `tui_session_adoption_pending`
 - `archived_at`
 - `last_used_at`
 - `last_error`
@@ -103,6 +104,7 @@
 - `run_status`
 - `current_codex_thread_id`
 - `tui_active_codex_thread_id`
+- `tui_session_adoption_pending`
 - `recent_codex_sessions`
 - `conflict`
 - `last_used_at`

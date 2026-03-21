@@ -97,7 +97,7 @@ mod macos_app {
         let runtime_config = load_runtime_config()?;
         let _guard = init_json_logs(&runtime_config.debug_log_path)?;
         let management_api = runtime.block_on(spawn_management_api(runtime_config.clone()))?;
-        let owner = Arc::new(DesktopRuntimeOwner::new(runtime_config.clone())?);
+        let owner = Arc::new(runtime.block_on(DesktopRuntimeOwner::new(runtime_config.clone()))?);
         runtime.block_on(management_api.set_runtime_owner(Some((*owner).clone())));
 
         if runtime

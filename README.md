@@ -69,6 +69,8 @@ scripts/local_threadbridge.sh restart --codex-source source
 - The local management API defaults to `http://127.0.0.1:38420` and can be changed with `THREADBRIDGE_MANAGEMENT_BIND_ADDR`.
 - On macOS, the tray menu lists one submenu per managed workspace, `Start New hcodex Session`, and the recent 5 session IDs for resume.
 - The local management UI can open a managed workspace in Finder, repair a workspace runtime, refresh the managed Codex cache from the current `codex` on `PATH`, and build a managed source Codex binary from the local Codex Rust workspace.
+- The desktop runtime owner now proactively ensures both the shared app-server daemon and the workspace TUI proxy for managed workspaces.
+- The management surface now shows TUI adoption-pending state per thread and workspace, so local handoff is visible without reading raw state files.
 
 ## Runtime Layout
 

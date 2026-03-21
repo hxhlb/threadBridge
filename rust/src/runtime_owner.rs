@@ -5,12 +5,15 @@ use anyhow::Result;
 
 use crate::app_server_runtime::WorkspaceRuntimeManager;
 use crate::config::RuntimeConfig;
+use crate::repository::ThreadRepository;
+use crate::tui_proxy::TuiProxyManager;
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOwnerReconcileReport {
     pub scanned_workspaces: usize,
     pub ensured_workspaces: usize,
+    pub ensured_proxies: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -18,20 +21,23 @@ pub struct DesktopRuntimeOwner {
     runtime: RuntimeConfig,
     seed_template_path: PathBuf,
     app_server_runtime: WorkspaceRuntimeManager,
+    tui_proxy_runtime: TuiProxyManager,
 }
 
 impl DesktopRuntimeOwner {
-    pub fn new(runtime: RuntimeConfig) -> Result<Self> {
+    pub async fn new(runtime: RuntimeConfig) -> Result<Self> {
         let seed_template_path = validate_seed_template(
             &runtime
                 .codex_working_directory
                 .join("templates")
                 .join("AGENTS.md"),
         )?;
+        let repository = ThreadRepository::open(&runtime.data_root_path).await?;
         Ok(Self {
             runtime,
             seed_template_path,
             app_server_runtime: WorkspaceRuntimeManager::new(),
+            tui_proxy_runtime: TuiProxyManager::new(repository),
         })
     }
 
@@ -50,6 +56,7 @@ impl DesktopRuntimeOwner {
         let mut report = RuntimeOwnerReconcileReport {
             scanned_workspaces: unique_workspaces.len(),
             ensured_workspaces: 0,
+            ensured_proxies: 0,
         };
         for workspace in unique_workspaces {
             let workspace_path = Path::new(&workspace);
@@ -60,11 +67,16 @@ impl DesktopRuntimeOwner {
                 workspace_path,
             )
             .await?;
-            let _ = self
+            let runtime = self
                 .app_server_runtime
                 .ensure_workspace_daemon(workspace_path)
                 .await?;
+            let _ = self
+                .tui_proxy_runtime
+                .ensure_workspace_proxy(workspace_path, &runtime.daemon_ws_url)
+                .await?;
             report.ensured_workspaces += 1;
+            report.ensured_proxies += 1;
         }
         Ok(report)
     }

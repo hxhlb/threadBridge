@@ -146,6 +146,7 @@ pub struct ManagedWorkspaceView {
     pub run_status: &'static str,
     pub current_codex_thread_id: Option<String>,
     pub tui_active_codex_thread_id: Option<String>,
+    pub tui_session_adoption_pending: bool,
     pub session_broken: bool,
     pub last_used_at: Option<String>,
     pub conflict: bool,
@@ -166,6 +167,7 @@ pub struct ThreadStateView {
     pub run_status: &'static str,
     pub current_codex_thread_id: Option<String>,
     pub tui_active_codex_thread_id: Option<String>,
+    pub tui_session_adoption_pending: bool,
     pub archived_at: Option<String>,
     pub last_used_at: Option<String>,
     pub last_error: Option<String>,
@@ -483,6 +485,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
           handoff: <code>${{item.handoff_readiness}}</code><br />
           current: <code>${{item.current_codex_thread_id || 'none'}}</code><br />
           tui: <code>${{item.tui_active_codex_thread_id || 'none'}}</code><br />
+          adoption_pending: <code>${{item.tui_session_adoption_pending ? 'yes' : 'no'}}</code><br />
           hcodex: <code>${{item.hcodex_path}}</code><br />
           recent: ${{item.recent_codex_sessions.map(x => `<code>${{x.session_id}}</code>`).join(', ') || 'none'}}
           <div style="margin-top:0.75rem;" class="toolbar">
@@ -520,6 +523,7 @@ async fn index(State(state): State<Arc<ManagementApiState>>) -> impl IntoRespons
           run: <code>${{item.run_status}}</code><br />
           current: <code>${{item.current_codex_thread_id || 'none'}}</code><br />
           tui: <code>${{item.tui_active_codex_thread_id || 'none'}}</code><br />
+          adoption_pending: <code>${{item.tui_session_adoption_pending ? 'yes' : 'no'}}</code><br />
           last_used_at: <code>${{item.last_used_at || 'unknown'}}</code><br />
           last_error: <code>${{item.last_error || 'none'}}</code>
         </div>
@@ -1283,6 +1287,7 @@ impl ManagementApiState {
                 run_status: if has_live_cli { "running" } else { "idle" },
                 current_codex_thread_id: binding.current_codex_thread_id.clone(),
                 tui_active_codex_thread_id: binding.tui_active_codex_thread_id.clone(),
+                tui_session_adoption_pending: binding.tui_session_adoption_pending,
                 session_broken,
                 last_used_at: record.metadata.last_codex_turn_at.clone(),
                 conflict: false,
@@ -1372,6 +1377,9 @@ impl ManagementApiState {
                 tui_active_codex_thread_id: binding
                     .as_ref()
                     .and_then(|binding| binding.tui_active_codex_thread_id.clone()),
+                tui_session_adoption_pending: binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.tui_session_adoption_pending),
                 archived_at: record.metadata.archived_at,
                 last_used_at: record.metadata.last_codex_turn_at,
                 last_error: binding

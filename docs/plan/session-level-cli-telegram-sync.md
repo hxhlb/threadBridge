@@ -16,7 +16,7 @@
 目前仍未完成：
 
 - workspace `ws` runtime 的正式長壽命 owner 尚未完全收斂
-- desktop runtime 對 app-server / TUI proxy / managed Codex 的 owner 職責仍是部分實作
+- desktop runtime 對 handoff continuity / adoption 的 owner 職責仍是部分實作
 - `hcodex` self-heal 仍未收斂成純 fallback
 
 ## 現況定位
@@ -64,6 +64,7 @@
   - TUI proxy
   - local management API
   - runtime health view
+  - 背景 reconcile / repair runtime
 - bot
   - Telegram adapter / client
 - `hcodex`
