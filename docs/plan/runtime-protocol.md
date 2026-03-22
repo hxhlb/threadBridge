@@ -352,6 +352,8 @@ v1 至少保留：
   - 使用這份協議作為本地管理面的正式 view / action 命名來源
 - [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
   - 提供 shared runtime、`hcodex`、TUI proxy、adoption 的現實模型
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
+  - session summary / session record / artifact refs 的 observability view 應由這份文檔定義
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - 可共用部分 event 與 view，但不是這份 protocol 的唯一需求方
 

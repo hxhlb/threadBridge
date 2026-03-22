@@ -1,0 +1,381 @@
+# Working Session 可觀測紀錄草稿
+
+## 目前進度
+
+這份文檔目前仍是純草稿，但它描述的前置能力已有一部分存在。
+
+目前已實作：
+
+- `transcript-mirror.jsonl` 已開始按 `session_id` 保存 session mirror
+- `TranscriptMirrorEntry` 已有：
+  - `timestamp`
+  - `session_id`
+  - `origin`
+  - `role`
+  - `delivery`
+  - `phase`
+  - `text`
+- management API 已提供 `GET /api/threads/:thread_key/transcript`
+- management UI 已有初版 transcript observability pane，可查看 `final` / `process` transcript
+- process transcript 已開始覆蓋 `Plan` / `Tool` 摘要
+
+目前尚未完成：
+
+- 把 `working session` 做成 desktop runtime / web 管理面的正式一級入口
+- session list / session detail / session records 的正式 API
+- 以單一 session 視角展示完整的 user prompt、assistant reply、tool use、error 與 artifact
+- tool input / result / request file / result file 的結構化關聯
+- retention、redaction、以及 mode-aware observability 邊界
+
+目前新增確認的部署方向是：
+
+- working session observability 應優先落在 machine-local 的 desktop runtime / 本地 web 管理面
+- 不應把 Telegram Web App 視為近期前提
+
+## 問題
+
+現在已經可以看到一些 transcript，但還缺少「某一個 working session 到底發生了什麼」的直接入口。
+
+目前資訊分散在：
+
+- thread 級 `transcript-mirror.jsonl`
+- `conversations.jsonl`
+- `session-binding.json`
+- workspace `.threadbridge/tool_requests/`
+- workspace `.threadbridge/tool_results/`
+- `data/debug/events.jsonl`
+
+這些資料雖然存在，但還沒有被整理成同一個 session 級觀測模型。
+
+結果就是：
+
+- 很難從管理面直接打開「目前正在工作的 session」
+- 很難在同一個畫面依時間順序看到：
+  - user prompt
+  - assistant final reply
+  - process transcript
+  - tool use
+  - tool artifact
+  - 失敗原因
+- 現有 `GET /api/threads/:thread_key/transcript` 比較像 transcript feed，不是完整 session 觀測入口
+
+## 定位
+
+這份文檔定義的是 `working session observability` 主草稿。
+
+它處理的是：
+
+- desktop runtime / web 管理面的 session 級觀測入口
+- session summary / session detail / session records 的資料模型
+- 單一 session 內 user / assistant / plan / tool / error 的時間線語義
+- session 與 artifact 的關聯方式
+
+它明確不處理：
+
+- Telegram Web App 的產品外殼
+- archive / restore / reconnect 這類 control action 本身
+- interactive terminal
+- transport-neutral thread / workspace state 主規格
+
+也就是說：
+
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+  - 定義 runtime query / control / event 的主線命名
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
+  - 定義 session 級 observability view
+- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
+  - 之後若存在 Telegram Web App，應把它當成遠期可選 UI 載體，而不是近期前提
+
+## Working Session 的語義
+
+這裡的 `working session` 指的是：
+
+- 一個具體的 `session_id`
+- 它對應某次 Codex app-server / 受管 TUI 的工作連續體
+- 它可能來自：
+  - Telegram turn
+  - 本地 `hcodex`
+  - TUI adoption 前後的同一條 continuity
+
+對 observability 來說，session 是比 thread 更細的一級單位：
+
+- thread
+  - 長期 continuity / binding 容器
+- session
+  - 某次具體工作的觀測單位
+
+這樣管理面才能回答：
+
+- 目前正在跑的是哪個 session
+- 最近完成的是哪個 session
+- 某個 session 裡到底做了哪些 tool use
+
+## 核心原則
+
+- `working session` 應成為管理面的第一級可打開實體，而不只是 transcript 裡的一個欄位。
+- session timeline 必須以 `session_id` 為主鍵聚合，而不是讓 UI 自己從 thread transcript 猜。
+- `final transcript`、`process transcript`、tool artifact 應該能在同一個 session detail 中並列，而不是分散在不同頁面。
+- 觀測面預設只讀；control action 可以連結出去，但不和 session record 模型混在一起。
+- 每條 session record 都應能指出自己的 source of truth，而不是只剩一段渲染後文本。
+- 敏感資料顯示必須有 redaction 規則，不能把 provider payload / token / 全量檔案內容直接當成預設 UI。
+- 近期 observability 應建立在 machine-local surface 上，不應為了 Telegram Web App 而先把本地資料面公開成 HTTPS 入口。
+
+## 載體策略
+
+就目前部署模型來看，較合理的優先順序是：
+
+1. desktop runtime 持有的本地 web 管理面
+2. 受管 desktop webview 或等價的 machine-local shell
+3. 遠期才評估 Telegram Web App 或其他需要 HTTPS 的遠端載體
+
+原因不是 UI 偏好，而是安全與部署成本：
+
+- Telegram Web App 需要 HTTPS
+- 這通常意味著本地憑證、反向代理、或公開 tunnel
+- 若透過 Cloudflare Tunnel 等服務暴露 observability 面，等於把高敏感 session 資料放進新的公開攻擊面
+
+對 working session 來說，這類資料可能包括：
+
+- user prompt
+- assistant reply
+- tool request / result
+- workspace path
+- 執行錯誤與診斷
+
+因此比較合理的做法是先把 session observability 固定為 machine-local capability，再決定是否值得做遠端載體。
+
+## 入口形狀
+
+在 desktop runtime / web 管理面中，至少應有一個明確入口：
+
+- workspace detail 裡的 `Current Session`
+- recent sessions list
+- `Open Session Log` / `View Session Timeline`
+
+這個入口要能直接打開某一個 `session_id`，而不是先讓使用者理解：
+
+- `transcript`
+- `mirror`
+- `events.jsonl`
+- `tool_results`
+
+這些底層 artifact 名稱。
+
+## 建議的資料模型
+
+### 1. `WorkingSessionSummaryView`
+
+至少包含：
+
+- `session_id`
+- `thread_key`
+- `workspace_cwd`
+- `started_at`
+- `updated_at`
+- `run_status`
+- `origins_seen`
+  - 例如 `telegram` / `tui` / `local`
+- `record_count`
+- `tool_use_count`
+- `has_final_reply`
+- `last_error`
+
+這個 view 用來承接：
+
+- current session 卡片
+- recent sessions list
+- session picker
+
+### 2. `WorkingSessionRecordView`
+
+這是 session detail 的核心時間線 item。
+
+至少包含：
+
+- `timestamp`
+- `session_id`
+- `kind`
+  - `user_prompt`
+  - `assistant_final`
+  - `process_plan`
+  - `process_tool`
+  - `status`
+  - `error`
+- `origin`
+- `role`
+- `summary`
+- `text`
+- `delivery`
+  - 若來自 transcript mirror，保留 `final` / `process`
+- `phase`
+  - 若來自 process transcript，保留 `plan` / `tool`
+- `tool_name`
+- `tool_detail`
+- `artifact_refs`
+- `source_ref`
+
+其中：
+
+- `kind`
+  - 是 session detail 用的 UI-facing 類型
+- `delivery` / `phase`
+  - 是保留下來的底層 debug metadata
+
+初版允許 `kind` 先由現有 transcript mirror 衍生，而不是一開始就要求所有 runtime path 重新寫事件格式。
+
+### 3. `SessionArtifactRef`
+
+至少包含：
+
+- `label`
+- `artifact_kind`
+  - `tool_request`
+  - `tool_result`
+  - `reply_attachment`
+  - `image_analysis`
+  - `generated_image`
+- `path`
+- `exists`
+- `size_bytes`
+
+artifact ref 的目標不是做完整檔案瀏覽器，而是讓 session detail 能回答：
+
+- 這次 tool use 寫了哪個 request file
+- result file 在哪裡
+- 最後送回 Telegram 的 artifact 是什麼
+
+## 記錄範圍
+
+單一 working session 至少應能展示下面幾類記錄。
+
+### User Prompt
+
+- 使用者輸入的 prompt
+- 來源可來自 Telegram 或本地 TUI
+- 應保留 `origin`
+
+### Assistant Final Reply
+
+- 最終 assistant 回覆
+- 若有 Telegram attachment fallback，也應能看到對應 artifact ref
+
+### Process Transcript
+
+- `Plan`
+- `Tool`
+- 其他之後正式納入 process transcript 的事件
+
+這一層目前已部分存在，但仍只有摘要文本，沒有完整 session detail 能力。
+
+### Tool Use
+
+觀測面不應只停在「Tool: cargo test」這種摘要。
+
+至少還應補足：
+
+- tool 名稱或 wrapper 名稱
+- 開始時間
+- 完成時間或失敗
+- 相關 artifact
+  - request file
+  - result file
+  - outbox payload
+
+如果短期內無法穩定保存完整 input / output，初版也應至少把：
+
+- tool name
+- tool detail
+- artifact refs
+- exit / result summary
+
+整理進 session record。
+
+### Error / Status
+
+對 session 排查最有價值的錯誤也應能落在同一條時間線上，例如：
+
+- resume 失敗
+- workspace `cwd` 驗證失敗
+- tool wrapper 失敗
+- Telegram delivery fallback
+
+但這些錯誤不應只靠掃整份 `events.jsonl` 才能知道。
+
+## 資料來源與所有權
+
+初版建議的 source of truth：
+
+- `transcript-mirror.jsonl`
+  - session timeline 的主要來源
+- `conversations.jsonl`
+  - 補充 user / assistant 對話歷史
+- `session-binding.json`
+  - 補充 thread 與目前 continuity 的關係
+- workspace `.threadbridge/tool_requests/`
+  - 補 request artifact
+- workspace `.threadbridge/tool_results/`
+  - 補 result artifact
+- `data/debug/events.jsonl`
+  - 只補 observability 專用的錯誤與診斷，不作 primary timeline source
+
+web UI 不應直接讀這些檔案。
+
+應由 desktop runtime / management API 提供整理後的只讀 view。
+
+## 建議的 API
+
+目前已存在：
+
+- `GET /api/threads/:thread_key/transcript`
+
+但這條 API 應視為：
+
+- transcript feed
+- 或 session observability 的底層材料
+
+而不是完整 session 入口本身。
+
+建議補上：
+
+- `GET /api/threads/:thread_key/sessions`
+  - 取 recent sessions summary
+- `GET /api/threads/:thread_key/sessions/:session_id`
+  - 取單一 session summary
+- `GET /api/threads/:thread_key/sessions/:session_id/records`
+  - 取 session timeline
+- `GET /api/threads/:thread_key/sessions/:session_id/artifacts`
+  - 取與 session 關聯的 artifact refs
+
+若未來管理面完全收斂成 workspace-first，也可以再補等價的 workspace route。
+
+但 v1 不需要先把 route 命名完全定死；先固定 session view model 更重要。
+
+## 與其他計劃的關係
+
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+  - 定義 mirror 與 shared runtime 的現行模型
+  - 這份文檔消費它輸出的 transcript / mirror，不重複定義 continuity
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+  - 應對外暴露 session summary / record 的 query 命名
+- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
+  - web 管理面可把 session observability 作為 workspace detail 的一個 pane / route
+- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
+  - 若未來仍做 Telegram Web App，應直接引用這份 session view model，而不是再自行定義 timeline 結構
+
+## 開放問題
+
+- session timeline 要完全從現有 transcript mirror 衍生，還是要新增更結構化的 event store？
+- tool use 是否要保存更完整的 input / output，還是先只保存摘要與 artifact refs？
+- `events.jsonl` 裡哪些錯誤值得提升為正式 session records？
+- execution mode 是否需要影響 observability retention 或 redaction 深度？
+- current session 與 recent sessions 的排序，應以 `updated_at`、最後 event，還是最後 final reply 為準？
+- 是否要讓同一個 session 同時呈現 Telegram delivery 結果，還是只觀測 Codex/runtime/tool 面？
+- 若未來仍要支持 Telegram Web App，該如何避免它成為需要公開 tunnel 的本地資料入口？
+
+## 建議的下一步
+
+1. 先把 `session_id` 從 transcript/mirror 提升為管理面可直接打開的一級實體。
+2. 在 `runtime_protocol` 中新增 `WorkingSessionSummaryView` 與 `WorkingSessionRecordView`。
+3. 先做 web 管理面的只讀 session pane，不急著加入 control action。
+4. 把 tool request/result/outbox 與 transcript mirror 建立最小 artifact 關聯。
+5. 等 session detail 穩定後，再決定是否需要 read-only live stream 或 terminal replay。

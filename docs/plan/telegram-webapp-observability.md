@@ -15,8 +15,21 @@
 目前仍缺：
 
 - Web App UI
-- thread / turn / tool timeline 展示
+- 以 [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md) 為基礎的 thread / turn / tool timeline 展示
 - 面向 observability 的 thread-level API 與 timeline / artifact view
+
+目前新增確認的限制是：
+
+- Telegram Web App 依賴 HTTPS
+- 這和 `threadBridge` 目前偏本地 desktop runtime / local management UI 的部署模型有明顯摩擦
+- 若用 Cloudflare Tunnel 或類似服務把本地觀測面暴露成 HTTPS，會引入新的公開面與安全風險
+
+因此目前較合理的優先級調整是：
+
+- local desktop runtime / 本地 web 管理面 / 受管 webview
+  - 作為主要 observability 載體
+- Telegram Web App
+  - 降為遠期可選載體，而不是近期主路徑
 
 ## 問題
 
@@ -38,30 +51,94 @@
 - 很難區分「Telegram 沒收到」「Codex 沒回」「tool 執行失敗」「session broken」
 - 排查通常還是要回到本機看 log 檔案
 
+## 問題補充：HTTPS 與公開面
+
+Telegram Web App 的最大產品摩擦不是 UI，而是部署模型。
+
+它要求 HTTPS，這代表如果觀測面仍是 machine-local server，通常就要在下面幾種路線裡選一個：
+
+- 自行處理本地 HTTPS 憑證與信任鏈
+- 經由區網 / 反向代理額外轉發
+- 經由 Cloudflare Tunnel 或其他公開 tunnel 服務暴露出去
+
+對 `threadBridge` 目前的本地 owner 模型來說，這幾條路都不算便宜：
+
+- 本地 HTTPS 會讓 setup、裝置信任、除錯與跨網段存取都更麻煩
+- tunnel 會把原本 machine-local 的觀測面變成可被外部路由到的公開入口
+- 即使有 auth，攻擊面與資料暴露風險也會明顯上升
+
+而 observability 畫面裡很可能包含：
+
+- prompt
+- assistant reply
+- tool request / result
+- workspace path
+- 錯誤與執行診斷
+
+這些都不適合輕率暴露成公開 Web surface。
+
 ## 方向
 
-用 Telegram Web App 提供一個 thread 級的觀測面，直接查看 Codex / bot / tool 的執行狀態與日志。
+若保留這份文檔，它比較合理的方向應改成：
+
+- Telegram Web App 作為遠期可選 observability 載體
+
+而近期主路徑應是：
+
+- 由 desktop runtime 持有本地 observability UI
+- 透過現有 local management API 與受管 web 管理面承接 working session 紀錄入口
+- 若需要更原生的封裝，再考慮 desktop 內嵌 webview，而不是先做 Telegram Web App
 
 核心想法：
 
-- Telegram bot 繼續作為主要交互入口
-- Telegram Web App 作為觀測與診斷面
-- 不是替代聊天，而是補足目前缺少的「執行可視化」
+- Telegram bot 繼續作為主要聊天入口
+- desktop runtime / 本地 web 管理面作為主要觀測與診斷面
+- Telegram Web App 若存在，應只是額外載體，不是 observability 的前提
 
-## 為什麼是 Telegram Web App
+## 為什麼 Telegram Web App 不再適合作為近期主路徑
 
-優點：
+它仍然有產品優點：
 
 - 對使用者來說入口自然，就在 Telegram 裡
 - 可以跟目前 thread / topic 的操作模型對齊
 - 適合做狀態頁、日志頁、turn timeline、artifact 檢視
 - 不需要另外記住一個管理後台網址
 
-這個方向本質上是在補：
+但目前缺點更實際：
+
+- HTTPS 不是可忽略的部署細節，而是架構前提
+- local-only runtime 會因此被迫面對憑證、反向代理、或公開 tunnel
+- 對 observability 這種高敏感資料面來說，公開入口風險過高
+
+因此這條線目前更適合作為：
+
+- 產品形態探索
+- 遠期載體選項
+
+而不是：
+
+- working session observability 的近期主落地方向
+
+真正要補的是：
 
 - runtime observability
 - 執行狀態可見性
 - thread 級問題排查能力
+
+## 定位補充
+
+這份文檔現在更適合被視為：
+
+- Telegram Web App 作為遠期 observability 載體的產品草稿
+
+而不是：
+
+- 近期主路徑
+- session timeline / session record model 的主規格
+
+working session 的資料模型、timeline record、artifact 關聯，之後應引用：
+
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
 
 ## 要觀測什麼
 
@@ -331,7 +408,7 @@ Telegram Web App 不應該直接去讀本地檔案系統。
 
 ## 建議的下一步
 
-1. 先定義 thread-level observability 的最小資料模型。
+1. 先把 [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md) 收斂成 session-level observability 的最小資料模型。
 2. 決定是否先做一個本地只讀 API。
 3. 先畫出 Thread 詳情頁和 Turn 時間線頁的最小欄位。
 4. 把 terminal 能力拆成 replay / read-only live / interactive 三層，不要混在一起。

@@ -78,6 +78,9 @@
 
 ## 純草稿
 
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
+  - desktop runtime / web 管理面的 session 級 observability 主草稿
+  - 目標是提供 working session 的可打開入口與 timeline / artifact view
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
   - Telegram outbound delivery 主規格草稿
   - 也承接 busy / running 狀態訊息上的互動 control surface 規格
@@ -85,6 +88,7 @@
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
   - 目前已有通用 management API / SSE 骨架，但 thread-level observability API 仍未成形
+  - 由於 Telegram Web App 依賴 HTTPS，近期已降為遠期可選載體，不再是本地 observability 的主路徑
 - [llm-guidance-and-goals.md](/Volumes/Data/Github/threadBridge/docs/plan/llm-guidance-and-goals.md)
   - secondary LLM 設定、AI 建議與 AI 目標層草稿
 - [desktop-runtime-tool-bridge.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-tool-bridge.md)
@@ -117,6 +121,8 @@
   - 把舊的本地 CLI 狀態接到同一份 busy / title 模型
 - `session-level-mirror-and-readiness`
   - 描述 local/TUI mirror、adoption、與 idle/free readiness 的現行模型
+- `working-session-observability`
+  - 描述 working session 的可觀測入口、session timeline 與 artifact 關聯
 - `topic-title-status`
   - 描述 title 應承載哪些狀態
 - `runtime-state-machine`
