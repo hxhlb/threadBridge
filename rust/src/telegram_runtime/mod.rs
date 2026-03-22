@@ -19,12 +19,16 @@ pub(crate) use crate::repository::{
     AppendPendingImageInput, LogDirection, SessionBinding, ThreadRecord, ThreadRepository,
     TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin, TranscriptMirrorRole,
 };
-use crate::thread_state::{BindingStatus, ResolvedThreadState};
+use crate::thread_state::{
+    BindingStatus, ResolvedThreadState, cached_effective_busy_snapshot_for_binding,
+    resolve_thread_state_with_cache,
+};
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 use crate::tui_proxy::TuiProxyManager;
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 pub(crate) use crate::workspace_status::{
-    WorkspaceStatusCache, read_local_session_claim, read_session_status, record_bot_status_event,
+    SessionCurrentStatus, WorkspaceStatusCache, read_local_session_claim, read_session_status,
+    record_bot_status_event,
 };
 
 pub mod final_reply;
@@ -568,6 +572,22 @@ pub(crate) fn session_binding_hint_for_state(
         }
         BindingStatus::Healthy => session_binding_hint(session),
     }
+}
+
+pub(crate) async fn resolve_busy_gate_state(
+    state: &AppState,
+    record: &ThreadRecord,
+    session: Option<&SessionBinding>,
+) -> Result<(ResolvedThreadState, Option<SessionCurrentStatus>)> {
+    let resolved_state =
+        resolve_thread_state_with_cache(&record.metadata, session, &state.workspace_status_cache)
+            .await?;
+    let blocking_snapshot = if resolved_state.is_running() {
+        cached_effective_busy_snapshot_for_binding(&state.workspace_status_cache, session).await?
+    } else {
+        None
+    };
+    Ok((resolved_state, blocking_snapshot))
 }
 
 pub(crate) fn command_argument_text<'a>(msg: &'a Message, command_name: &str) -> Option<&'a str> {

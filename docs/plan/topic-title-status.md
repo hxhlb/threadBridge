@@ -8,8 +8,7 @@
 
 - title 基底優先使用 thread title
 - 若 thread title 缺失，回退到 workspace basename
-- suffix 目前支持：
-  - `· busy`
+- suffix 目前只支持：
   - `· broken`
 - background watcher 會在共享 workspace status 變化時更新 title
 - threadBridge 管理的 topic 內，新的 rename service message 會 best-effort 清理
@@ -22,12 +21,16 @@
 
 ## 現行語義
 
-title 現在承載的是非常少量的 runtime state：
+title 現在承載的是非常少量的 durable runtime state：
 
-- `busy`
-  - 當前 Telegram thread 的 `current_codex_thread_id` 在 session snapshot 中處於 turn busy
 - `broken`
   - 目前 binding 已失效，需要 `/reconnect_codex` 或 `/new`
+
+`busy` 已從 title 語義移除：
+
+- busy 是短期執行態
+- 不再透過 Telegram topic rename 呈現
+- 改由 busy gate、`/workspace_info`、以及後續觀測面承接
 
 已退場的舊 suffix：
 
@@ -41,25 +44,21 @@ title 現在承載的是非常少量的 runtime state：
 
 目前格式是：
 
-- `<thread-title> · busy`
 - `<thread-title> · broken`
-- `<thread-title> · busy · broken`
+- `<thread-title>`
 
 若 thread title 不存在，則改用 workspace basename。
 
 ## 資料來源
 
-目前 `busy` 不是從本地 viewer / attach 狀態推導，而是從 selected current session 的 snapshot 推導：
+目前 title 只看 binding 是否 broken：
 
-- `current_codex_thread_id`
-- `read_session_status(workspace, current_codex_thread_id)`
+- `metadata.session_broken`
+- `session-binding.json.session_broken`
 
-所以 title 目前對齊的是：
+也就是說，title 現在不再對齊：
 
-- Telegram 當前採用的 Codex session
-
-而不是：
-
+- Telegram 當前採用的 Codex session 是否正在執行
 - 某個本地 live session
 - 某個 attach viewer 狀態
 
@@ -71,4 +70,4 @@ title 現在承載的是非常少量的 runtime state：
 - alternate TUI session 正在 mirror
 - context ratio
 
-但目前不應過早把太多 runtime flag 塞進 title。
+但目前不應再把短期 runtime flag 塞進 title，尤其是 `busy` 這類高頻變動狀態。

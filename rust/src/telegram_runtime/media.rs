@@ -14,9 +14,6 @@ use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::status_sync;
 use super::*;
 use crate::image_artifacts::PendingImageBatch;
-use crate::thread_state::{
-    cached_effective_busy_snapshot_for_binding, resolve_thread_state_with_cache,
-};
 
 pub(crate) const CALLBACK_IMAGE_BATCH_ANALYZE: &str = "image_batch_analyze";
 const TELEGRAM_OUTBOX_FILE: &str = ".threadbridge/tool_results/telegram_outbox.json";
@@ -275,12 +272,8 @@ pub(crate) async fn queue_image_for_thread(
     } else {
         (record, session)
     };
-    let resolved_state = resolve_thread_state_with_cache(
-        &record.metadata,
-        session.as_ref(),
-        &state.workspace_status_cache,
-    )
-    .await?;
+    let (resolved_state, blocking_snapshot) =
+        resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
         send_scoped_message(
             bot,
@@ -362,16 +355,12 @@ pub(crate) async fn queue_image_for_thread(
             )
             .await?;
     }
-    if let Some(binding) = session.as_ref()
-        && let Some(busy) =
-            cached_effective_busy_snapshot_for_binding(&state.workspace_status_cache, Some(binding))
-                .await?
-    {
+    if let Some(busy) = blocking_snapshot.as_ref() {
         send_scoped_message(
             bot,
             msg.chat.id,
             Some(thread_id),
-            status_sync::busy_text_message(&busy, true),
+            status_sync::busy_text_message(busy, true),
         )
         .await?;
     }
@@ -388,12 +377,7 @@ pub(crate) async fn analyze_pending_image_batch(
     callback_query_id: Option<&CallbackQueryId>,
 ) -> Result<()> {
     let session = state.repository.read_session_binding(&record).await?;
-    let resolved_state = resolve_thread_state_with_cache(
-        &record.metadata,
-        session.as_ref(),
-        &state.workspace_status_cache,
-    )
-    .await?;
+    let (resolved_state, _) = resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
@@ -405,12 +389,8 @@ pub(crate) async fn analyze_pending_image_batch(
     }
     let (record, session) =
         maybe_route_telegram_input_to_tui_session(state, record, session).await?;
-    let resolved_state = resolve_thread_state_with_cache(
-        &record.metadata,
-        session.as_ref(),
-        &state.workspace_status_cache,
-    )
-    .await?;
+    let (resolved_state, blocking_snapshot) =
+        resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
@@ -426,13 +406,8 @@ pub(crate) async fn analyze_pending_image_batch(
     let workspace_path =
         ensure_bound_workspace_runtime(state, session.as_ref().context("missing session binding")?)
             .await?;
-    if resolved_state.is_running()
-        && let Some(binding) = session.as_ref()
-        && let Some(busy) =
-            cached_effective_busy_snapshot_for_binding(&state.workspace_status_cache, Some(binding))
-                .await?
-    {
-        let text = status_sync::busy_text_message(&busy, false);
+    if let Some(busy) = blocking_snapshot.as_ref() {
+        let text = status_sync::busy_text_message(busy, false);
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
                 .text(text)

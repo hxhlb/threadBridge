@@ -8,9 +8,6 @@ use tracing::{error, info};
 
 use crate::local_control::LocalControlHandle;
 use crate::process_transcript::process_entry_from_codex_event;
-use crate::thread_state::{
-    cached_effective_busy_snapshot_for_binding, resolve_thread_state_with_cache,
-};
 
 use super::final_reply::send_final_assistant_reply;
 use super::media::{self, dispatch_workspace_telegram_outbox};
@@ -41,6 +38,8 @@ async fn start_fresh_binding(
 
 async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<String> {
     let session = state.repository.read_session_binding(record).await?;
+    let (resolved_state, blocking_snapshot) =
+        resolve_busy_gate_state(state, record, session.as_ref()).await?;
     let workspace_path = session
         .as_ref()
         .and_then(|binding| binding.workspace_cwd.as_deref())
@@ -53,7 +52,6 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
     } else {
         None
     };
-    let marker = status_sync::topic_marker_for_snapshot(current_snapshot.as_ref());
     let tui_active_codex_thread_id = session
         .as_ref()
         .and_then(|binding| binding.tui_active_codex_thread_id.as_deref())
@@ -80,26 +78,36 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         .as_ref()
         .map(|snapshot| format!("{:?}", snapshot.owner))
         .unwrap_or_else(|| "none".to_owned());
+    let gate_session_id = blocking_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.session_id.clone())
+        .unwrap_or_else(|| "none".to_owned());
+    let gate_phase = blocking_snapshot
+        .as_ref()
+        .map(|snapshot| format!("{:?}", snapshot.phase))
+        .unwrap_or_else(|| "none".to_owned());
+    let gate_owner = blocking_snapshot
+        .as_ref()
+        .map(|snapshot| format!("{:?}", snapshot.owner))
+        .unwrap_or_else(|| "none".to_owned());
 
     Ok(format!(
-        "thread_key: `{}`\nworkspace: `{}`\ncurrent_codex_thread_id: `{}`\ntui_active_codex_thread_id: `{}`\nadoption_state: `{}`\nmarker: `{}`\ncurrent_phase: `{}`\ncurrent_owner: `{}`",
+        "thread_key: `{}`\nworkspace: `{}`\ncurrent_codex_thread_id: `{}`\ntui_active_codex_thread_id: `{}`\nadoption_state: `{}`\nlifecycle_status: `{}`\nbinding_status: `{}`\nrun_status: `{}`\ntitle_suffix: `{}`\ncurrent_phase: `{}`\ncurrent_owner: `{}`\ngate_session_id: `{}`\ngate_phase: `{}`\ngate_owner: `{}`",
         record.metadata.thread_key,
         workspace,
         current_codex_thread_id,
         tui_active_codex_thread_id,
         adoption_state,
-        status_sync::topic_activity_marker_label(marker),
+        resolved_state.lifecycle_status.as_str(),
+        resolved_state.binding_status.as_str(),
+        resolved_state.run_status.as_str(),
+        status_sync::topic_title_suffix_label(resolved_state.is_broken()),
         current_phase,
         current_owner,
+        gate_session_id,
+        gate_phase,
+        gate_owner,
     ))
-}
-
-async fn resolve_current_thread_state(
-    state: &AppState,
-    record: &ThreadRecord,
-    session: Option<&SessionBinding>,
-) -> Result<crate::thread_state::ResolvedThreadState> {
-    resolve_thread_state_with_cache(&record.metadata, session, &state.workspace_status_cache).await
 }
 
 pub(crate) async fn run_command(
@@ -179,8 +187,8 @@ pub(crate) async fn run_command(
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
             let session = state.repository.read_session_binding(&record).await?;
-            let resolved_state =
-                resolve_current_thread_state(state, &record, session.as_ref()).await?;
+            let (resolved_state, blocking_snapshot) =
+                resolve_busy_gate_state(state, &record, session.as_ref()).await?;
             if resolved_state.is_archived() {
                 send_scoped_message(
                     bot,
@@ -201,18 +209,12 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             };
-            if resolved_state.is_running()
-                && let Some(busy) = cached_effective_busy_snapshot_for_binding(
-                    &state.workspace_status_cache,
-                    Some(binding),
-                )
-                .await?
-            {
+            if let Some(busy) = blocking_snapshot.as_ref() {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(&busy),
+                    status_sync::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -278,8 +280,8 @@ pub(crate) async fn run_command(
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
             let session = state.repository.read_session_binding(&record).await?;
-            let resolved_state =
-                resolve_current_thread_state(state, &record, session.as_ref()).await?;
+            let (resolved_state, blocking_snapshot) =
+                resolve_busy_gate_state(state, &record, session.as_ref()).await?;
             if resolved_state.is_archived() {
                 send_scoped_message(
                     bot,
@@ -300,19 +302,12 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             };
-            if resolved_state.is_running()
-                && let Some(binding) = session.as_ref()
-                && let Some(busy) = cached_effective_busy_snapshot_for_binding(
-                    &state.workspace_status_cache,
-                    Some(binding),
-                )
-                .await?
-            {
+            if let Some(busy) = blocking_snapshot.as_ref() {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(&busy),
+                    status_sync::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -422,8 +417,8 @@ pub(crate) async fn run_command(
                 .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
                 .await?;
             let session = state.repository.read_session_binding(&record).await?;
-            let resolved_state =
-                resolve_current_thread_state(state, &record, session.as_ref()).await?;
+            let (resolved_state, blocking_snapshot) =
+                resolve_busy_gate_state(state, &record, session.as_ref()).await?;
             if resolved_state.is_archived() {
                 send_scoped_message(
                     bot,
@@ -444,19 +439,12 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             };
-            if resolved_state.is_running()
-                && let Some(binding) = session.as_ref()
-                && let Some(busy) = cached_effective_busy_snapshot_for_binding(
-                    &state.workspace_status_cache,
-                    Some(binding),
-                )
-                .await?
-            {
+            if let Some(busy) = blocking_snapshot.as_ref() {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(&busy),
+                    status_sync::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -625,7 +613,8 @@ pub(crate) async fn run_text_message(
     let session = state.repository.read_session_binding(&record).await?;
     let (record, session) =
         maybe_route_telegram_input_to_tui_session(state, record, session).await?;
-    let resolved_state = resolve_current_thread_state(state, &record, session.as_ref()).await?;
+    let (resolved_state, blocking_snapshot) =
+        resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
         send_scoped_message(
             bot,
@@ -648,17 +637,12 @@ pub(crate) async fn run_text_message(
     };
     let workspace_path =
         ensure_bound_workspace_runtime(state, session.as_ref().context("missing binding")?).await?;
-    if resolved_state.is_running()
-        && let Some(binding) = session.as_ref()
-        && let Some(busy) =
-            cached_effective_busy_snapshot_for_binding(&state.workspace_status_cache, Some(binding))
-                .await?
-    {
+    if let Some(busy) = blocking_snapshot.as_ref() {
         send_scoped_message(
             bot,
             msg.chat.id,
             Some(thread_id),
-            status_sync::busy_text_message(&busy, false),
+            status_sync::busy_text_message(busy, false),
         )
         .await?;
         return Ok(());

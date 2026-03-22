@@ -15,7 +15,7 @@ use crate::repository::{
     TranscriptMirrorRole,
 };
 use crate::thread_state::{
-    BindingStatus, LifecycleStatus, resolve_lifecycle_status, resolve_thread_state_with_cache,
+    BindingStatus, LifecycleStatus, resolve_binding_status, resolve_lifecycle_status,
 };
 use crate::workspace_status::{
     LocalSessionClaim, SessionCurrentStatus, SessionStatusOwner, WorkspaceAggregateStatus,
@@ -36,12 +36,6 @@ pub struct StaleBusyReconciliationReport {
     pub recovered_sessions: usize,
     pub recovered_threads: usize,
     pub skipped_threads: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TopicActivityMarker {
-    None,
-    Busy,
 }
 
 fn thread_id_from_i32(value: i32) -> ThreadId {
@@ -77,16 +71,6 @@ fn truncate_topic_base(base: &str, suffix: &str) -> String {
     format!("{truncated}{suffix}")
 }
 
-pub(crate) fn topic_marker_for_snapshot(
-    snapshot: Option<&SessionCurrentStatus>,
-) -> TopicActivityMarker {
-    if snapshot.is_some_and(|snapshot| snapshot.phase.is_turn_busy()) {
-        TopicActivityMarker::Busy
-    } else {
-        TopicActivityMarker::None
-    }
-}
-
 fn workspace_local_conflict(
     aggregate: Option<&WorkspaceAggregateStatus>,
     owner_claim: Option<&LocalSessionClaim>,
@@ -115,7 +99,6 @@ fn workspace_local_conflict(
 pub(crate) fn render_topic_title(
     record: &ThreadRecord,
     workspace_path: Option<&Path>,
-    marker: TopicActivityMarker,
     broken: bool,
 ) -> String {
     let base = record
@@ -129,10 +112,6 @@ pub(crate) fn render_topic_title(
         .unwrap_or_else(|| "Unbound".to_owned());
 
     let mut suffix = String::new();
-    match marker {
-        TopicActivityMarker::Busy => suffix.push_str(" · busy"),
-        TopicActivityMarker::None => {}
-    }
     if broken {
         suffix.push_str(" · broken");
     }
@@ -140,11 +119,8 @@ pub(crate) fn render_topic_title(
     truncate_topic_base(&base, &suffix)
 }
 
-pub(crate) fn topic_activity_marker_label(marker: TopicActivityMarker) -> &'static str {
-    match marker {
-        TopicActivityMarker::None => "none",
-        TopicActivityMarker::Busy => "busy",
-    }
+pub(crate) fn topic_title_suffix_label(broken: bool) -> &'static str {
+    if broken { "broken" } else { "none" }
 }
 
 pub(crate) fn tui_adoption_prompt_text() -> String {
@@ -178,21 +154,11 @@ pub(crate) async fn refresh_thread_topic_title(
         .as_ref()
         .and_then(|binding| binding.workspace_cwd.as_deref())
         .map(PathBuf::from);
-    let resolved_state = resolve_thread_state_with_cache(
-        &record.metadata,
-        session.as_ref(),
-        &state.workspace_status_cache,
-    )
-    .await?;
+    let binding_status = resolve_binding_status(&record.metadata, session.as_ref());
     let title = render_topic_title(
         record,
         workspace_path.as_deref(),
-        if resolved_state.is_running() {
-            TopicActivityMarker::Busy
-        } else {
-            TopicActivityMarker::None
-        },
-        resolved_state.binding_status == BindingStatus::Broken,
+        binding_status == BindingStatus::Broken,
     );
     apply_thread_topic_title(
         bot,
@@ -444,28 +410,18 @@ async fn sync_workspace_titles_once(
         } else {
             None
         };
-        let resolved_state = resolve_thread_state_with_cache(
-            &record.metadata,
-            session.as_ref(),
-            &state.workspace_status_cache,
-        )
-        .await?;
+        let binding_status = resolve_binding_status(&record.metadata, session.as_ref());
         let rendered = render_topic_title(
             &record,
             workspace_path.as_deref(),
-            if resolved_state.is_running() {
-                TopicActivityMarker::Busy
-            } else {
-                TopicActivityMarker::None
-            },
-            resolved_state.binding_status == BindingStatus::Broken,
+            binding_status == BindingStatus::Broken,
         );
         let previous = applied_titles.get(&record.conversation_key);
         if previous.is_some_and(|value| value == &rendered) {
             continue;
         }
 
-        apply_thread_topic_title(
+        if let Err(error) = apply_thread_topic_title(
             bot,
             &record,
             workspace_path.as_deref(),
@@ -473,7 +429,17 @@ async fn sync_workspace_titles_once(
             &rendered,
             "workspace_status_sync",
         )
-        .await?;
+        .await
+        {
+            warn!(
+                event = "workspace_status.sync.title_apply_failed",
+                thread_key = %record.metadata.thread_key,
+                conversation_key = %record.conversation_key,
+                error = %error,
+                "failed to sync topic title for one thread; continuing"
+            );
+            continue;
+        }
         applied_titles.insert(record.conversation_key.clone(), rendered);
     }
 
@@ -877,9 +843,9 @@ fn local_mirror_entry_from_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        STARTUP_STALE_BUSY_RECOVERED_LOG, TopicActivityMarker, initial_workspace_event_offset,
+        STARTUP_STALE_BUSY_RECOVERED_LOG, initial_workspace_event_offset,
         local_mirror_entry_from_event, reconcile_stale_bot_busy_sessions_for_repository,
-        render_topic_title, topic_marker_for_snapshot, tui_adoption_prompt_text,
+        render_topic_title, topic_title_suffix_label, tui_adoption_prompt_text,
     };
     use crate::repository::{
         SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope, ThreadStatus,
@@ -950,30 +916,13 @@ mod tests {
     }
 
     #[test]
-    fn render_title_uses_busy_suffix_for_running_snapshot() {
-        let snapshot = SessionCurrentStatus {
-            schema_version: 2,
-            workspace_cwd: "/tmp/workspace".to_owned(),
-            session_id: "thr_bot".to_owned(),
-            owner: SessionStatusOwner::Bot,
-            live: false,
-            phase: WorkspaceStatusPhase::TurnRunning,
-            shell_pid: None,
-            child_pid: None,
-            child_pgid: None,
-            child_command: None,
-            client: Some("threadbridge".to_owned()),
-            turn_id: Some("turn-1".to_owned()),
-            summary: Some("hello".to_owned()),
-            updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
-        };
+    fn render_title_uses_plain_base_for_healthy_thread() {
         let title = render_topic_title(
             &record(None, false),
             Some(PathBuf::from("/tmp/example-workspace").as_path()),
-            topic_marker_for_snapshot(Some(&snapshot)),
             false,
         );
-        assert_eq!(title, "example-workspace · busy");
+        assert_eq!(title, "example-workspace");
     }
 
     #[test]
@@ -985,43 +934,31 @@ mod tests {
     }
 
     #[test]
-    fn render_title_truncates_before_busy_suffix() {
+    fn render_title_truncates_before_broken_suffix() {
         let long_title = "x".repeat(140);
         let title = render_topic_title(
             &record(Some(&long_title), false),
             Some(PathBuf::from("/tmp/workspace").as_path()),
-            TopicActivityMarker::Busy,
-            false,
+            true,
         );
-        assert!(title.ends_with(" · busy"));
+        assert!(title.ends_with(" · broken"));
         assert!(title.chars().count() <= 128);
     }
 
     #[test]
-    fn render_title_includes_broken_and_busy() {
-        let snapshot = SessionCurrentStatus {
-            schema_version: 2,
-            workspace_cwd: "/tmp/workspace".to_owned(),
-            session_id: "thr_bot".to_owned(),
-            owner: SessionStatusOwner::Bot,
-            live: false,
-            phase: WorkspaceStatusPhase::TurnRunning,
-            shell_pid: None,
-            child_pid: None,
-            child_pgid: None,
-            child_command: None,
-            client: Some("threadbridge".to_owned()),
-            turn_id: Some("turn-1".to_owned()),
-            summary: None,
-            updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
-        };
+    fn render_title_includes_broken_suffix_only() {
         let title = render_topic_title(
             &record(Some("Broken"), true),
             Some(PathBuf::from("/tmp/workspace").as_path()),
-            topic_marker_for_snapshot(Some(&snapshot)),
             true,
         );
-        assert_eq!(title, "Broken · busy · broken");
+        assert_eq!(title, "Broken · broken");
+    }
+
+    #[test]
+    fn title_suffix_label_reports_broken_only() {
+        assert_eq!(topic_title_suffix_label(false), "none");
+        assert_eq!(topic_title_suffix_label(true), "broken");
     }
 
     #[test]
