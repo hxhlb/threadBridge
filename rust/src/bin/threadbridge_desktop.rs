@@ -371,7 +371,8 @@ mod macos_app {
                     thread_key: thread_key.clone(),
                 },
             );
-            submenu.append_items(&[&start_item, &continue_item])?;
+            let separator = PredefinedMenuItem::separator();
+            submenu.append_items(&[&start_item, &separator, &continue_item])?;
             menu.append(&submenu)?;
         }
         if !snapshot.workspaces.is_empty() {
