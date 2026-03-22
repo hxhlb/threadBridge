@@ -4,6 +4,7 @@ const appState = {
   workspaces: [],
   archived: [],
   transcripts: {},
+  executionModeDrafts: {},
 };
 
 function escapeHtml(value) {
@@ -86,6 +87,44 @@ function matchesQuery(values, query) {
 
 function workspaceFilterQuery() {
   return document.getElementById('workspace-filter').value.trim().toLowerCase();
+}
+
+function workspaceByThreadKey(threadKey) {
+  return (appState.workspaces || []).find(item => item.thread_key === threadKey) || null;
+}
+
+function reconcileExecutionModeDrafts() {
+  for (const [threadKey, draftValue] of Object.entries(appState.executionModeDrafts || {})) {
+    const workspace = workspaceByThreadKey(threadKey);
+    if (!workspace || workspace.workspace_execution_mode === draftValue) {
+      delete appState.executionModeDrafts[threadKey];
+    }
+  }
+}
+
+function effectiveExecutionModeValue(item) {
+  return appState.executionModeDrafts[item.thread_key] || item.workspace_execution_mode || 'full_auto';
+}
+
+function setExecutionModeDraft(threadKey, value) {
+  const workspace = workspaceByThreadKey(threadKey);
+  if (!workspace || !value || value === workspace.workspace_execution_mode) {
+    delete appState.executionModeDrafts[threadKey];
+    return;
+  }
+  appState.executionModeDrafts[threadKey] = value;
+}
+
+function shouldDeferWorkspaceCardsRender() {
+  const root = document.getElementById('workspaces');
+  if (!root || !root.children.length) {
+    return false;
+  }
+  const active = document.activeElement;
+  if (active?.id?.startsWith('mode-')) {
+    return true;
+  }
+  return Object.keys(appState.executionModeDrafts || {}).length > 0;
 }
 
 function renderSetupCard(setup) {
@@ -229,7 +268,9 @@ function renderWorkspaceCards(items) {
     root.innerHTML = '<p class="muted">No managed workspaces match this filter.</p>';
     return;
   }
-  root.innerHTML = filtered.map(item => `
+  root.innerHTML = filtered.map(item => {
+    const selectedExecutionMode = effectiveExecutionModeValue(item);
+    return `
     <article class="entity-card">
       <div class="entity-head">
         <div>
@@ -256,9 +297,9 @@ function renderWorkspaceCards(items) {
 
       <div class="toolbar">
         <label class="muted" for="mode-${item.thread_key}">Execution Mode</label>
-        <select id="mode-${item.thread_key}" ${item.conflict ? 'disabled' : ''}>
-          <option value="full_auto" ${item.workspace_execution_mode === 'full_auto' ? 'selected' : ''}>full_auto</option>
-          <option value="yolo" ${item.workspace_execution_mode === 'yolo' ? 'selected' : ''}>yolo</option>
+        <select id="mode-${item.thread_key}" ${item.conflict ? 'disabled' : ''} onchange="setExecutionModeDraft('${item.thread_key}', this.value)">
+          <option value="full_auto" ${selectedExecutionMode === 'full_auto' ? 'selected' : ''}>full_auto</option>
+          <option value="yolo" ${selectedExecutionMode === 'yolo' ? 'selected' : ''}>yolo</option>
         </select>
         <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="updateExecutionMode('${item.thread_key}')">Save Mode</button>
       </div>
@@ -329,7 +370,8 @@ function renderWorkspaceCards(items) {
         </div>
       </details>
     </article>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderWorkspaceTranscript(threadKey) {
@@ -394,7 +436,9 @@ function renderAll() {
   renderSetupCard(appState.setup);
   renderHealthSummary(appState.health);
   configureAddWorkspaceCard(appState.setup);
-  renderWorkspaceCards(appState.workspaces);
+  if (!shouldDeferWorkspaceCardsRender()) {
+    renderWorkspaceCards(appState.workspaces);
+  }
   renderArchivedThreads(appState.archived);
 }
 
@@ -409,6 +453,7 @@ async function refresh() {
   appState.health = health;
   appState.workspaces = workspaces;
   appState.archived = archived;
+  reconcileExecutionModeDrafts();
   renderAll();
   await refreshLoadedTranscripts();
 }
@@ -447,6 +492,7 @@ async function updateExecutionMode(threadKey) {
     alert(data.error || 'Execution mode update failed');
     return;
   }
+  delete appState.executionModeDrafts[threadKey];
   openLaunchOutput(threadKey, data);
   await refresh();
 }
