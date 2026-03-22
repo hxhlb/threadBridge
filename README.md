@@ -18,6 +18,9 @@ The current codebase has already landed these major pieces:
 - workspace-first binding model: one managed workspace thread per workspace
 - shared workspace app-server daemon plus local TUI proxy
 - Telegram text and image turns bound to the saved Codex session
+- Telegram preview drafts and final replies now use the current Telegram delivery pipeline:
+  - preview drafts go through `sendMessageDraft`, prefer HTML rendering, and fall back to plain text if draft HTML send fails
+  - final replies prefer inline Telegram HTML, fall back to plain text on send failure, and switch to a Markdown attachment when the inline reply is too long
 - local/browser management UI for setup, launch, reconnect, archive/restore, runtime repair, and transcript inspection
 - workspace-scoped execution modes: `full_auto` and `yolo`
 
@@ -151,6 +154,18 @@ Operationally:
 - the main private chat is the control console
 - each managed workspace gets its own Telegram topic/thread
 - normal messages in that workspace thread continue the saved Codex session
+
+## Telegram Delivery
+
+Current Telegram delivery behavior is:
+
+- preview updates use `sendMessageDraft`
+- preview drafts try HTML first and retry as plain text if Telegram rejects the HTML draft
+- final assistant replies try inline Telegram HTML first
+- if inline final HTML send fails, threadBridge retries as plain text
+- if the final reply is too long for inline delivery, threadBridge sends a short notice plus a Markdown attachment
+
+This is the current implementation shape; broader delivery queue semantics are still tracked as plan work.
 
 ## Local `hcodex`
 

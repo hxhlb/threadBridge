@@ -56,10 +56,18 @@
   - pick-and-add、adopt / reject TUI、runtime-owner reconcile、launch config 等 control 已進入 management API
   - managed Codex source build / cache refresh / build defaults 已進入 management API
   - tray menu 已收斂成 `New Session` 與 `Continue Telegram Session`
+  - tray workspace label 現在已改成顯示 workspace execution mode，而不是 handoff `ready/degraded` 文案
   - management health view 已改成 owner heartbeat 為主的 desktop-first 模型
   - management UI 已補上 transcript observability pane，且 adoption/repair action 已改成 owner-canonical 語義
+  - management UI 已補上 workspace execution mode 切換、mode drift 提示，以及 mode-aware launch/resume commands
   - web 管理面新增確認的 UI 收斂方向是可評估以 HeroUI 重構
   - 目前新增確認的收斂方向是 `workspace = thread` 主模型、desktop-only 啟動與移除暫不可用的 onboarding
+- [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-execution-modes.md)
+  - execution mode 已進入正式 runtime 模型，不再只是草稿命題
+  - workspace-local `workspace-config.json`、`ExecutionMode` enum、session execution snapshot 已落地
+  - management API / launch-config / web UI 已開始暴露 workspace mode、current session mode 與 `mode_drift`
+  - `hcodex` 與 Telegram turn/resume 已開始按 workspace mode 收斂到 `full_auto` 或 `yolo`
+  - 但 Telegram 是否允許直接切 mode、是否支持更多 profile、以及 mode 與 observability / audit 的更深層關聯仍未收斂
 - [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
   - canonical `lifecycle_status` / `binding_status` / `run_status` 已開始透過 shared resolver 進入代碼
   - ordinary Telegram gate、management API、topic title 已開始共用同一套 canonical state axes
@@ -77,8 +85,6 @@
   - 目前已有通用 management API / SSE 骨架，但 thread-level observability API 仍未成形
 - [llm-guidance-and-goals.md](/Volumes/Data/Github/threadBridge/docs/plan/llm-guidance-and-goals.md)
   - secondary LLM 設定、AI 建議與 AI 目標層草稿
-- [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-execution-modes.md)
-  - Codex execution profile / `yolo mode` 草稿
 - [desktop-runtime-tool-bridge.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-tool-bridge.md)
   - desktop runtime 作為跨沙盒 capability host / tool bridge 草稿
 - [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)

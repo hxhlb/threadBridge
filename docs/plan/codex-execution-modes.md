@@ -1,195 +1,219 @@
-# Codex 執行模式草稿
+# Codex 執行模式
 
 ## 目前進度
 
-這份文檔目前仍是純草稿，尚未開始實作。
+這份文檔已從純草稿進入「部分落地」。
 
-目前代碼狀態：
+目前代碼裡已經有的狀態：
 
-- workspace app-server thread start 仍固定使用：
-  - `approvalPolicy = never`
-  - `sandbox = danger-full-access`
-- 這代表 threadBridge 目前只有一種近似固定的執行模式，還沒有正式的 session execution profile 概念
-- management API 的 `launch-config` 目前已提供 `new` / `continue current` / recent-session resume 等 `hcodex` 啟動命令，但尚未暴露 execution mode
-- Telegram turn、背景執行、busy gate、mirror 等流程目前也都建立在這個固定模式上
+- `ExecutionMode` 已成為正式 runtime 型別：
+  - `full_auto`
+  - `yolo`
+- workspace-local execution mode config 已落地：
+  - `./.threadbridge/state/workspace-config.json`
+- workspace 預設 mode 已落地，且預設值為 `full_auto`
+- v1 語義已對齊 Codex 現有 profile：
+  - `full_auto`
+    - `approvalPolicy = on-request`
+    - `sandbox = workspace-write`
+  - `yolo`
+    - `approvalPolicy = never`
+    - `sandbox = danger-full-access`
+- 新 session 與 resume 路徑已開始按 workspace mode 收斂：
+  - Telegram fresh binding
+  - Telegram text turn
+  - Telegram image analysis turn
+  - local management bind flow
+  - `hcodex` new / continue current / resume launch commands
+- `session-binding.json` 已開始持久化目前 session 的 execution snapshot：
+  - `current_execution_mode`
+  - `current_approval_policy`
+  - `current_sandbox_policy`
+- workspace recent session history 已開始記錄 `execution_mode`
+- management API 與 web 管理面已開始暴露：
+  - workspace mode
+  - current session mode
+  - `mode_drift`
+  - mode-aware launch commands
+- tray workspace label 已改成顯示 workspace execution mode，而不是 `ready/degraded`
+
+目前仍未收斂的部分：
+
+- Telegram 尚未提供直接切換 execution mode 的 command surface
+- v1 仍只支持 `full_auto` / `yolo` 兩種高階 mode
+- mode 與更完整 observability / audit retention 的關聯仍未 formalize
+- mode 是否允許未來出現 session-level override，仍是開放問題
 
 ## 問題
 
-如果 threadBridge 之後要更完整地承接本地 Codex runtime，那它不能永遠只假設單一執行模式。
+如果 `threadBridge` 要同時支撐：
 
-目前缺的是一套明確語義，回答：
+- Telegram adapter
+- desktop runtime owner
+- 本地 `hcodex`
+- browser management UI
 
-- threadBridge 是否支持不同的 Codex execution mode
-- 所謂 `yolo mode` 在這個產品裡到底代表什麼
-- 哪些 surface 可以啟動 `yolo mode`
-- execution mode 是 workspace 預設、session 屬性，還是一次性的 launch option
+那 execution mode 不能再只是某個 surface 私下帶的 CLI flag。
 
-如果這些不先定清楚，後面就很容易出現：
+它需要是一個正式 runtime contract，回答：
 
-- Telegram、desktop、`hcodex` 各自帶不同的 mode 假設
-- launch config、runtime protocol、session continuity 彼此不一致
-- 使用者以為只是「更激進一點的執行」，實際上卻碰到 authority、repair、mirror、審計語義都改變
+- 哪個 workspace 預設使用哪個 mode
+- 目前 active session 實際跑在哪個 mode
+- mode 改變後，既有 session 如何收斂
+- launch / resume / Telegram turn 是否遵守同一套 mode 假設
 
-## 方向
+如果這些不固定，很容易出現：
 
-先把 `Codex execution mode` 定義成 runtime core 的正式概念，而不是 Telegram 或 `hcodex` 自己加的局部開關。
+- Telegram、desktop、`hcodex` 各自帶不同 mode
+- 同一個 `thread_id` 在不同 surface 下被理解成不同 execution contract
+- UI 以為切的是「偏好」，runtime 實際改的是 approval / sandbox 事實
 
-比較合理的方向是：
+## 已確認的 v1 方向
 
-- threadBridge 支持顯式的 execution profile
-- `yolo mode` 只是其中一種 profile，而不是沒有邊界的隱含行為
-- execution mode 應由 runtime / management API 對外暴露
-- Telegram 是否允許直接進入 `yolo mode`，應晚於本地 owner / management surface 的收斂
+目前代碼已經實作並驗證的 v1 決策是：
 
-## `yolo mode` 的暫定語義
+- execution mode 掛在 workspace，而不是 Telegram thread 單次請求
+- workspace mode 是 sticky default
+- 既有 session 不強制重建；在下一次 turn 或 resume 時原地覆蓋到 workspace mode
+- `hcodex` 與 Telegram 走同一套 mode 收斂語義
+- mode 對外暴露在 management API / owner-facing surface，而不是先做 Telegram slash command
 
-在這個項目裡，`yolo mode` 不應只是一句「更放手讓 Codex 自己做」。
+換句話說，現在的正式模型是：
 
-至少要明確涵蓋：
+- workspace 有一個目標 execution contract
+- active session 有一個目前 execution snapshot
+- 兩者不一致時，以 workspace mode 為收斂目標
 
-- approval behavior
-  - 是否允許自動通過更多 action
-- tool autonomy
-  - Codex 是否被允許更自主地連續使用 tool / command
-- operator expectation
-  - 使用者是否預期較少確認、較強自動推進
-- audit surface
-  - 過程事件、Plan / Tool 文本、最終 summary 是否需要更強的可見性
+## v1 資料模型
 
-換句話說，`yolo mode` 比較像：
-
-- 一種 execution contract
-
-而不是：
-
-- 單一布林值
-
-## 建議的 execution profile
-
-v1 不需要一開始就做很多模式，但至少可以先把語義切成：
-
-### 模式 A：`guarded`
-
-- 現有預設模式的延續
-- 適合 Telegram 背景 turn 與一般遠端使用
-- 行為以穩定、可預測、低意外為優先
-
-### 模式 B：`yolo`
-
-- 目標是讓本地互動或 owner-managed 啟動時，Codex 具備更高自動推進能力
-- 比 `guarded` 更強調少打斷、少顯式確認、快速完成任務
-- 但它仍應是顯式選擇，不應默默套到所有 workspace
-
-如果之後需要，也可以再補：
-
-- `custom`
-  - 允許未來掛更多 provider / policy 組合
-
-但 v1 不必先做。
-
-## 建議的資料模型
-
-這份 plan 先不綁死最終欄位名，但至少應正式承認下面幾類資料：
+目前實際落地的資料模型已至少包含：
 
 - `execution_mode`
-  - 例如 `guarded` / `yolo`
+  - `full_auto | yolo`
 - `approval_policy`
-  - 對應實際傳給 Codex runtime 的 policy
 - `sandbox_policy`
-  - 對應實際 sandbox 模式
-- `mode_source`
-  - 例如 `workspace_default` / `launch_override` / `session_inherited`
 
-比較合理的責任是：
+已落地的主要 artifact / view：
 
-- workspace 可保存預設 execution mode
-- 每次 launch 可以選擇覆蓋
-- session binding / runtime view 至少能讀到目前 session 採用的 mode
+- workspace-local config
+  - `./.threadbridge/state/workspace-config.json`
+- session binding fields
+  - `current_execution_mode`
+  - `current_approval_policy`
+  - `current_sandbox_policy`
+- recent session history
+  - `execution_mode`
+- management API views
+  - `workspace_execution_mode`
+  - `current_execution_mode`
+  - `current_approval_policy`
+  - `current_sandbox_policy`
+  - `mode_drift`
+
+v1 沒有正式落地 `mode_source` 或 arbitrary launch override。
 
 ## 與 continuity 的關係
 
-`yolo mode` 不能只被理解成 UI 選項，因為它可能影響同一個 Codex session 的可預期性。
+這份 plan 已經不再是假設「continuity 只等於 `thread_id`」。
 
-至少要回答：
+目前實作已開始承認：
 
-- session 一旦以 `yolo` 啟動，之後 Telegram reconnect 是否仍沿用同一 mode
-- adoption 後，Telegram 是否只作 viewer / sender，而不改變原 session mode
-- `current_codex_thread_id` 是否需要伴隨 mode 一起被視為 continuity 的一部分
+- `thread_id` 是 continuity 的主要 identity
+- `execution_mode` / approval / sandbox 是該 session 的有效 contract
+- 若 workspace mode 改變，舊 session 仍可沿用 `thread_id`
+- 但下一次 turn / resume 會重新施加 workspace mode，讓 execution contract 收斂
 
-也就是說，continuity 不只可能是 `thread_id`，還可能包含：
+因此現行模型比較接近：
 
-- `thread_id + execution contract`
+- `thread_id` 保持 continuity
+- execution contract 可在 owner/runtime 控制下被原地更新
 
 ## 與 owner 收斂的關係
 
-這份 plan 和 owner convergence 直接相關。
+這份 plan 之所以先掛在 owner / management surface，而不是 Telegram command，上游原因仍然成立：
 
-原因是：
+- execution mode 會直接影響 approval 與 sandbox
+- 它本質上屬於 runtime authority，而不是 adapter 文案
+- 如果每個 surface 都能各自切 mode，owner 邊界會重新變混亂
 
-- `yolo mode` 本質上會放大 runtime authority 的問題
-- 如果 Telegram、desktop runtime、`hcodex` 都能各自決定 mode，owner 邊界會更混亂
-- 因此 execution mode 應優先掛在 owner / management API 上，而不是先做 Telegram slash command
+目前代碼已經遵守這個順序：
 
-比較合理的順序是：
-
-1. 先把 owner authority 收斂。
-2. 再讓 management API / desktop runtime 暴露 execution mode。
-3. 最後才決定 Telegram 是否允許直接切換或僅展示目前 mode。
+1. execution mode 先進入 core runtime 型別與 repository/session model
+2. 再進入 management API、launch-config、web UI 與 tray 表達
+3. Telegram 目前只消費與收斂 workspace mode，不直接暴露切 mode 的 adapter command
 
 ## 對管理面的影響
 
-如果 execution mode 進入正式模型，management API / launch config 至少應能表達：
+這部分已經有 v1 實作，不再只是預期方向。
+
+management API / launch-config 現在已開始表達：
 
 - workspace 預設 mode
-- 目前 active session mode
-- 啟動新 `hcodex` session 時可選的 mode
-- 哪些 mode 目前可用
+- current session mode
+- current approval / sandbox policy
+- `mode_drift`
+- mode-aware `hcodex` launch / continue / resume commands
 
-這表示現在的 `launch-config` 之後可能不只回傳命令字串，還要帶：
+另外已新增：
 
-- launch profile metadata
-- 預設 mode
-- resume 時是否允許切 mode
+- `GET /api/workspaces/:thread_key/execution-mode`
+- `PUT /api/workspaces/:thread_key/execution-mode`
+
+web 管理面現在也已提供：
+
+- per-workspace execution mode selector
+- `Save Mode`
+- drift 提示
+- mode-aware recent-session resume / current-session continue command model
+
+## 對 tray / local launch 的影響
+
+這部分也已開始落地：
+
+- tray workspace label 現在顯示 workspace mode
+- tray action 仍只保留：
+  - `New Session`
+  - `Continue Telegram Session`
+- tray 本身不承擔 mode 切換；mode 切換仍留在管理面
+- `hcodex` launch / resume command 會自動加上對應 mode flag
 
 ## 對 mirror / observability 的影響
 
-如果引入 `yolo mode`，過程可見性的重要性會更高。
+這部分還沒有完全落地，但方向已更清楚：
 
-原因是：
+- execution mode 已進入 session / workspace view model
+- observability 現在至少能看見：
+  - workspace mode
+  - current session mode
+  - mode drift
+- 更深層的 audit / event retention 仍未因 `yolo` 額外升級
 
-- 當 Codex 被允許更自主推進時，使用者更需要知道它在 Plan / Tool 階段做了什麼
-- 這會直接加強目前已知的 mirror 缺口：尚未完整承接 Plan / Tool 文本
-
-所以這份 plan 應與下面兩件事聯動：
-
-- process transcript event
-- observability / runtime event stream
+換句話說，v1 已經把「mode 看不見」這個缺口補上，但還沒把「mode 改變 audit 保證」做成獨立規格。
 
 ## 與其他計劃的關係
 
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
-  - execution mode 會影響 `hcodex`、adoption、continuity 與 mirror 的語義
 - [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
-  - execution mode、launch profile、active session mode 之後應進入 view / action 模型
+  - execution mode 已開始進入正式 view / action 模型
+- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
+  - management UI 與 tray 已開始表達 execution mode
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+  - execution mode 已影響 `hcodex` launch / resume 與 session continuity 收斂
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
-  - execution mode 屬於 core runtime 語義，不應先做成 Telegram-only 開關
+  - execution mode 仍屬於 core runtime 語義，不應回退成 Telegram-only 開關
 - [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
-  - Telegram 是否能直接切 `yolo mode`，應晚於 adapter 邊界收斂
-- [llm-guidance-and-goals.md](/Volumes/Data/Github/threadBridge/docs/plan/llm-guidance-and-goals.md)
-  - 若之後有 secondary LLM guidance，execution mode 也可能影響它對 Codex 的互動策略
+  - Telegram 目前仍只是 mode consumer，而不是 mode authority
 
 ## 開放問題
 
-- `yolo mode` 的 v1 是否只允許本地 `hcodex` / desktop runtime 啟動？
-- Telegram 是否只能看見 mode，不能直接切 mode？
-- execution mode 應該是 workspace 預設、session 屬性，還是兩者都有？
-- resume 既有 session 時，是否允許切換 mode，還是必須沿用原 mode？
-- `yolo mode` 是否需要更強的 event / audit retention？
-- 如果 Codex runtime 未來支持更多 approval / sandbox 組合，threadBridge 要暴露「原始組合」還是只暴露高階 mode？
+- Telegram 是否應提供只讀 mode 顯示，還是未來允許直接切 mode？
+- execution mode 是否需要額外的 audit retention 或更長 process transcript 保留？
+- 未來若 Codex 支持更多 approval / sandbox 組合，threadBridge 是否仍只暴露高階 mode？
+- 是否需要在 launch surface 正式支持一次性 override，而不是永遠以 workspace mode 為準？
+- `mode_source` 是否值得在後續 view model 中正式落地？
 
 ## 建議的下一步
 
-1. 先在代碼與文檔裡承認 `execution mode` 是正式問題域，不再只把當前模式寫死當作永遠預設。
-2. 把 `guarded` / `yolo` 做成最小 profile 草稿，先不要一開始暴露太多模式。
-3. 先把 mode 掛進 management / owner surface，再考慮 Telegram command 或 UI。
-4. 把 active session mode 與 process transcript / observability 的關聯補進 `runtime-protocol`。
+1. 更新其餘 plan 文檔，把 execution mode 從「純草稿」改成「部分落地的正式 runtime 語義」。
+2. 在 `runtime-protocol` 補齊 execution mode 相關 view / action / endpoint。
+3. 決定 Telegram adapter 是否需要只讀 mode 展示。
+4. 若未來真的引入更多 profile，再決定是否需要 `mode_source`、launch override 或更細的 audit policy。
