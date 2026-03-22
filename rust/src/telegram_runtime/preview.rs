@@ -302,6 +302,15 @@ impl PreviewRenderer {
         changed
     }
 
+    pub(crate) fn reset_for_new_turn(&mut self) {
+        self.status = preview_status("Preparing reply...");
+        self.status_frame = 0;
+        self.draft_text.clear();
+        self.final_response.clear();
+        self.latest_render.clear();
+        self.in_progress = true;
+    }
+
     fn render_text(&self) -> String {
         let body = if !self.draft_text.is_empty() {
             self.draft_text.as_str()
@@ -376,6 +385,12 @@ impl TurnPreviewController {
             return;
         }
         self.flush_render().await;
+    }
+
+    pub(crate) fn reset_for_new_turn(&mut self) {
+        self.renderer.reset_for_new_turn();
+        self.last_sent_text.clear();
+        self.last_update_at = None;
     }
 
     async fn flush_render(&mut self) {
@@ -502,6 +517,31 @@ mod tests {
             text: "Command: cargo test".to_owned(),
         });
         assert!(changed);
+        assert_eq!(renderer.get_render_text(), "● Command: cargo test");
+    }
+
+    #[test]
+    fn preview_renderer_reset_allows_same_process_summary_next_turn() {
+        let mut renderer = PreviewRenderer::new(3500, 800);
+        assert!(renderer.consume_process_entry(&TranscriptMirrorEntry {
+            timestamp: "2026-03-22T00:00:00.000Z".to_owned(),
+            session_id: "session-1".to_owned(),
+            origin: TranscriptMirrorOrigin::Telegram,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Process,
+            phase: Some(TranscriptMirrorPhase::Tool),
+            text: "Command: cargo test".to_owned(),
+        }));
+        renderer.reset_for_new_turn();
+        assert!(renderer.consume_process_entry(&TranscriptMirrorEntry {
+            timestamp: "2026-03-22T00:00:01.000Z".to_owned(),
+            session_id: "session-1".to_owned(),
+            origin: TranscriptMirrorOrigin::Telegram,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Process,
+            phase: Some(TranscriptMirrorPhase::Tool),
+            text: "Command: cargo test".to_owned(),
+        }));
         assert_eq!(renderer.get_render_text(), "● Command: cargo test");
     }
 }

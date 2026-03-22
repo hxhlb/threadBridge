@@ -8,6 +8,7 @@ use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ThreadId};
 use tracing::{info, warn};
 
+use super::preview::TurnPreviewController;
 use super::*;
 use crate::repository::{
     ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
@@ -397,6 +398,7 @@ pub async fn spawn_workspace_status_watcher(bot: Bot, state: AppState) {
         let mut applied_titles: HashMap<String, String> = HashMap::new();
         let mut workspace_event_offsets: HashMap<String, usize> = HashMap::new();
         let mut pending_cli_user_prompts: HashSet<String> = HashSet::new();
+        let mut mirror_previews: HashMap<String, TurnPreviewController> = HashMap::new();
         loop {
             if let Err(error) = sync_workspace_titles_once(&bot, &state, &mut applied_titles).await
             {
@@ -407,6 +409,7 @@ pub async fn spawn_workspace_status_watcher(bot: Bot, state: AppState) {
                 &state,
                 &mut workspace_event_offsets,
                 &mut pending_cli_user_prompts,
+                &mut mirror_previews,
             )
             .await
             {
@@ -532,13 +535,16 @@ async fn sync_cli_transcript_mirrors_once(
     state: &AppState,
     workspace_event_offsets: &mut HashMap<String, usize>,
     pending_cli_user_prompts: &mut HashSet<String>,
+    mirror_previews: &mut HashMap<String, TurnPreviewController>,
 ) -> Result<()> {
     let records = state.repository.list_active_threads().await?;
     let mut by_workspace: HashMap<String, Vec<ThreadRecord>> = HashMap::new();
+    let mut active_thread_keys = HashSet::new();
     for record in records {
         if matches!(record.metadata.status, ThreadStatus::Archived) {
             continue;
         }
+        active_thread_keys.insert(record.metadata.thread_key.clone());
         let Some(binding) = state.repository.read_session_binding(&record).await? else {
             continue;
         };
@@ -578,6 +584,9 @@ async fn sync_cli_transcript_mirrors_once(
                 continue;
             };
             workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            continue;
+        };
+        let Some(message_thread_id) = owner_record.metadata.message_thread_id else {
             continue;
         };
 
@@ -635,6 +644,14 @@ async fn sync_cli_transcript_mirrors_once(
                     };
                     pending_cli_user_prompts
                         .insert(cli_prompt_tracking_key(&workspace_key, &entry.session_id));
+                    ensure_mirror_preview(
+                        mirror_previews,
+                        bot,
+                        state,
+                        &owner_record,
+                        message_thread_id,
+                    )
+                    .reset_for_new_turn();
                     let inserted = state
                         .repository
                         .append_transcript_mirror(&owner_record, &entry)
@@ -684,6 +701,17 @@ async fn sync_cli_transcript_mirrors_once(
                     .repository
                     .append_transcript_mirror(&owner_record, &entry)
                     .await?;
+                if inserted && entry.delivery == TranscriptMirrorDelivery::Process {
+                    ensure_mirror_preview(
+                        mirror_previews,
+                        bot,
+                        state,
+                        &owner_record,
+                        message_thread_id,
+                    )
+                    .consume_process_entry(&entry)
+                    .await;
+                }
                 if inserted
                     && entry.delivery == TranscriptMirrorDelivery::Final
                     && let Some(message_thread_id) = owner_record.metadata.message_thread_id
@@ -700,7 +728,29 @@ async fn sync_cli_transcript_mirrors_once(
         }
         workspace_event_offsets.insert(workspace_key, new_offset);
     }
+    mirror_previews.retain(|thread_key, _| active_thread_keys.contains(thread_key));
     Ok(())
+}
+
+fn ensure_mirror_preview<'a>(
+    mirror_previews: &'a mut HashMap<String, TurnPreviewController>,
+    bot: &Bot,
+    state: &AppState,
+    owner_record: &ThreadRecord,
+    message_thread_id: i32,
+) -> &'a mut TurnPreviewController {
+    mirror_previews
+        .entry(owner_record.metadata.thread_key.clone())
+        .or_insert_with(|| {
+            TurnPreviewController::new(
+                bot.clone(),
+                ChatId(owner_record.metadata.chat_id),
+                Some(thread_id_from_i32(message_thread_id)),
+                state.config.stream_message_max_chars,
+                state.config.command_output_tail_chars,
+                state.config.stream_edit_interval_ms,
+            )
+        })
 }
 
 fn cli_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {

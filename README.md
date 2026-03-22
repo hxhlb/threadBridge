@@ -78,7 +78,7 @@ scripts/local_threadbridge.sh restart --codex-source source
 - In the desktop runtime, saving Telegram setup no longer always implies a restart; the local UI now reports restart-required only when no active runtime owner can auto-retry polling.
 - The local management UI can now explicitly adopt or reject a pending TUI session handoff instead of waiting for Telegram callback controls or implicit auto-adopt.
 - Transcript mirror now distinguishes final transcript entries from process transcript entries, including plan/tool events from the shared runtime.
-- The local management UI now exposes a transcript pane per active workspace through `GET /api/threads/:thread_key/transcript`, and Telegram rolling preview now uses the same normalized process transcript summaries instead of a separate event-only heuristic.
+- The local management UI now exposes a transcript pane per active workspace through `GET /api/threads/:thread_key/transcript`, and both Telegram-initiated turns and TUI/CLI mirror updates now feed Telegram rolling preview through the same normalized process transcript summaries instead of separate heuristics.
 - The local server now serves the management UI from a checked-in static asset instead of embedding the entire page as an inline Rust string.
 
 ## Runtime Layout
