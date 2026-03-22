@@ -6,18 +6,23 @@ This root `AGENTS.md` is the maintainer guide for `threadBridge`. It documents t
 It is not the runtime appendix followed inside a bound project workspace. That appendix lives in [templates/AGENTS.md](/Volumes/Data/Github/threadBridge/templates/AGENTS.md) and is appended into a workspace `AGENTS.md` by the runtime bootstrap.
 
 ## Project Structure & Runtime Architecture
-The runtime is organized in three layers:
+The runtime is organized in four layers:
 
-- Telegram orchestration: the Rust bot receives Telegram updates, enforces authorization, manages thread commands, streams live Codex previews, and sends results back to Telegram.
-- Codex thread control: the Rust runtime maps each Telegram thread to bot-local metadata under `data/`, binds it to a real workspace path, starts workspace-scoped shared `codex app-server` daemons on loopback websocket, resumes Codex threads through that shared runtime, and validates thread `cwd` against the stored workspace binding.
+- Desktop runtime owner and management plane: the macOS desktop entrypoint owns the local management API, tray/web management UI, runtime-owner reconcile loop, managed Codex preferences/builds, and machine-level runtime health authority.
+- Telegram adapter: the Rust bot receives Telegram updates, enforces authorization, manages thread commands, streams live Codex previews, and sends results back to Telegram, but it is no longer the formal runtime owner.
+- Workspace runtime control: the Rust runtime maps each Telegram thread to bot-local metadata under `data/`, binds it to a real workspace path, starts and repairs workspace-scoped shared `codex app-server` daemons and TUI proxy surfaces, resumes Codex threads through that shared runtime, and validates thread `cwd` against the stored workspace binding.
 - Tool executors: workspace-local wrapper commands under `.threadbridge/bin/` call Python scripts in `tools/` to materialize prompt configs, generated images, and Telegram outbox payloads.
 
 Important repo areas:
 
 - `rust/src/bin/threadbridge_desktop.rs`: desktop runtime entrypoint, tray host, and Telegram bot launcher.
 - `rust/src/codex.rs`: app-server JSON-RPC client, thread lifecycle helpers, and event normalization for previews.
+- `rust/src/management_api.rs`: local HTTP management API, workspace/thread views, control actions, and setup/runtime endpoints for the desktop management surface.
+- `rust/src/runtime_owner.rs`: desktop runtime owner heartbeat, reconcile loop, and workspace runtime health authority.
+- `rust/src/process_transcript.rs`: normalized final/process transcript mapping shared by management UI and Telegram preview surfaces.
 - `rust/src/workspace.rs`: workspace bootstrap logic that appends the managed runtime block into a real workspace `AGENTS.md` and installs `.threadbridge/`.
 - `rust/src/repository.rs`: persistent bot-local thread state for metadata, transcripts, session bindings, and image-state artifacts.
+- `rust/src/thread_state.rs`: canonical thread state resolver for `lifecycle_status`, `binding_status`, and `run_status`.
 - `rust/src/telegram_runtime/`: Telegram command handling, message flows, image handling, restore UI, and preview rendering.
 - `templates/AGENTS.md`: managed runtime appendix appended to real workspace `AGENTS.md` files.
 - `tools/`: Python executors invoked from `.threadbridge/bin/*`.
@@ -33,16 +38,22 @@ There are two relevant `AGENTS.md` roles now:
 
 There is no thread-local `data/<thread-key>/AGENTS.md` runtime surface anymore.
 
+The runtime appendix block embedded later in this root file is a checked-in copy of the managed appendix for reference. Treat `templates/AGENTS.md` as the canonical source for appendix wording and behavior; do not hand-edit the root appendix block when maintaining the guide above it.
+
 ## Workspace Lifecycle & Data Flow
-The operational flow is: Telegram thread -> Rust bot -> Codex app-server thread -> real workspace runtime -> Python tool wrappers -> Telegram reply.
+The operational flow is: desktop runtime owner -> local management API / Telegram adapter -> Codex app-server thread -> real workspace runtime -> Python tool wrappers -> Telegram reply or local management surface.
 
 From a maintainer perspective:
 
+- `threadbridge_desktop` is the supported startup path. It can start the tray and local management API before Telegram polling is configured, and it is the formal owner for runtime health and reconcile behavior.
 - `/add_workspace <absolute-path>` creates or reuses the Telegram workspace thread, installs the runtime appendix and `.threadbridge/` surface into that real workspace, and starts a fresh Codex session for that workspace through app-server.
+- The local management API exposes equivalent create-bind, reconnect, archive/restore, launch, managed Codex, and runtime-owner reconcile flows for the desktop management UI.
 - `session-binding.json` stores the mapping between the Telegram thread, the real workspace path, and the current Codex `thread.id`.
 - Normal thread messages resume the saved Codex thread through app-server and run turns in the bound workspace.
 - Uploaded images are stored under `data/<thread-key>/state/`, accumulated into a pending batch, and analyzed by Codex in the same bound workspace context.
 - If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/repair_session` or `/new_session`.
+- Runtime health is owner-canonical: desktop owner heartbeat and reconcile state are the authority for whether a managed workspace runtime is healthy; workspace shared status remains an activity/observation surface.
+- `hcodex` is a managed local TUI entrypoint into the shared workspace runtime. It depends on the desktop runtime owner and does not self-heal the workspace runtime by itself.
 - `/restore_workspace` is Telegram/local-state only. It restores an archived Telegram topic and local metadata; it does not recreate Codex continuity by itself.
 
 ## Artifact Boundaries
@@ -58,6 +69,10 @@ Maintain these ownership boundaries:
 - Workspace bootstrap owns:
   - the managed block inside the real workspace `AGENTS.md`
   - `.threadbridge/bin/`
+  - `.threadbridge/codex/source.txt`
+  - `.threadbridge/codex/build-config.json`
+  - `.threadbridge/codex/build-info.txt`
+  - `.threadbridge/codex/codex`
   - `.threadbridge/tool_requests/`
   - `.threadbridge/tool_results/`
 - `tools/build_prompt_config.py` owns `concept.json`, append-only `prompts/*.json`, and `.threadbridge/tool_results/build_prompt_config.result.json`.
@@ -94,6 +109,10 @@ Add or update tests when behavior changes in:
 
 - repository persistence and state transitions
 - app-server request/response handling
+- management API views, control actions, and wire semantics
+- runtime owner reconcile and health aggregation
+- transcript mirror and process transcript normalization
+- canonical thread/workspace state resolution
 - workspace bootstrap and appendix generation
 - tool-result parsing and artifact path handling
 
