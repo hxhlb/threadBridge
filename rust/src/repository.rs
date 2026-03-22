@@ -558,6 +558,44 @@ impl ThreadRepository {
         Ok(entries.split_off(entries.len() - limit))
     }
 
+    pub async fn read_transcript_mirror(
+        &self,
+        record: &ThreadRecord,
+        delivery: Option<TranscriptMirrorDelivery>,
+        limit: usize,
+    ) -> Result<Vec<TranscriptMirrorEntry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let path = record.transcript_mirror_path();
+        let content = match fs::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
+        };
+        let mut entries = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let entry: TranscriptMirrorEntry = serde_json::from_str(trimmed)?;
+            if delivery
+                .as_ref()
+                .is_some_and(|expected| expected != &entry.delivery)
+            {
+                continue;
+            }
+            entries.push(entry);
+        }
+        if entries.len() <= limit {
+            return Ok(entries);
+        }
+        Ok(entries.split_off(entries.len() - limit))
+    }
+
     pub async fn read_session_binding(
         &self,
         record: &ThreadRecord,
@@ -1214,7 +1252,7 @@ mod tests {
     use super::{
         AppendPendingImageInput, ThreadRepository, ThreadScope, ThreadStatus,
         TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
-        TranscriptMirrorRole,
+        TranscriptMirrorPhase, TranscriptMirrorRole,
     };
     use crate::image_artifacts::ImageAnalysisArtifact;
     use std::path::PathBuf;
@@ -1465,6 +1503,57 @@ mod tests {
             .filter(|line| !line.trim().is_empty())
             .collect();
         assert_eq!(lines.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn read_transcript_mirror_filters_by_delivery_and_limit() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let entries = [
+            TranscriptMirrorEntry {
+                timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+                session_id: "thr_123".to_owned(),
+                origin: TranscriptMirrorOrigin::Telegram,
+                role: TranscriptMirrorRole::User,
+                delivery: TranscriptMirrorDelivery::Final,
+                phase: None,
+                text: "hi".to_owned(),
+            },
+            TranscriptMirrorEntry {
+                timestamp: "2026-03-21T00:00:01.000Z".to_owned(),
+                session_id: "thr_123".to_owned(),
+                origin: TranscriptMirrorOrigin::Telegram,
+                role: TranscriptMirrorRole::Assistant,
+                delivery: TranscriptMirrorDelivery::Process,
+                phase: Some(TranscriptMirrorPhase::Tool),
+                text: "Command: cargo test".to_owned(),
+            },
+            TranscriptMirrorEntry {
+                timestamp: "2026-03-21T00:00:02.000Z".to_owned(),
+                session_id: "thr_123".to_owned(),
+                origin: TranscriptMirrorOrigin::Telegram,
+                role: TranscriptMirrorRole::Assistant,
+                delivery: TranscriptMirrorDelivery::Final,
+                phase: None,
+                text: "done".to_owned(),
+            },
+        ];
+        for entry in &entries {
+            repo.append_transcript_mirror(&record, entry).await.unwrap();
+        }
+
+        let process = repo
+            .read_transcript_mirror(&record, Some(TranscriptMirrorDelivery::Process), 10)
+            .await
+            .unwrap();
+        assert_eq!(process.len(), 1);
+        assert_eq!(process[0].text, "Command: cargo test");
+
+        let latest = repo.read_transcript_mirror(&record, None, 2).await.unwrap();
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest[0].text, "Command: cargo test");
+        assert_eq!(latest[1].text, "done");
     }
 
     #[tokio::test]

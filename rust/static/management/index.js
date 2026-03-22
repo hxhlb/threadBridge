@@ -3,6 +3,7 @@ const appState = {
   health: null,
   workspaces: [],
   archived: [],
+  transcripts: {},
 };
 
 function escapeHtml(value) {
@@ -16,6 +17,18 @@ function escapeHtml(value) {
 
 function renderJson(id, data) {
   document.getElementById(id).textContent = JSON.stringify(data, null, 2);
+}
+
+function transcriptCache(threadKey) {
+  if (!appState.transcripts[threadKey]) {
+    appState.transcripts[threadKey] = {
+      loaded: false,
+      loading: false,
+      error: null,
+      entries: [],
+    };
+  }
+  return appState.transcripts[threadKey];
 }
 
 function toneForStatus(value) {
@@ -158,6 +171,27 @@ function workspaceSecondaryLabel(item) {
   return null;
 }
 
+function transcriptEntriesForDelivery(entries, delivery) {
+  return (entries || []).filter(entry => delivery === 'all' || entry.delivery === delivery);
+}
+
+function formatTranscriptEntry(entry) {
+  const phase = entry.phase ? ` · ${entry.phase}` : '';
+  const origin = entry.origin ? ` · ${entry.origin}` : '';
+  return `<div class="transcript-entry">
+    <div class="transcript-meta">${escapeHtml(entry.timestamp || 'unknown')}${escapeHtml(phase)}${escapeHtml(origin)}</div>
+    <div>${escapeHtml(entry.text || '')}</div>
+  </div>`;
+}
+
+function renderTranscriptSection(entries, delivery, emptyLabel) {
+  const filtered = transcriptEntriesForDelivery(entries, delivery);
+  if (!filtered.length) {
+    return `<p class="muted">${escapeHtml(emptyLabel)}</p>`;
+  }
+  return `<div class="transcript-list">${filtered.map(formatTranscriptEntry).join('')}</div>`;
+}
+
 function configureAddWorkspaceCard(setup) {
   const button = document.getElementById('add-workspace-button');
   const status = document.getElementById('add-workspace-status');
@@ -232,7 +266,7 @@ function renderWorkspaceCards(items) {
         <button class="secondary" onclick="openWorkspace('${item.thread_key}')">Open Workspace</button>
         <button ${item.conflict ? 'disabled' : ''} onclick="launchNew('${item.thread_key}')">New Session</button>
         <button ${item.conflict || !item.current_codex_thread_id ? 'disabled' : ''} onclick="launchCurrent('${item.thread_key}')">Continue Telegram Session</button>
-        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', ${item.session_broken ? 'true' : 'false'}, ${item.tui_active_codex_thread_id ? 'true' : 'false'})">${item.tui_active_codex_thread_id ? 'Adopt TUI' : 'Repair Session'}</button>
+        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', ${item.session_broken ? 'true' : 'false'}, ${item.tui_session_adoption_pending ? 'true' : 'false'})">${item.tui_session_adoption_pending ? 'Adopt TUI' : 'Repair Session'}</button>
         <button class="secondary" onclick="repairRuntime('${item.thread_key}')">Repair Runtime</button>
         <button ${item.conflict ? 'disabled' : ''} onclick="showLaunchConfig('${item.thread_key}')">Show Launch Commands</button>
         <button onclick='archiveThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(workspacePrimaryLabel(item))})'>Archive</button>
@@ -264,8 +298,46 @@ function renderWorkspaceCards(items) {
         <summary>Launch Output</summary>
         <pre id="launch-${item.thread_key}">No launch output yet.</pre>
       </details>
+
+      <details class="raw-panel transcript-panel">
+        <summary>Transcript</summary>
+        <div class="toolbar">
+          <button class="secondary" onclick="loadTranscript('${item.thread_key}', true)">Refresh Transcript</button>
+          <span class="muted">Latest 40 transcript mirror entries.</span>
+        </div>
+        <div id="transcript-${item.thread_key}" class="stack">
+          ${renderWorkspaceTranscript(item.thread_key)}
+        </div>
+      </details>
     </article>
   `).join('');
+}
+
+function renderWorkspaceTranscript(threadKey) {
+  const cache = transcriptCache(threadKey);
+  if (cache.loading && !cache.loaded) {
+    return '<p class="muted">Loading transcript…</p>';
+  }
+  if (cache.error) {
+    return `<p class="hint">${escapeHtml(cache.error)}</p>`;
+  }
+  if (!cache.loaded) {
+    return `<div class="toolbar"><button class="secondary" onclick="loadTranscript('${threadKey}', true)">Load Transcript</button></div>`;
+  }
+  return `
+    <div class="subsection">
+      <div class="section-heading compact">
+        <h3>Process Transcript</h3>
+      </div>
+      ${renderTranscriptSection(cache.entries, 'process', 'No process transcript entries yet.')}
+    </div>
+    <div class="subsection">
+      <div class="section-heading compact">
+        <h3>Final Transcript</h3>
+      </div>
+      ${renderTranscriptSection(cache.entries, 'final', 'No final transcript entries yet.')}
+    </div>
+  `;
 }
 
 function renderArchivedThreads(items) {
@@ -319,6 +391,7 @@ async function refresh() {
   appState.workspaces = workspaces;
   appState.archived = archived;
   renderAll();
+  await refreshLoadedTranscripts();
 }
 
 function openLaunchOutput(threadKey, data) {
@@ -394,8 +467,8 @@ async function reconnectCodex(threadKey) {
   await refresh();
 }
 
-async function repairContinuity(threadKey, sessionBroken, hasLiveTuiSession) {
-  if (hasLiveTuiSession) {
+async function repairContinuity(threadKey, sessionBroken, adoptionPending) {
+  if (adoptionPending) {
     await adoptTuiSession(threadKey);
     return;
   }
@@ -404,6 +477,52 @@ async function repairContinuity(threadKey, sessionBroken, hasLiveTuiSession) {
     return;
   }
   await reconnectCodex(threadKey);
+}
+
+async function loadTranscript(threadKey, userInitiated = false) {
+  const cache = transcriptCache(threadKey);
+  if (cache.loading) {
+    return;
+  }
+  cache.loading = true;
+  cache.error = null;
+  if (userInitiated) {
+    renderWorkspaceTranscriptIntoDom(threadKey);
+  }
+  try {
+    const response = await fetch(`/api/threads/${threadKey}/transcript?delivery=all&limit=40`);
+    const data = await response.json();
+    if (!response.ok) {
+      cache.error = data.error || 'Transcript fetch failed';
+      cache.entries = [];
+      cache.loaded = false;
+      return;
+    }
+    cache.entries = data;
+    cache.loaded = true;
+  } catch (error) {
+    cache.error = error instanceof Error ? error.message : 'Transcript fetch failed';
+    cache.entries = [];
+    cache.loaded = false;
+  } finally {
+    cache.loading = false;
+    renderWorkspaceTranscriptIntoDom(threadKey);
+  }
+}
+
+function renderWorkspaceTranscriptIntoDom(threadKey) {
+  const target = document.getElementById(`transcript-${threadKey}`);
+  if (!target) {
+    return;
+  }
+  target.innerHTML = renderWorkspaceTranscript(threadKey);
+}
+
+async function refreshLoadedTranscripts() {
+  const threadKeys = Object.entries(appState.transcripts)
+    .filter(([, cache]) => cache.loaded)
+    .map(([threadKey]) => threadKey);
+  await Promise.all(threadKeys.map(threadKey => loadTranscript(threadKey, false)));
 }
 
 async function openWorkspace(threadKey) {

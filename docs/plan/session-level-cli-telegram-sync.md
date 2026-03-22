@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-這份 plan 已部分落地。
+這份 plan 已落地。
 
 目前已落地：
 
@@ -13,12 +13,8 @@
 - `hcodex` 已改成依賴 desktop runtime owner，不再自行補拉 shared runtime
 - threadBridge 已開始提供本地 management API 骨架，且可在沒有 Telegram 憑據時先啟動本地 runtime
 - desktop runtime 已成為正式啟動入口；headless `threadbridge` 已退場
-
-目前仍未完成：
-
-- desktop runtime 對 handoff continuity / adoption 的 owner 職責仍有收尾空間
-- Codex mirror / observability 對 Plan / Tool 過程文本仍只算起步
-- process transcript 雖已開始落地，但尚未成為完整的通用 transcript surface
+- desktop runtime 對 handoff continuity / adoption 的 owner 邊界已收斂為 canonical authority
+- process transcript 已正式區分 final / process，並補上 management transcript read API、web observability pane 與 Telegram rolling preview 摘要
 
 目前新增確認的優先級判斷是：
 
@@ -48,12 +44,13 @@
 - `tui_active_codex_thread_id` 是受管 TUI runtime state
 - 本地管理面是新的 owner / control surface 候選，不是新的聊天入口
 
-目前 mirror 的實際能力，仍主要偏向：
+目前 mirror 的實際能力已經擴展為：
 
 - CLI / TUI user prompt
 - final assistant reply
+- Plan / Tool process transcript
 
-而不是完整的 session transcript replay。
+但更完整的 transport-neutral transcript / observability 契約仍屬後續 protocol 工作。
 
 ## 已收斂的術語
 
@@ -85,9 +82,10 @@
 - workspace shared status
   - 回答 live CLI / shell / session activity 是否存在
 
-這兩類訊號本來就不完全是同一件事，但現在還沒有唯一 owner 來定義哪個才是 canonical runtime health authority。
+這兩類訊號本來就不完全是同一件事，而目前的正式結論已是：
 
-這件事不只是架構清理，而是目前整條 shared runtime 路線的高優先級收斂項。
+- owner heartbeat 是 canonical runtime health authority
+- workspace shared status 只保留 activity / observation 語義
 
 比較合理的收斂方向應是：
 
@@ -183,7 +181,5 @@ web 管理面仍需要每個 workspace 最近 5 個 Codex `thread.id`；tray 已
 
 ## 下一步
 
-1. 繼續收尾 desktop runtime owner 對 adoption / continuity 的細節邊界。
-2. 讓本地 management API / tray / web surface 完全站穩 owner-canonical 語義。
-3. 把 process transcript 從已落地的 mirror/storage 擴展成更正式的 UI / observability surface。
-4. 在 owner 去 Telegram 化之後，再推進更完整的 transport / adapter 抽象。
+1. 在這個已落地基礎上，把 transcript / event contract 往更完整的 transport-neutral protocol 收斂。
+2. 在 owner 去 Telegram 化之後，再推進更完整的 transport / adapter 抽象。

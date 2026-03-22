@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-這份文檔不再是「完全未實作」的純構想，v1 的 desktop runtime 骨架已經開始落地，但仍未完整收尾。
+這份文檔不再是「完全未實作」的純構想，v1 的 desktop runtime 骨架已經開始落地，但 broader management UX 仍未完整收尾。
 
 目前代碼裡已經有的前置能力：
 
@@ -14,6 +14,7 @@
   - `PUT /api/setup/telegram`
   - `GET /api/runtime-health`
   - `GET /api/threads`
+  - `GET /api/threads/:thread_key/transcript`
   - `GET /api/workspaces`
   - `GET /api/archived-threads`
   - `POST /api/workspaces/pick-and-add`
@@ -50,12 +51,12 @@
 - managed Codex source build defaults 已開始持久化到 repo-local config，而不是只依賴 shell env 或單次 request
 - 本地管理面已開始提供 `open workspace` control action
 - 本地管理面已開始提供 adopt / reject pending TUI handoff control action
+- 本地管理面已開始提供 transcript observability pane，可查看 final/process transcript
 - Telegram bot 啟動已抽成可複用 runner，並由 desktop runtime 單一路徑持有
 - setup 儲存後，desktop runtime 已會在背景重新嘗試拉起 Telegram polling，不再只剩重啟一條路
 
 目前仍缺：
 
-- desktop runtime owner 對 handoff continuity / adoption 狀態的 owner 收斂仍不完整
 - managed Codex source build 目前仍是直接呼叫 cargo 的實作骨架，尚未收斂成更正式的 update/install UX
 - web 管理面已拆成靜態 HTML/CSS/JS asset，但前端結構仍偏輕量，尚未收斂成更正式的模組化 UI
 

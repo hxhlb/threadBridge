@@ -138,6 +138,25 @@ pre {
   background: var(--surface-strong);
 }
 
+.transcript-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.transcript-entry {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.transcript-meta {
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 h1,
 h2,
 h3,

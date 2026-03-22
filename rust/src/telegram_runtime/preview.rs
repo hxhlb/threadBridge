@@ -9,6 +9,8 @@ use teloxide::types::ChatAction;
 use tokio::sync::{Mutex, oneshot};
 use tracing::warn;
 
+use crate::repository::{TranscriptMirrorDelivery, TranscriptMirrorEntry};
+
 use super::{Bot, ChatId, CodexThreadEvent, Requester, Result, ThreadId, thread_id_to_i32};
 
 const TYPING_HEARTBEAT_SECONDS: u64 = 4;
@@ -274,6 +276,21 @@ impl PreviewRenderer {
         changed
     }
 
+    pub(crate) fn consume_process_entry(&mut self, entry: &TranscriptMirrorEntry) -> bool {
+        if entry.delivery != TranscriptMirrorDelivery::Process {
+            return false;
+        }
+        let text = entry.text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        self.status = preview_status(text);
+        let next_render = self.render_text();
+        let changed = next_render != self.latest_render;
+        self.latest_render = next_render;
+        changed
+    }
+
     pub(crate) fn heartbeat(&mut self) -> bool {
         if !self.in_progress {
             return false;
@@ -347,6 +364,13 @@ impl TurnPreviewController {
         self.flush_render().await;
     }
 
+    pub(crate) async fn consume_process_entry(&mut self, entry: &TranscriptMirrorEntry) {
+        if !self.renderer.consume_process_entry(entry) {
+            return;
+        }
+        self.flush_render().await;
+    }
+
     pub(crate) async fn heartbeat(&mut self) {
         if !self.renderer.heartbeat() {
             return;
@@ -406,6 +430,10 @@ mod tests {
     use teloxide::types::ChatId;
 
     use crate::codex::CodexThreadEvent;
+    use crate::repository::{
+        TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
+        TranscriptMirrorPhase, TranscriptMirrorRole,
+    };
 
     #[test]
     fn preview_renderer_applies_heartbeat_to_draft_text() {
@@ -458,5 +486,22 @@ mod tests {
 
         assert_eq!(with_thread["message_thread_id"], 7);
         assert!(without_thread.get("message_thread_id").is_none());
+    }
+
+    #[test]
+    fn preview_renderer_uses_process_entry_summary() {
+        let mut renderer = PreviewRenderer::new(3500, 800);
+        renderer.consume(&CodexThreadEvent::TurnStarted);
+        let changed = renderer.consume_process_entry(&TranscriptMirrorEntry {
+            timestamp: "2026-03-22T00:00:00.000Z".to_owned(),
+            session_id: "session-1".to_owned(),
+            origin: TranscriptMirrorOrigin::Telegram,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Process,
+            phase: Some(TranscriptMirrorPhase::Tool),
+            text: "Command: cargo test".to_owned(),
+        });
+        assert!(changed);
+        assert_eq!(renderer.get_render_text(), "● Command: cargo test");
     }
 }

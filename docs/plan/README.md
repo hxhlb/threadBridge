@@ -16,6 +16,13 @@
   - 已完成 v1
   - Bash wrapper、Codex hooks、notify、workspace shared status、topic title watcher、busy gate 都曾落地
   - 現在已退役，只保留作為舊模型參考
+- [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
+  - shared app-server daemon、`./.threadbridge/bin/hcodex`、TUI proxy、mirror、adoption、auto-adopt 已落地
+  - desktop runtime 已成為正式 owner 啟動模型，headless 啟動路徑已退場
+  - `hcodex` self-heal 已移除，缺少 desktop owner 時會明確失敗
+  - workspace heartbeat / runtime health 已改成以 desktop owner heartbeat 為主 authority
+  - process transcript 已正式區分 final / process，並補上 management transcript read API、web observability pane 與 Telegram rolling preview 摘要
+  - 它同時也是 Telegram 退回通用 adapter 模式的前置條件
 
 ## 部分落地
 
@@ -35,26 +42,19 @@
   - `/add_workspace`、`/new_session`、`/repair_session` 的正式生命週期已存在
   - `current_codex_thread_id` 已成為 canonical pointer，`tui_active_codex_thread_id` / adoption 也已進入正式 runtime
   - 剩餘工作主要是兼容層與狀態語義收尾
-- [session-level-cli-telegram-sync.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-cli-telegram-sync.md)
-  - shared app-server daemon、`./.threadbridge/bin/hcodex`、TUI proxy、mirror、adoption、auto-adopt 已落地
-  - `/attach_cli_session`、viewer handoff、attach-intent、hooks-based CLI sync、`.cli/.attach` title 已退場
-  - desktop runtime 已成為正式 owner 啟動模型，headless 啟動路徑已退場
-  - `hcodex` self-heal 已移除，缺少 desktop owner 時會明確失敗
-  - workspace heartbeat / runtime health 已改成以 desktop owner heartbeat 為主 authority
-  - process transcript 已開始區分 final / process，並補上 plan/tool mirror 入口
-  - 它同時也是 Telegram 退回通用 adapter 模式的前置條件
 - [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
   - 本地 management API 已開始承接它的 view / action 命名
   - local HTTP + SSE 已從草稿變成實際 transport
-  - 近期已再補上 runtime-owner reconcile、managed Codex build defaults、workspace launch config 與 continue-current launch control
+  - 近期已再補上 runtime-owner reconcile、managed Codex build defaults、workspace launch config、continue-current launch control，以及 thread transcript read API
   - runtime health 已改成 owner-canonical，`workspace_state` 僅保留 debug/observation 語義
-  - process transcript event / mirror model 已開始落地，但 protocol 仍未收斂成正式 transport-neutral 契約
+  - process transcript event / mirror model 已接到 management API、web UI 與 Telegram rolling preview，但 protocol 仍未收斂成正式 transport-neutral 契約
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
   - `threadbridge_desktop`、macOS-first tray menu、workspace-first browser management UI 已開始落地
   - pick-and-add、adopt / reject TUI、runtime-owner reconcile、launch config 等 control 已進入 management API
   - managed Codex source build / cache refresh / build defaults 已進入 management API
   - tray menu 已收斂成 `New Session` 與 `Continue Telegram Session`
   - management health view 已改成 owner heartbeat 為主的 desktop-first 模型
+  - management UI 已補上 transcript observability pane，且 adoption/repair action 已改成 owner-canonical 語義
   - web 管理面新增確認的 UI 收斂方向是可評估以 HeroUI 重構
   - 目前新增確認的收斂方向是 `workspace = thread` 主模型、desktop-only 啟動與移除暫不可用的 onboarding
 

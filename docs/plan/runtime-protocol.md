@@ -11,6 +11,7 @@
   - setup
   - runtime health
   - active thread list
+  - active thread transcript
   - managed workspace list
   - archived thread list
   - pick-and-add / reconnect / open / archive / restore
@@ -23,6 +24,7 @@
 - transport-neutral 的正式 view / action 命名仍未完全收斂
 - local HTTP + SSE 已成為目前最務實的實驗載體
 - runtime health 已開始改成 owner-canonical；`workspace_state` 不再是 primary readiness source
+- process transcript 已開始透過 `GET /api/threads/:thread_key/transcript` 對外暴露，且本地 web / Telegram preview 已開始共用同一份摘要來源
 
 ## 問題
 

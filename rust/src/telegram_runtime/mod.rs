@@ -18,7 +18,7 @@ pub(crate) use crate::image_artifacts::{
 pub(crate) use crate::repository::{
     AppendPendingImageInput, LogDirection, SessionBinding, ThreadRecord, ThreadRepository,
     ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
-    TranscriptMirrorPhase, TranscriptMirrorRole,
+    TranscriptMirrorRole,
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 use crate::tui_proxy::TuiProxyManager;

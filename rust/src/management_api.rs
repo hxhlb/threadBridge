@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use async_stream::stream;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{Html, IntoResponse, Sse};
@@ -21,7 +22,9 @@ use tracing::{info, warn};
 
 use crate::config::{RuntimeConfig, load_optional_telegram_config};
 use crate::local_control::LocalControlHandle;
-use crate::repository::{RecentCodexSessionEntry, ThreadRepository};
+use crate::repository::{
+    RecentCodexSessionEntry, ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry,
+};
 use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus, WorkspaceRuntimeHeartbeat};
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 use crate::workspace_status::{read_cli_owner_claim, read_workspace_aggregate_status};
@@ -282,6 +285,14 @@ struct LaunchResumeRequest {
     session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct TranscriptQuery {
+    #[serde(default)]
+    delivery: Option<TranscriptMirrorDelivery>,
+    #[serde(default = "default_transcript_limit")]
+    limit: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LaunchWorkspaceResponse {
     pub launched: bool,
@@ -381,6 +392,10 @@ struct WorkspaceAggregateView {
     items: Vec<ManagedWorkspaceView>,
 }
 
+fn default_transcript_limit() -> usize {
+    40
+}
+
 pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementApiHandle> {
     let repository = ThreadRepository::open(&runtime.data_root_path).await?;
     let state = Arc::new(ManagementApiState {
@@ -424,6 +439,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             post(post_reconcile_runtime_owner),
         )
         .route("/api/threads", get(get_threads))
+        .route(
+            "/api/threads/:thread_key/transcript",
+            get(get_thread_transcript),
+        )
         .route("/api/workspaces", get(get_workspaces))
         .route(
             "/api/workspaces/pick-and-add",
@@ -581,6 +600,18 @@ async fn get_threads(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Result<Json<Vec<ThreadStateView>>, ManagementApiError> {
     Ok(Json(state.thread_views().await?))
+}
+
+async fn get_thread_transcript(
+    State(state): State<Arc<ManagementApiState>>,
+    AxumPath(thread_key): AxumPath<String>,
+    Query(query): Query<TranscriptQuery>,
+) -> Result<Json<Vec<TranscriptMirrorEntry>>, ManagementApiError> {
+    Ok(Json(
+        state
+            .thread_transcript(&thread_key, query.delivery, query.limit)
+            .await?,
+    ))
 }
 
 async fn get_workspaces(
@@ -1272,6 +1303,25 @@ impl ManagementApiState {
         }
         views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
         Ok(views)
+    }
+
+    async fn thread_transcript(
+        &self,
+        thread_key: &str,
+        delivery: Option<TranscriptMirrorDelivery>,
+        limit: usize,
+    ) -> Result<Vec<TranscriptMirrorEntry>, ManagementApiError> {
+        let record = self
+            .repository
+            .find_active_thread_by_key(thread_key)
+            .await?
+            .ok_or_else(|| {
+                ManagementApiError::not_found(anyhow!("active thread `{thread_key}` not found"))
+            })?;
+        Ok(self
+            .repository
+            .read_transcript_mirror(&record, delivery, limit.max(1))
+            .await?)
     }
 
     async fn archived_thread_views(&self) -> Result<Vec<ArchivedThreadView>> {
@@ -2261,20 +2311,35 @@ async fn resolve_git_rev(repo_root: &Path) -> Result<String> {
 }
 
 #[derive(Debug)]
-struct ManagementApiError(anyhow::Error);
+struct ManagementApiError {
+    status: StatusCode,
+    error: anyhow::Error,
+}
 
 impl From<anyhow::Error> for ManagementApiError {
     fn from(value: anyhow::Error) -> Self {
-        Self(value)
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            error: value,
+        }
+    }
+}
+
+impl ManagementApiError {
+    fn not_found(error: anyhow::Error) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            error,
+        }
     }
 }
 
 impl IntoResponse for ManagementApiError {
     fn into_response(self) -> axum::response::Response {
         let message = serde_json::json!({
-            "error": self.0.to_string(),
+            "error": self.error.to_string(),
         });
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response()
+        (self.status, Json(message)).into_response()
     }
 }
 
