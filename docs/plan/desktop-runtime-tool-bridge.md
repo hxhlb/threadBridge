@@ -17,10 +17,15 @@
 - 跨沙盒 / 跨 workspace 的 desktop capability 語義
 - 這類 capability 的權限、審計、回傳 artifact 模型
 - `desktop screenshot` 之類能力的正式 API / tool contract
+- 由 desktop runtime 提供自定義 webview service 的正式 lifecycle / API / 安全邊界
 
 目前新增確認的一個核心要求是：
 
 - 只要是跨沙盒 capability，就需要 desktop runtime 的授權確認
+
+目前新增記錄的一個方向是：
+
+- desktop runtime 可以作為 tools 層，提供自定義 webview service，而不只是一次性 artifact capability
 
 ## 問題
 
@@ -59,6 +64,7 @@
 - workspace / Codex 如何請求 machine-local capability
 - desktop runtime 如何作為特權能力執行者
 - 這些能力如何回傳 artifact / result
+- 哪些工具型能力應由 desktop runtime 提供受管 custom webview service
 - 這些能力如何被記錄、授權、觀測
 
 它明確不處理：
@@ -141,6 +147,52 @@
 - 使用者顯式允許或拒絕
 - threadBridge 再把結果回傳給 workspace / Codex / adapter
 
+### 5. desktop runtime 也可以提供 tools 層的自定義 webview service
+
+不是所有 capability 都適合收斂成：
+
+- request 進來
+- 執行一次 action
+- 回傳單次 artifact / result
+
+有一類工具更像是：
+
+- machine-local 的受管 UI surface
+- 有自己的短生命週期互動
+- 可能需要 desktop runtime 持有視窗 / webview / 本地 session
+
+例如未來如果有：
+
+- 圖像挑選 / 標註面板
+- 桌面級 approval / picker / inspector
+- session-specific observability shell
+
+比較合理的模型，不一定是讓 workspace 直接開瀏覽器或自己持有 UI，而是：
+
+- desktop runtime 作為 tools 層 capability host
+- 它代為啟動一個受管 custom webview service
+- workspace / Codex 只拿到可引用的 handle、service state、或輸出結果
+
+這樣做的價值是：
+
+- UI shell 仍屬於 machine-local owner 邊界
+- workspace 不需要自己越過 sandbox 管視窗生命週期
+- tool bridge 可以同時承接一次性 capability 和短生命週期 service capability
+
+這裡的 `custom webview service` 不應被理解成：
+
+- 任意載入遠端網站
+- 另一個獨立主對話代理
+- 繞過 management API 的 ad-hoc UI 容器
+
+比較合理的定義是：
+
+- 由 desktop runtime 啟動或持有
+- 有明確 tool schema / lifecycle
+- 服務特定工作流
+- 預設是 machine-local
+- 仍受 threadBridge audit / approval / state view 約束
+
 ## 初版能力：`desktop_screenshot`
 
 最自然的 v1 範例就是桌面截圖。
@@ -158,6 +210,32 @@
 - 產物存去哪裡
 - 是否要回傳 metadata
 - Telegram / desktop / workspace 端怎麼引用該 artifact
+
+## 後續能力方向：`desktop_webview_service`
+
+若 `desktop_screenshot` 是一次性 capability 的代表，那另一條值得先記錄的方向是：
+
+- `desktop_webview_service`
+
+它代表的不是單次 action，而是：
+
+- 由 desktop runtime 提供一個受管 custom webview surface
+- 讓某個 tool / workflow 在 machine-local shell 中短暫存在
+- 再把使用者操作結果、產出 artifact、或 service state 回傳給 threadBridge
+
+這個方向適合承接的情境包括：
+
+- 需要 richer local UI，但又不值得變成完整 management page
+- 需要 workspace tool 觸發，但不適合讓 workspace 自己持有瀏覽器 / webview
+- 需要 owner 可見、可關閉、可審計的本地互動面
+
+v1 不需要先把它做成完整框架，但至少應先回答：
+
+- service 由誰啟動與銷毀
+- service 是否綁定 `thread_key` / `workspace_cwd` / `session_id`
+- webview 載入的是本地靜態資產、management API route，還是受限的本地 app shell
+- service result 如何寫回 threadBridge protocol
+- 這類 service 是否與普通 capability 共用 approval / audit lane
 
 ## 建議的資料模型
 
@@ -196,6 +274,31 @@
 - `approved_at`
 - `approved_by`
 
+### `DesktopServiceHandle`
+
+若 capability 不是單次 action，而是受管 service，至少需要一個可追蹤 handle：
+
+- `service_id`
+- `service_kind`
+  - 例如 `desktop_webview_service`
+- `thread_key`
+- `workspace_cwd`
+- `session_id`
+- `status`
+  - `pending_approval`
+  - `launching`
+  - `running`
+  - `completed`
+  - `failed`
+  - `closed`
+- `entrypoint`
+  - 例如 local route、webview target、或受管 page key
+- `artifacts`
+- `summary`
+- `created_at`
+- `updated_at`
+- `closed_at`
+
 ### `DesktopScreenshotArtifact`
 
 至少包含：
@@ -219,6 +322,12 @@
 - capability 由 desktop runtime 執行
 - artifact 仍應落到 thread / workspace 可引用的位置
 - 但不應讓 desktop runtime 的私有暫存和 workspace artifact 混成同一層
+
+若是 `desktop_webview_service` 這種受管 UI capability，還要再多區分：
+
+- desktop runtime 持有的 service state
+- webview/session 關聯的 ephemeral local state
+- service 結束後可導出的 workspace-visible artifact
 
 至少要區分：
 
@@ -317,14 +426,17 @@
 
 - v1 是否只做 `desktop_screenshot`？
 - capability request 應該走 local HTTP control action、workspace tool request file，還是另一條專用通道？
+- `desktop_webview_service` 應該被視為 capability 的一種，還是 protocol 裡另一種 service primitive？
 - artifact 應先落在 workspace，還是由 desktop runtime 保管再導出？
 - desktop runtime 的授權確認 v1 應該放在 tray、管理頁，還是原生通知 / dialog？
 - 這條能力面未來是否應擴展到更多 desktop capability，例如視窗選取、檔案 picker、通知、UI automation？
+- custom webview 應優先做成 management API route + 受管殼層，還是獨立 asset bundle / page registry？
 
 ## 建議的下一步
 
 1. 先把這條能力面收斂成「desktop runtime capability host」而不是泛化的 sandbox escape。
 2. 明確規定跨沙盒 capability 的 v1 默認需要 desktop runtime 授權確認。
 3. 先以 `desktop_screenshot` 定義最小 request / result / artifact 模型。
-4. 把 capability request / result / approval state 掛回 `runtime-protocol` 的 action / event 命名。
-5. 再決定它是走 management API、workspace tool bridge，還是兩者共用的統一通道。
+4. 補一份 `desktop_webview_service` 的最小 lifecycle 草圖，確認它和 ordinary capability 的共用部分與分歧。
+5. 把 capability request / result / approval state，及必要的 service handle/state，掛回 `runtime-protocol` 的 action / event 命名。
+6. 再決定它是走 management API、workspace tool bridge，還是兩者共用的統一通道。
