@@ -267,6 +267,75 @@
 
 不要在新文檔裡平行創造語義接近、但名稱不同的詞，除非這份文檔就是要正式改名，而且有說清楚遷移原因。
 
+### 建議固定詞彙表
+
+下面這組詞應視為 `docs/plan/` 目前的優先術語。
+
+- `Telegram thread`
+  - Telegram topic / 討論串 / 使用者正在互動的對話容器
+- `Workspace binding`
+  - Telegram thread 綁定到的真實 workspace 與其持久化關聯
+- `Codex thread`
+  - app-server 內的 Codex `thread.id` continuity
+- `current_codex_thread_id`
+  - 目前這個 Telegram thread 正式採用的 Codex 對話
+- `tui_active_codex_thread_id`
+  - 受管本地 TUI 最近一次使用或目前活著的 Codex 對話
+- `active turn`
+  - 某個 Codex thread 當前正在執行的那一輪
+- `lifecycle_status`
+  - 只描述 Telegram thread 是否 `active` / `archived`
+- `binding_status`
+  - 只描述 workspace binding 是否 `unbound` / `healthy` / `broken`
+- `run_status`
+  - 只描述目前是否有 active Codex turn 在跑，`idle` / `running`
+
+如果要描述 scope，建議直接寫：
+
+- `Telegram-scoped`
+- `workspace-scoped`
+- `Codex-turn scoped`
+- `session_id` 視角
+
+避免只寫：
+
+- `thread-level`
+- `session-level`
+
+因為這兩個詞在這個 repo 裡很容易混淆 `Telegram thread`、`Codex thread`、`session_id`、以及 `active turn`。
+
+### 舊詞與過渡詞
+
+下列詞不是完全不能出現，但應只在下列情況使用：
+
+- `codex_thread_id`
+  - 只在泛指某個 Codex thread id，或描述 legacy / wire 兼容欄位時使用
+  - 若要描述目前 Telegram continuity，優先寫 `current_codex_thread_id`
+- `selected_session_id`
+  - 視為 legacy 欄位名，除非在講兼容讀取，不應再當新術語
+- `/bind_workspace`
+  - 視為舊命令名或內部/歷史語境
+  - 描述目前正式產品流時，優先寫 `/add_workspace` 或 create-bind flow
+- `/reconnect_codex`
+  - 視為 management / 歷史命名
+  - 描述目前 Telegram 指令時，優先寫 `/repair_session`
+- `/new`
+  - 視為舊命令名
+  - 描述目前 Telegram 指令時，優先寫 `/new_session`
+- `handoff`
+  - 若描述現行模型，優先拆成 `adoption`、`mirror`、`readiness`
+  - `handoff` 主要保留給歷史文檔或舊模型參照
+- `viewer` / `attach` / `.attach`
+  - 視為舊 viewer/attach 模型詞，除非文檔明確標示為歷史語境，否則不應再作為現行主術語
+
+### 文檔維護規則
+
+若舊文檔因歷史背景仍保留舊詞，至少應做到其中一種：
+
+- 在 `目前進度` 明確標示它是歷史方案 / retired model / archive 參考
+- 在首次出現舊詞時補一句目前對應的新詞
+- 避免讓舊命令名、舊欄位名、舊模型詞出現在主規格段落而沒有註解
+
 ## 與代碼的關係
 
 `docs/plan/` 不是脫離代碼存在的白板。

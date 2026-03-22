@@ -3,6 +3,7 @@
 這個目錄用來放 `threadBridge` 的設計草稿、已落地方案與後續重構方向。
 
 如需新增新想法或整理既有 plan，先看 [authoring-guide.md](/Volumes/Data/Github/threadBridge/docs/plan/authoring-guide.md)。
+如需先對齊詞彙，再看 [authoring-guide.md](/Volumes/Data/Github/threadBridge/docs/plan/authoring-guide.md) 裡的「術語與命名要求」。
 
 ## 閱讀方式
 
