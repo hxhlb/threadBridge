@@ -105,7 +105,7 @@
   - Telegram adapter 遷移草稿
   - owner authority 應先從 Telegram 路徑抽離，再做更完整的 adapter migration
   - 近期優先級應是補齊 Telegram 自身適配，而不是先做第二個 IM adapter 驗證
-  - 近期也可評估適配 Telegram 原生轉發輸入模式，作為 `main chat = control 面板` 下的補充輸入路徑
+  - 近期 Telegram v0 能力面包括 session-first observability、model/mode 設定，以及 `main chat = control 面板` 下的 `forwarded input`
 
 ## 主規格
 

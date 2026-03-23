@@ -18,13 +18,14 @@
 - `threadBridge` 目前沒有明確要接其他 IM 的產品計畫
 - 因此更合理的近期方向是先把 Telegram adapter 做完整，再回頭看是否值得做更廣泛的 adapter 驗證
 
-目前也新增記錄一個 Telegram-specific 產品想法：
+目前也新增記錄一組 Telegram-specific 的近期能力想法：
 
-- 後續可評估適配 Telegram 的原生「轉達 / forward」能力
-- 目前更具體的想法是：適配 Telegram 的「轉發輸入」模式
-- 背景是現在採用 `Telegram thread = 工作 thread` 模型後，`main chat` 更像 control 面板，普通輸入空間變得不自然
-- 因此可考慮允許用戶在 `main chat` 透過轉發訊息，把內容投遞到目標 workspace thread 當成輸入
-- 這件事目前先視為 Telegram adapter 能力面，不先提升成 transport-neutral core 語義
+- Telegram observability 應優先接上 session-first API，而不只停留在 thread transcript feed
+- Telegram 之後應可提供 Codex 工作模型與 execution mode 的設定入口
+- Telegram 之後可評估支持 `forwarded input`
+  - 背景是現在採用 `Telegram thread = 工作 thread` 模型後，`main chat` 更像 control 面板，普通輸入空間變得不自然
+  - 因此可考慮允許用戶在 `main chat` 透過轉發訊息，把內容投遞到目標 workspace thread 當成輸入
+- 這些都先視為 Telegram adapter 能力面，不先提升成 transport-neutral core 語義
 
 ## 問題
 
@@ -66,12 +67,46 @@
 - 先讓 Telegram 成為一個完整、乾淨、邊界更明確的 adapter
 - 而不是為了抽象而提早追求第二個 IM adapter
 
-這也包括一類目前尚未 formalize 的 Telegram-only surface：
+## 近期 Telegram v0 能力面
 
-- forwarded message / relay 類能力
-- 其中近期更值得優先考慮的是 forwarded message 作為輸入能力，而不是 bot 輸出轉達能力
-- 也就是說，若之後真的支持 Telegram 轉達，應先把它當成 Telegram adapter 的輸入能力來設計
-- 等它在 Telegram 內的語義收斂後，再決定是否值得提升成更一般的 runtime control / delivery 概念
+這一節只記錄近期較值得優先處理的 Telegram 能力，不直接等同於整體 adapter migration 完成。
+
+### 1. Session-first observability
+
+- Telegram 相關 observability 應優先建立在 session-first API 之上
+- 不應讓 Telegram surface 長期依賴 thread transcript feed 自行分組 `session_id`
+- 換句話說，Telegram 若要補 observability / debug 能力，應直接消費正式的 session query surface
+
+### 2. Model / Mode control surface
+
+- Telegram 之後可補上 Codex 工作模型設定入口
+- Telegram 之後也可補上 execution mode 設定入口
+- 這兩者應視為不同控制面：
+  - `Codex 工作模型`
+    - 回答「用哪個模型」
+  - `execution mode`
+    - 回答「以什麼 approval / sandbox contract 執行」
+- 它們若要在 Telegram 露出，都應只是 runtime protocol control action 的 adapter surface
+
+### 3. `forwarded input`
+
+- 這是一個 Telegram-only 的輸入補充模式
+- 目標不是做 bot 輸出轉發，而是補目前 `main chat = control 面板` 下的輸入不便
+- 使用者可在 `main chat` 轉發一則訊息，將它投遞到某個目標 workspace thread 作為輸入
+- 這個能力近期先視為 Telegram adapter input surface，不先抽象成 transport-neutral runtime feature
+
+## Telegram-only surfaces
+
+這裡列的是近期已知、但仍未 formalize 的 Telegram-specific surface。
+
+- `forwarded input`
+- topic title
+- preview draft
+- Telegram-specific render / callback / media send policy
+
+其中 `forwarded input` 目前更值得優先考慮的是作為輸入能力，而不是 bot 輸出轉發能力。
+
+也就是說，若之後真的支持 Telegram 轉發，應先把它當成 Telegram adapter 的輸入能力來設計，等它在 Telegram 內的語義收斂後，再決定是否值得提升成更一般的 runtime control / delivery 概念。
 
 ## 遷移目標
 
@@ -100,8 +135,8 @@
 - image upload / pending batch
 - topic title 更新
 - markdown renderer
-- forwarded message / relay 語義
-- `main chat` 作為 control 面板時，forwarded input 要如何指向目標 workspace thread
+- `forwarded input` 的語義
+- `main chat` 作為 control 面板時，`forwarded input` 要如何指向目標 workspace thread
 
 這一階段的成果應該是一張責任表，而不是立即重構。
 
@@ -225,19 +260,17 @@ core runtime 應負責：
 - preview 在 custom app 裡應該是 delta stream、replace stream，還是 terminal-style replay？
 - Telegram adapter 是否仍然是預設 entrypoint，還是未來要支援多 adapter 同時註冊？
 - 近期 Telegram 是否應補上 Codex 工作模型與 execution mode 的設定入口？
-- Telegram 轉達能力若要支持，範圍是：
-  - 近期是否只先支持把 forwarded message 當成輸入
-  - 而不先支持把 bot 輸出轉達到其他 Telegram thread / chat？
-- 若支持 forwarded input，目標 thread 應如何決定：
+- `forwarded input` 若要支持，近期是否只先支持把 forwarded message 當成輸入，而不先支持 bot 輸出轉發到其他 Telegram thread / chat？
+- 若支持 `forwarded input`，目標 thread 應如何決定：
   - 由 `main chat` 的顯式 command / button 先選定目標 thread
   - 還是由轉發時附帶某種 thread handle / reply target
   - 還是維持某個「目前選中的 workspace thread」狀態？
-- 若支持 Telegram 轉達，forward metadata 應保留到什麼程度，哪些部分只留在 adapter，哪些部分需要進入 runtime event / delivery model？
+- 若支持 `forwarded input`，forward metadata 應保留到什麼程度，哪些部分只留在 adapter，哪些部分需要進入 runtime event / delivery model？
 
 ## 建議的下一步
 
 1. 先把 owner authority 從 Telegram / `hcodex` 路徑中收斂出來。
 2. 再列一份目前 Telegram-only 行為清單。
-3. 把 command、preview、renderer、title update、forwarded message / relay 分別標記為 adapter 或 core。
-4. 定義最小 protocol 後，讓 Telegram 先改走新邊界，並優先補齊 Telegram 自己的 control / delivery surface。
-5. 等 Telegram adapter 足夠完整後，再決定 Telegram 轉達能力是否只留在 adapter，或需要進一步掛進更正式的 delivery model。
+3. 把 command、preview、renderer、title update、`forwarded input` 分別標記為 adapter 或 core。
+4. 定義最小 protocol 後，讓 Telegram 先改走新邊界，並優先補齊 Telegram 自己的 observability / control / delivery surface。
+5. 等 Telegram adapter 足夠完整後，再決定 `forwarded input` 是否只留在 adapter，或需要進一步掛進更正式的 delivery model。
