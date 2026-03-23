@@ -76,6 +76,9 @@
   - management API 的 thread / workspace / runtime views 已開始透過共享 protocol/view builder 收斂到同一套 canonical state sources
   - `binding_status=conflict`、`run_status=unbound` 這類過渡值已退出 canonical state axes
   - 但它仍未成為所有 surface 的完整唯一 source of truth，尤其 typed event stream 與 observability 仍待收斂
+- [workspace-runtime-surface.md](/Volumes/Data/Github/threadBridge/docs/plan/workspace-runtime-surface.md)
+  - `.threadbridge/`、managed appendix、`hcodex`、tool request/result lane 已形成實際 workspace runtime surface
+  - 但按 project type / workspace profile 選擇啟用 tools 的模型仍未收斂
 
 ## 純草稿
 
