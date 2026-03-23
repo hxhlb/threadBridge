@@ -69,7 +69,7 @@
   - workspace-local `workspace-config.json`、`ExecutionMode` enum、session execution snapshot 已落地
   - management API / launch-config / web UI 已開始暴露 workspace mode、current session mode 與 `mode_drift`
   - `hcodex` 與 Telegram turn/resume 已開始按 workspace mode 收斂到 `full_auto` 或 `yolo`
-  - 但 Telegram 是否允許直接切 mode、是否支持更多 profile、以及 mode 與 observability / audit 的更深層關聯仍未收斂
+  - 但 Telegram 是否允許直接切 mode、user-facing naming 是否應是 `Plan / Normal`、以及 `Codex 工作模型` 是否與 mode 分離對外暴露，仍未收斂
 - [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
   - canonical `lifecycle_status` / `binding_status` / `run_status` 已開始透過 shared resolver 進入代碼
   - ordinary Telegram gate、management API、topic title 已開始共用同一套 canonical state axes
@@ -82,6 +82,7 @@
 - [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
   - desktop runtime / web 管理面的 session 級 observability 主草稿
   - 目標是提供 working session 的可打開入口與 timeline / artifact view
+  - 近期已確認應優先補 session-first API，而不是繼續停留在 thread transcript feed
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
   - Telegram outbound delivery 主規格草稿
   - 也承接 busy / running 狀態訊息上的互動 control surface 規格
@@ -99,9 +100,12 @@
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
   - core runtime / adapter 抽象化草稿
   - owner 收斂應視為這條抽象化路線的高優先級前置工作
+  - 近期應先服務 Telegram 路徑收斂，而不是直接追求多 IM / 多 adapter 產品化
 - [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
   - Telegram adapter 遷移草稿
   - owner authority 應先從 Telegram 路徑抽離，再做更完整的 adapter migration
+  - 近期優先級應是補齊 Telegram 自身適配，而不是先做第二個 IM adapter 驗證
+  - 近期也可評估適配 Telegram 原生轉發輸入模式，作為 `main chat = control 面板` 下的補充輸入路徑
 
 ## 主規格
 

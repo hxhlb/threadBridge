@@ -44,6 +44,12 @@
 - mode 與更完整 observability / audit retention 的關聯仍未 formalize
 - mode 是否允許未來出現 session-level override，仍是開放問題
 
+目前新增記錄的產品想法是：
+
+- Telegram 之後應能直接設定 Codex 的 execution mode
+- 但 Telegram user-facing 文案是否應顯示為 `Plan / Normal`，還是沿用 `full_auto / yolo`，目前仍未定案
+- `execution mode` 與 `Codex 工作模型` 應明確視為兩個不同控制面，不應混成同一個切換器
+
 ## 問題
 
 如果 `threadBridge` 要同時支撐：
@@ -83,6 +89,12 @@
 - workspace 有一個目標 execution contract
 - active session 有一個目前 execution snapshot
 - 兩者不一致時，以 workspace mode 為收斂目標
+
+但近期也新增一個需要在後續規格中明確處理的方向：
+
+- Telegram 不應永遠只做 mode consumer
+- 當 core runtime / protocol 對這個控制面收斂後，Telegram 應能成為同一套 mode control action 的一個 adapter surface
+- 也就是說，未來若 Telegram 可切 mode，它應寫回同一份 workspace/runtime contract，而不是私下帶 CLI flag
 
 ## v1 資料模型
 
@@ -141,6 +153,11 @@ v1 沒有正式落地 `mode_source` 或 arbitrary launch override。
 1. execution mode 先進入 core runtime 型別與 repository/session model
 2. 再進入 management API、launch-config、web UI 與 tray 表達
 3. Telegram 目前只消費與收斂 workspace mode，不直接暴露切 mode 的 adapter command
+
+這裡要再補一個近期產品方向：
+
+- 之後若 Telegram 真的暴露 mode 切換，它也應被理解為 owner/runtime 已授權的 control surface
+- 不應回退成「Telegram 自己決定 approval / sandbox」的舊邏輯
 
 ## 對管理面的影響
 
@@ -206,6 +223,8 @@ web 管理面現在也已提供：
 ## 開放問題
 
 - Telegram 是否應提供只讀 mode 顯示，還是未來允許直接切 mode？
+- 若 Telegram 真的提供 mode 切換，user-facing naming 應該是 `Plan / Normal`、`full_auto / yolo`，還是其他更穩定的高階命名？
+- `Codex 工作模型` 是否也應由 Telegram 提供對應設定入口，且與 execution mode 明確拆成兩條 control surface？
 - execution mode 是否需要額外的 audit retention 或更長 process transcript 保留？
 - 未來若 Codex 支持更多 approval / sandbox 組合，threadBridge 是否仍只暴露高階 mode？
 - 是否需要在 launch surface 正式支持一次性 override，而不是永遠以 workspace mode 為準？
@@ -215,5 +234,6 @@ web 管理面現在也已提供：
 
 1. 更新其餘 plan 文檔，把 execution mode 從「純草稿」改成「部分落地的正式 runtime 語義」。
 2. 在 `runtime-protocol` 補齊 execution mode 相關 view / action / endpoint。
-3. 決定 Telegram adapter 是否需要只讀 mode 展示。
-4. 若未來真的引入更多 profile，再決定是否需要 `mode_source`、launch override 或更細的 audit policy。
+3. 決定 Telegram adapter 是否只做 mode 展示，還是進一步提供 mode 切換；若提供，也要先固定 user-facing naming。
+4. 另外補一份與 execution mode 分離的 `Codex 工作模型` control 規格，不要把 model 與 mode 混在同一份開關語意裡。
+5. 若未來真的引入更多 profile，再決定是否需要 `mode_source`、launch override 或更細的 audit policy。

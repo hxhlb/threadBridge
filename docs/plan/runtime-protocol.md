@@ -31,6 +31,12 @@
 - `conflict` 已明確保留為 workspace-view 的獨立欄位，而不是 `binding_status` 的另一個值
 - 但 `GET /api/events` 目前仍只是 invalidation-style SSE；web UI 仍主要把它當成 refresh signal，而不是正式 typed event stream
 
+目前新增記錄的近期方向是：
+
+- Telegram 之後應能透過正式 control action 設定 Codex 工作模型
+- Telegram 之後也應能透過正式 control action 設定 execution mode
+- 這兩者都不應以 Telegram-only command flag 的形式存在，而應先收斂成 runtime protocol 的控制面
+
 ## 問題
 
 如果 `threadBridge` 要同時支撐：
@@ -128,6 +134,7 @@
 - `workspace_cwd`
 - `title`
 - `thread_key`
+- `codex_model`
 - `binding_status`
 - `run_status`
 - `current_codex_thread_id`
@@ -146,6 +153,13 @@
 - `heartbeat_last_checked_at`
 - `heartbeat_last_error`
 - `session_broken_reason`
+
+這裡的 `codex_model` 指的是：
+
+- 目前 workspace / active session 想收斂到的 Codex 工作模型
+- 它和 `execution_mode` 是兩個不同維度
+- 前者回答「用哪個模型」
+- 後者回答「以什麼 approval / sandbox contract 執行」
 
 這裡目前要明確承認一件事：
 
@@ -246,6 +260,8 @@ v1 至少定義：
 - `launch_hcodex_new`
 - `launch_hcodex_continue_current`
 - `launch_hcodex_resume`
+- `update_workspace_execution_mode`
+- `update_workspace_codex_model`
 - `archive_thread`
 - `restore_thread`
 - `update_managed_codex`
@@ -258,6 +274,11 @@ v1 至少定義：
 
 - `reconnect_codex`
 - `archive_thread`
+
+這裡近期要明確固定一個原則：
+
+- Telegram 若未來提供「切模型」或「切模式」能力，應只是這些 control action 的一個 adapter surface
+- 不應再新增只服務 Telegram 的私有 runtime 設定語意
 - `restore_thread`
 
 但主規格應優先表達它們的語義，而不是把歷史命名直接當成最終 protocol vocabulary。

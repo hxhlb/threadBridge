@@ -32,6 +32,12 @@
 - working session observability 應優先落在 machine-local 的 desktop runtime / 本地 web 管理面
 - 不應把 Telegram Web App 視為近期前提
 
+目前新增確認的近期落地方向是：
+
+- 不先做完整 observability 頁面，也不先擴大 thread-level transcript feed
+- 先把 `runtime-protocol` 與這份文檔接起來，補出 session-first 的正式 query surface
+- 先讓 management API / web 管理面可以直接打開 `session_id`，而不是讓前端自行從 thread transcript 分組
+
 ## 問題
 
 現在已經可以看到一些 transcript，但還缺少「某一個 working session 到底發生了什麼」的直接入口。
@@ -350,6 +356,42 @@ web UI 不應直接讀這些檔案。
 
 但 v1 不需要先把 route 命名完全定死；先固定 session view model 更重要。
 
+## 近期建議的最小落地切片
+
+這裡先明確記錄一個近期決策：
+
+- 下一步優先做 session-first API
+- 不優先做完整 observability UI
+- 也不優先把更多資料繼續堆進 thread transcript feed
+
+原因是：
+
+- 目前代碼已經有 `session_id`、`transcript-mirror.jsonl`、process/final transcript 區分、以及 management transcript read API
+- 但 UI 若想回答「現在是哪個 session 在跑」、「這次 session 做了哪些 tool」、「這次 session 的錯誤與 artifact 是什麼」，仍需要自己從 thread feed 推導
+- 這代表真正缺的不是更多 transcript，而是把既有資料整理成 session-first view
+
+因此近期較合理的最小切片應是：
+
+1. 在 `runtime_protocol` 中新增 `WorkingSessionSummaryView`
+2. 在 `runtime_protocol` 中新增 `WorkingSessionRecordView`
+3. 補 `GET /api/threads/:thread_key/sessions`
+4. 補 `GET /api/threads/:thread_key/sessions/:session_id/records`
+5. 初版先直接重用既有 `TranscriptMirrorEntry` 與 session artifact 關聯，不要求先引入新的 event store
+
+這個切片的目標不是一步到位做完整 session detail，而是先把：
+
+- `session_id`
+- `run_status`
+- `origin`
+- `delivery`
+- `phase`
+- `last_error`
+- artifact refs
+
+整理成管理面可以直接消費的 read-only view。
+
+換句話說，`GET /api/threads/:thread_key/transcript` 在近期仍保留，但應明確視為底層材料，而不是 session observability 的最終入口。
+
 ## 與其他計劃的關係
 
 - [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
@@ -374,8 +416,8 @@ web UI 不應直接讀這些檔案。
 
 ## 建議的下一步
 
-1. 先把 `session_id` 從 transcript/mirror 提升為管理面可直接打開的一級實體。
-2. 在 `runtime_protocol` 中新增 `WorkingSessionSummaryView` 與 `WorkingSessionRecordView`。
-3. 先做 web 管理面的只讀 session pane，不急著加入 control action。
-4. 把 tool request/result/outbox 與 transcript mirror 建立最小 artifact 關聯。
-5. 等 session detail 穩定後，再決定是否需要 read-only live stream 或 terminal replay。
+1. 先把 `session_id` 從 transcript/mirror 提升為 management API 可直接查詢的一級實體。
+2. 在 `runtime_protocol` 中新增 `WorkingSessionSummaryView` 與 `WorkingSessionRecordView`，避免 UI 自行從 thread feed 分組。
+3. 先補 `GET /api/threads/:thread_key/sessions` 與 `GET /api/threads/:thread_key/sessions/:session_id/records`。
+4. 初版 timeline 先保留 `origin` / `delivery` / `phase`，不要過早把 process/final 差異抹平。
+5. 把 tool request/result/outbox 與 transcript mirror 建立最小 artifact 關聯，再決定是否需要更完整的 session detail、live stream 或 terminal replay。

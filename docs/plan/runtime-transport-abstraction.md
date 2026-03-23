@@ -43,6 +43,12 @@
 
 - owner 責任收斂應視為這條抽象化路線的高優先級前置工作
 
+目前也新增確認一個近期產品判斷：
+
+- 這條抽象化路線仍成立，但近期不應以「接其他 IM」作為主要驅動
+- `threadBridge` 目前仍應先以完整適配 Telegram 為主
+- 因此 transport abstraction 在近期更像是整理 core / adapter 邊界的語言工具，而不是立即追求多 client 產品化
+
 原因是：
 
 - 只要 Telegram runtime、`hcodex` 或其他 surface 仍能各自補拉 shared runtime，它們就還帶著 runtime authority
@@ -203,6 +209,11 @@ runtime 對 adapter 應該提供穩定語意，而不是平台特定 callback：
 - tool runtime 協調
 - session broken 驗證
 
+但就近期優先級而言：
+
+- custom app / 第二 adapter 仍屬遠期價值
+- 當前更值得先把 Telegram 路徑上的 control、observability、delivery、設定面補完整
+
 ## 風險
 
 - 如果抽象做得太早、太大，可能會把現有 Telegram 流程打散
@@ -222,5 +233,5 @@ runtime 對 adapter 應該提供穩定語意，而不是平台特定 callback：
 1. 先把 runtime owner authority 從 Telegram / `hcodex` 路徑中收斂出來。
 2. 再明確列出目前 `telegram_runtime/` 內哪些責任應搬到 core。
 3. 定義一組最小 runtime event 與 input request 型別。
-4. 先把 Telegram renderer / command router 收斂到 adapter 邊界。
-5. 實作第二個最小 adapter 來驗證抽象，而不是只停留在理論上。
+4. 先把 Telegram renderer / command router / mode-model control surface 收斂到 adapter 邊界。
+5. 等 Telegram 這條主路徑收斂後，再評估是否需要實作第二個最小 adapter 驗證抽象。

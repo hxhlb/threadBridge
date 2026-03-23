@@ -19,6 +19,14 @@
 
 - 與 `runtime-state-machine` 的完整 API / 文檔收斂
 
+目前新增記錄的一個 Telegram adapter 相關想法是：
+
+- 在現行 `Telegram thread = 工作 thread` 模型下，`main chat` 已更接近 control 面板
+- 這使得使用者不一定適合直接在 `main chat` 做普通工作輸入
+- 因此後續可評估一種 `forwarded input` 模式：
+  - 允許使用者把 `main chat` 裡的轉發訊息投遞到某個目標 workspace thread
+  - 讓 `main chat` 維持 control surface，同時保留較順手的輸入入口
+
 ## 核心模型
 
 應固定用下面這幾層理解：

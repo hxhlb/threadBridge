@@ -12,6 +12,20 @@
 
 但整體架構仍未完成 Telegram adapter 化。
 
+目前新增確認的優先級調整是：
+
+- 近期不以「多 IM / 第二個聊天平台」為主要牽引目標
+- `threadBridge` 目前沒有明確要接其他 IM 的產品計畫
+- 因此更合理的近期方向是先把 Telegram adapter 做完整，再回頭看是否值得做更廣泛的 adapter 驗證
+
+目前也新增記錄一個 Telegram-specific 產品想法：
+
+- 後續可評估適配 Telegram 的原生「轉達 / forward」能力
+- 目前更具體的想法是：適配 Telegram 的「轉發輸入」模式
+- 背景是現在採用 `Telegram thread = 工作 thread` 模型後，`main chat` 更像 control 面板，普通輸入空間變得不自然
+- 因此可考慮允許用戶在 `main chat` 透過轉發訊息，把內容投遞到目標 workspace thread 當成輸入
+- 這件事目前先視為 Telegram adapter 能力面，不先提升成 transport-neutral core 語義
+
 ## 問題
 
 如果方向是把 `threadBridge` 變成透明協議層，那目前最大的實際問題不是理論，而是：
@@ -26,7 +40,7 @@
 
 ## 方向
 
-遷移策略應該是：
+遷移策略長期上仍應是：
 
 - 先抽語意
 - 再搬責任
@@ -45,6 +59,19 @@
 
 - 先做完整 custom app
 - 或先大規模重寫所有 Telegram runtime 模組
+
+近期更務實的意思是：
+
+- 先補齊 Telegram 自己還缺的 control / observability / delivery / 設定面
+- 先讓 Telegram 成為一個完整、乾淨、邊界更明確的 adapter
+- 而不是為了抽象而提早追求第二個 IM adapter
+
+這也包括一類目前尚未 formalize 的 Telegram-only surface：
+
+- forwarded message / relay 類能力
+- 其中近期更值得優先考慮的是 forwarded message 作為輸入能力，而不是 bot 輸出轉達能力
+- 也就是說，若之後真的支持 Telegram 轉達，應先把它當成 Telegram adapter 的輸入能力來設計
+- 等它在 Telegram 內的語義收斂後，再決定是否值得提升成更一般的 runtime control / delivery 概念
 
 ## 遷移目標
 
@@ -73,6 +100,8 @@
 - image upload / pending batch
 - topic title 更新
 - markdown renderer
+- forwarded message / relay 語義
+- `main chat` 作為 control 面板時，forwarded input 要如何指向目標 workspace thread
 
 這一階段的成果應該是一張責任表，而不是立即重構。
 
@@ -140,6 +169,8 @@ core runtime 應負責：
 - core runtime 是否真的不依賴 Telegram
 - protocol 是否足夠支撐另一個 client
 
+但這一階段目前應降為遠期驗證，而不是近期主線。
+
 ### Phase 6：再決定 custom app 的正式形態
 
 當第二個 adapter 跑通後，再決定：
@@ -193,11 +224,20 @@ core runtime 應負責：
 - custom app 是否需要 topic/title 這種概念，還是只需要 thread label？
 - preview 在 custom app 裡應該是 delta stream、replace stream，還是 terminal-style replay？
 - Telegram adapter 是否仍然是預設 entrypoint，還是未來要支援多 adapter 同時註冊？
+- 近期 Telegram 是否應補上 Codex 工作模型與 execution mode 的設定入口？
+- Telegram 轉達能力若要支持，範圍是：
+  - 近期是否只先支持把 forwarded message 當成輸入
+  - 而不先支持把 bot 輸出轉達到其他 Telegram thread / chat？
+- 若支持 forwarded input，目標 thread 應如何決定：
+  - 由 `main chat` 的顯式 command / button 先選定目標 thread
+  - 還是由轉發時附帶某種 thread handle / reply target
+  - 還是維持某個「目前選中的 workspace thread」狀態？
+- 若支持 Telegram 轉達，forward metadata 應保留到什麼程度，哪些部分只留在 adapter，哪些部分需要進入 runtime event / delivery model？
 
 ## 建議的下一步
 
 1. 先把 owner authority 從 Telegram / `hcodex` 路徑中收斂出來。
 2. 再列一份目前 Telegram-only 行為清單。
-3. 把 command、preview、renderer、title update 分別標記為 adapter 或 core。
-4. 定義最小 protocol 後，讓 Telegram 先改走新邊界。
-5. 做一個最小第二 adapter 驗證整個抽象。
+3. 把 command、preview、renderer、title update、forwarded message / relay 分別標記為 adapter 或 core。
+4. 定義最小 protocol 後，讓 Telegram 先改走新邊界，並優先補齊 Telegram 自己的 control / delivery surface。
+5. 等 Telegram adapter 足夠完整後，再決定 Telegram 轉達能力是否只留在 adapter，或需要進一步掛進更正式的 delivery model。
