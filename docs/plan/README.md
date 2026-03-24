@@ -97,6 +97,7 @@
   - Telegram outbound delivery 主規格已從純草稿進入部分落地
   - workspace outbox `surface`、最小檔案大小 preflight、photo -> document fallback、以及 oversized attachment/document warning path 已開始落地
   - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
+  - 已補記一個明確缺口：`codex mirror -> Telegram` 的 draft message 尚未實作 heartbeat，因此長時間 draft 仍會自動消失
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
 
 ## 純草稿
