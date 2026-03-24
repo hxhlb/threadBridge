@@ -44,7 +44,8 @@
 - [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
   - `/add_workspace`、`/new_session`、`/repair_session` 的正式生命週期已存在
   - `current_codex_thread_id` 已成為 canonical pointer，`tui_active_codex_thread_id` / adoption 也已進入正式 runtime
-  - Telegram thread 內的一般輸入與 session-control gate 已開始直接讀 canonical state
+  - Telegram thread 內的一般輸入、圖片分析、session-control gate、以及 stale busy reconciliation 已開始直接讀 canonical state
+  - `current_codex_thread_id` 的存在已不再被視為等於「目前一定可直接 resume」；usable continuity 仍取決於 canonical `binding_status`
   - canonical continuity mutation 已開始透過 repository 內部的共用 transition path 收斂
   - 已新增記錄：Telegram desktop launch command 應作為獨立 control surface，而不是改寫 `/new_session`
   - 剩餘工作主要是兼容層與狀態語義收尾
@@ -55,6 +56,8 @@
   - `GET /api/threads` 已開始對外暴露 canonical `lifecycle_status`，並補齊 `chat_id` / `message_thread_id` / `session_broken_reason` / `last_verified_at` / `last_codex_turn_at`
   - runtime health 已改成 owner-canonical，`workspace_state` 僅保留 debug/observation 語義
   - `runtime_protocol` 共享 view builder 已開始把 `ThreadStateView` / `ManagedWorkspaceView` / `ArchivedThreadView` / `RuntimeHealthView` / `WorkingSession*View` 從 transport 層抽離
+  - broken thread count、workspace recovery hint、以及 working session broken error 聚合，已開始改以 canonical `binding_status` 判定
+  - `session_broken` / `last_used_at` / `last_error` 仍保留為 compatibility/debug 欄位，但不再應作為新的主判斷入口
   - `GET /api/events` 已開始輸出 typed SSE event，而不是每輪都推整包 snapshot
   - web UI 已開始直接套用 top-level typed SSE payload，並只對 transcript / sessions 做 targeted refetch
   - 但 protocol 仍未收斂成完整 transport-neutral 契約，尤其更細的 observability record 仍未走完整增量 event 模型
@@ -82,13 +85,14 @@
   - 但 Telegram 是否允許直接切 mode、user-facing naming 是否應是 `Plan / Normal`、以及 `Codex 工作模型` 是否與 mode 分離對外暴露，仍未收斂
 - [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
   - canonical `lifecycle_status` / `binding_status` / `run_status` 已開始透過 shared resolver 進入代碼
-  - ordinary Telegram gate、management API、topic title 已開始共用同一套 canonical state axes
+  - ordinary Telegram gate、圖片分析、stale busy reconciliation、management API、topic title 已開始共用同一套 canonical state axes
   - management API 的 thread / workspace / runtime views 已開始透過共享 protocol/view builder 收斂到同一套 canonical state sources
   - repository write-side 的 canonical mutation 已開始透過 transition service 收斂
+  - workspace recovery hint、broken thread count、以及 working session broken error 聚合，已開始從 canonical `binding_status` 派生
   - `/api/events` 已開始從 canonical view diff 輸出 typed SSE event
   - web 管理面已開始直接套用 top-level typed payload
   - `binding_status=conflict`、`run_status=unbound` 這類過渡值已退出 canonical state axes
-  - `session_broken` 仍保留為 compatibility/debug 欄位，但 canonical 判斷已收斂回 `binding_status`
+  - `session_broken` 仍保留為 compatibility/debug 欄位，但 canonical 判斷已收斂回 `binding_status`；`current_codex_thread_id` 也不再被等同於「一定可直接 resume 的 usable continuity」
   - 但它仍未成為所有 surface 的完整唯一 source of truth，尤其更細的 event payload coverage 與 observability 仍待收斂
 - [workspace-runtime-surface.md](/Volumes/Data/Github/threadBridge/docs/plan/workspace-runtime-surface.md)
   - `.threadbridge/`、managed appendix、`hcodex`、tool request/result lane 已形成實際 workspace runtime surface

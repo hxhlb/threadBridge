@@ -12,7 +12,7 @@ use crate::repository::{
     TranscriptMirrorRole,
 };
 use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus, WorkspaceRuntimeHeartbeat};
-use crate::thread_state::resolve_thread_state;
+use crate::thread_state::{BindingStatus, resolve_binding_status, resolve_thread_state};
 use crate::workspace_status::read_session_status;
 
 #[derive(Debug, Clone, Serialize)]
@@ -286,14 +286,14 @@ pub async fn build_workspace_views(
             .await
             .unwrap_or_default();
         let resolved_state = resolve_thread_state(&record.metadata, Some(&binding)).await?;
-        let session_broken = resolved_state.is_broken();
+        let session_broken = resolved_state.binding_status == BindingStatus::Broken;
         let session_broken_reason = binding
             .session_broken_reason
             .clone()
             .or(record.metadata.session_broken_reason.clone());
         let recovery_hint = workspace_recovery_hint(
             false,
-            session_broken,
+            resolved_state.binding_status.as_str(),
             session_broken_reason.as_deref(),
             &runtime_status,
             binding.tui_session_adoption_pending,
@@ -338,7 +338,7 @@ pub async fn build_workspace_views(
                 item.conflict = true;
                 item.recovery_hint = workspace_recovery_hint(
                     true,
-                    item.session_broken,
+                    item.binding_status,
                     item.session_broken_reason.as_deref(),
                     &WorkspaceRuntimeHealth {
                         app_server_status: item.app_server_status,
@@ -563,7 +563,7 @@ async fn build_working_session_aggregates(
             .history_updated_at = Some(session.updated_at);
     }
 
-    if binding.session_broken {
+    if resolve_binding_status(&record.metadata, Some(binding)) == BindingStatus::Broken {
         if let Some(session_id) = binding.current_codex_thread_id.as_ref() {
             let reason = binding.session_broken_reason.clone().or_else(|| {
                 if record.metadata.session_broken {
@@ -722,7 +722,7 @@ pub fn build_runtime_health(
         management_bind_addr,
         broken_threads: workspaces
             .iter()
-            .filter(|workspace| workspace.session_broken)
+            .filter(|workspace| workspace.binding_status == "broken")
             .count(),
         running_workspaces: workspaces
             .iter()
@@ -796,7 +796,7 @@ pub async fn read_workspace_runtime_health(
 
 pub fn workspace_recovery_hint(
     conflict: bool,
-    session_broken: bool,
+    binding_status: &str,
     session_broken_reason: Option<&str>,
     runtime_status: &WorkspaceRuntimeHealth,
     adoption_pending: bool,
@@ -835,7 +835,7 @@ pub fn workspace_recovery_hint(
     let has_live_tui_session = tui_active_codex_thread_id
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
-    if session_broken && has_live_tui_session {
+    if binding_status == "broken" && has_live_tui_session {
         return Some(
             "The saved Codex session is no longer the best recovery target, but this workspace has a live TUI session. Use Adopt TUI to promote that live session, or New Session to start fresh."
                 .to_owned(),
@@ -852,7 +852,7 @@ pub fn workspace_recovery_hint(
                 .to_owned(),
         );
     }
-    if session_broken {
+    if binding_status == "broken" {
         return Some(
             "Codex continuity is marked broken. Use Repair Session after the runtime surface is healthy."
                 .to_owned(),
@@ -1080,7 +1080,7 @@ mod tests {
                 current_codex_thread_id: Some("thr-a".to_owned()),
                 tui_active_codex_thread_id: None,
                 tui_session_adoption_pending: false,
-                session_broken: false,
+                session_broken: true,
                 last_used_at: None,
                 conflict: true,
                 app_server_status: "running",

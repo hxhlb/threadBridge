@@ -270,7 +270,15 @@ async fn reconcile_stale_bot_busy_sessions_for_repository(
             report.skipped_threads += 1;
             continue;
         };
-        let Some(session_id) = usable_bound_session_id(Some(&binding)) else {
+        let binding_status = resolve_binding_status(&record.metadata, Some(&binding));
+        let Some(session_id) = usable_bound_session_id(
+            crate::thread_state::ResolvedThreadState {
+                lifecycle_status: resolve_lifecycle_status(&record.metadata),
+                binding_status,
+                run_status: crate::thread_state::RunStatus::Idle,
+            },
+            Some(&binding),
+        ) else {
             report.skipped_threads += 1;
             continue;
         };

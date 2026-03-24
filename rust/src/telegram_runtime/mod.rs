@@ -528,10 +528,29 @@ pub(crate) fn disabled_link_preview_options() -> LinkPreviewOptions {
     }
 }
 
-pub(crate) fn usable_bound_session_id(session: Option<&SessionBinding>) -> Option<&str> {
+pub(crate) fn current_bound_session_id(session: Option<&SessionBinding>) -> Option<&str> {
     session
-        .filter(|session| !session.session_broken)
         .and_then(|session| session.current_codex_thread_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn usable_bound_session_id(
+    state: ResolvedThreadState,
+    session: Option<&SessionBinding>,
+) -> Option<&str> {
+    if state.binding_status != BindingStatus::Healthy {
+        return None;
+    }
+    current_bound_session_id(session)
+}
+
+fn healthy_binding_hint(session: Option<&SessionBinding>) -> &'static str {
+    if current_bound_session_id(session).is_some() {
+        "This workspace already has a usable Codex session."
+    } else {
+        "This workspace is missing a usable Codex session id. Use /new_session to start a fresh one."
+    }
 }
 
 pub(crate) fn workspace_path_from_binding(session: &SessionBinding) -> Result<PathBuf> {
@@ -544,12 +563,7 @@ pub(crate) fn workspace_path_from_binding(session: &SessionBinding) -> Result<Pa
 
 pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static str {
     match session {
-        Some(session) if session.session_broken => {
-            "This workspace's Codex session is invalid. Use /repair_session to verify it again or /new_session to start a fresh one for the same workspace."
-        }
-        Some(_) => {
-            "This workspace is missing a usable Codex session id. Use /new_session to start a fresh one."
-        }
+        Some(_) => healthy_binding_hint(session),
         None => {
             "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
         }
@@ -567,8 +581,8 @@ pub(crate) fn session_binding_hint_for_state(
         BindingStatus::Unbound => {
             "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
         }
-        BindingStatus::Healthy if usable_bound_session_id(session).is_none() => {
-            "This workspace is missing a usable Codex session id. Use /new_session to start a fresh one."
+        BindingStatus::Healthy if usable_bound_session_id(state, session).is_none() => {
+            healthy_binding_hint(session)
         }
         BindingStatus::Healthy => session_binding_hint(session),
     }
@@ -661,7 +675,7 @@ async fn should_route_telegram_input_to_live_tui_session(
     let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref() else {
         return Ok(false);
     };
-    if Some(tui_session_id) == usable_bound_session_id(Some(binding)) {
+    if Some(tui_session_id) == current_bound_session_id(Some(binding)) {
         return Ok(false);
     }
     let workspace_path = workspace_path_from_binding(binding)?;
@@ -781,9 +795,10 @@ async fn read_owner_managed_workspace_runtime(
 mod tests {
     use super::{
         AppState, Command, RuntimeOwnershipMode, TelegramSystemIntent, TelegramTextRole,
-        command_list, format_role_text, format_system_text,
+        command_list, current_bound_session_id, format_role_text, format_system_text,
         maybe_route_telegram_input_to_tui_session, session_binding_hint_for_state,
         should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
+        usable_bound_session_id,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
     use crate::codex::CodexRunner;
@@ -917,6 +932,34 @@ mod tests {
         let hint = session_binding_hint_for_state(state, None);
         assert!(hint.contains("/repair_session"));
         assert!(hint.contains("/new_session"));
+    }
+
+    #[test]
+    fn usable_bound_session_id_requires_healthy_binding_status() {
+        let binding = SessionBinding::fresh(
+            Some("/tmp/workspace".to_owned()),
+            Some("thr_current".to_owned()),
+            crate::execution_mode::SessionExecutionSnapshot::from_mode(
+                crate::execution_mode::ExecutionMode::FullAuto,
+            ),
+        );
+        let healthy = ResolvedThreadState {
+            lifecycle_status: LifecycleStatus::Active,
+            binding_status: BindingStatus::Healthy,
+            run_status: RunStatus::Idle,
+        };
+        let broken = ResolvedThreadState {
+            lifecycle_status: LifecycleStatus::Active,
+            binding_status: BindingStatus::Broken,
+            run_status: RunStatus::Idle,
+        };
+
+        assert_eq!(
+            usable_bound_session_id(healthy, Some(&binding)),
+            Some("thr_current")
+        );
+        assert_eq!(usable_bound_session_id(broken, Some(&binding)), None);
+        assert_eq!(current_bound_session_id(Some(&binding)), Some("thr_current"));
     }
 
     #[tokio::test]

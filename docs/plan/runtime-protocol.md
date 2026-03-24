@@ -32,6 +32,8 @@
 - `ThreadStateView` 已開始對外暴露 canonical `lifecycle_status`
 - `binding_status` / `run_status` 已開始透過 shared resolver 收斂成同一套 wire semantics
 - `conflict` 已明確保留為 workspace-view 的獨立欄位，而不是 `binding_status` 的另一個值
+- runtime health 的 broken thread count、workspace recovery hint、以及 working session broken error 聚合，已開始從 canonical `binding_status` 派生
+- `session_broken`、`last_used_at`、`last_error` 這些欄位目前仍保留，但應理解成輸出相容 alias，而不是 view / UI / aggregation 的主判斷來源
 - `GET /api/events` 已開始輸出 typed SSE event，而不是每輪都推整包 snapshot
 - 目前已落地的 event kind 包括：
   - `setup_changed`
@@ -136,6 +138,10 @@
 - `last_error`
 - `session_broken` 等衍生欄位若仍存在於其他 view，亦屬 compatibility/debug，不是新的 canonical axis
 
+這裡再補一個行為要求：
+
+- `ThreadStateView` 的 consumer 不應因為 `last_error` 或任何 `session_broken` alias 存在，就繞過 `binding_status` / `run_status` 的 canonical 判定
+
 ### 2. `ArchivedThreadView`
 
 至少包含：
@@ -160,6 +166,7 @@
   - 代表 active Codex turn 是否 busy，不等於 local session claim 是否存在
 - `session_broken`
   - 目前仍作為 compatibility/debug 欄位存在，但 UI 與後續文檔應以 `binding_status=broken` 為 canonical 判斷
+- broken count、recovery hint、以及其他 workspace-level 衍生判斷，也應以 `binding_status` 為準，而不是直接依賴 `session_broken`
 - repository 內部的 transition service 不改變這個對外語義；它只是把 write-side state mutation 收斂到同一條內部路徑
 
 至少包含：
@@ -204,6 +211,12 @@
   - owner 尚未提供 heartbeat，或 desktop owner 根本不存在
 
 workspace 內現有 artifact / endpoint state 可以作為 debug observation，但不再作 primary health fallback。
+
+這裡也要固定一個 compatibility 邊界：
+
+- `session_broken`
+  - 可以繼續保留在 wire payload 供舊 consumer/debug 使用
+  - 但不應再被管理面 action label、recovery hint、runtime health count、或其他新 aggregation 當成 primary input
 
 ### 4. `RecentCodexSessionView`
 

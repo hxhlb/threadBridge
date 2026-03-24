@@ -456,7 +456,7 @@ pub(crate) async fn queue_image_for_thread(
         .await?;
         return Ok(());
     }
-    if usable_bound_session_id(session.as_ref()).is_none() {
+    if usable_bound_session_id(resolved_state, session.as_ref()).is_none() {
         send_scoped_message(
             bot,
             msg.chat.id,
@@ -563,7 +563,7 @@ pub(crate) async fn analyze_pending_image_batch(
         maybe_route_telegram_input_to_tui_session(state, record, session).await?;
     let (resolved_state, blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
-    let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
+    let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
                 .text(session_binding_hint_for_state(

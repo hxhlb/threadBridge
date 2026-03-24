@@ -10,8 +10,10 @@
 - `healthy` / `broken` / `unbound` 的 session 綁定語義
 - shared thread-state resolver 已開始成為 `lifecycle_status` / `binding_status` / `run_status` 的共同判定來源
 - ordinary Telegram command / text / image gate 已開始改走 shared resolver，而不是各自直接讀 `Archived` / `session_broken`
+- Telegram 一般輸入、圖片分析、session-control gate、以及 stale busy reconciliation 在判定「目前 session 是否可直接使用」時，已更明確回到 canonical `binding_status`
 - management API 的 `ThreadStateView` 已開始直接暴露 canonical `lifecycle_status` / `binding_status` / `run_status`
 - management API 的 `ThreadStateView` / `ManagedWorkspaceView` / `ArchivedThreadView` / `RuntimeHealthView` 已開始透過共享的 protocol/view builder 收斂，而不是各自在 handler 內重組狀態
+- workspace recovery hint、broken thread count、以及 working session broken error 聚合，已開始從 canonical `binding_status` 派生，而不是直接拿 `session_broken` 當主判斷來源
 - `/api/events` 已開始從 canonical view diff 輸出 typed SSE event，而不是每輪都推整包 snapshot
 - web 管理面已開始直接套用 top-level typed SSE payload，而不是每次事件都重抓整包 snapshot
 - topic title 的 `broken` suffix 已開始從 canonical binding state 派生；`busy` 已退出 title 語義
@@ -27,10 +29,10 @@
 
 目前尚未完成的部分：
 
-- 讓更多 surface 在呈現 thread / workspace state 時完全只引用同一套 canonical axes
 - 把 canonical view 的欄位命名完全收斂到現行模型，例如 `current_codex_thread_id`
 - 把更多非 repository surface 的控制語義也完全收斂到同一套 transition vocabulary，而不是只在 repository 內部收口
 - 讓 `/api/events` 的 typed payload coverage 與 observability 層再進一步收斂，而不只停在目前的 change-event + refresh trigger 模型
+- 讓 compatibility/debug alias 的保留邊界更固定，例如 `session_broken` / `last_used_at` / `last_error` 應明確只作輸出相容欄位，而不是再回頭變成新的判斷入口
 
 ## 問題
 
@@ -120,6 +122,9 @@ source of truth：
 - `session_broken`
   - 目前仍可能出現在部分 workspace/thread view 中
   - 但它應被理解成 `binding_status=broken` 的 compatibility/debug 映射，而不是新的對外主狀態欄位
+- `current_codex_thread_id`
+  - 在 `binding_status=broken` 時仍可保留作 repair/debug 參考
+  - 但它的存在本身不代表目前 session 仍可直接作為一般 turn 的 usable continuity
 - `mark_session_binding_broken`
   - 現行實作應理解成「既有 workspace continuity 斷裂」
   - 若 thread 連 usable workspace binding 都沒有，應維持 `unbound`，而不是創造一個沒有 binding 的 `broken`
@@ -279,6 +284,8 @@ restore 後：
   - 拒絕啟動 Codex turn，提示先走 `/add_workspace` 或等價 create-bind flow
 - `broken`
   - 拒絕一般 turn，提示 `/repair_session` 或 `/new_session`
+- `healthy`
+  - 仍需要存在可用的 `current_codex_thread_id`；若只剩保存中的 continuity id 但缺少 usable current session，應視為無法直接起 turn，而不是把「有 id」誤判成「可互動」
 - `running`
   - 初版規劃由 busy gate 文檔定義為硬阻止，不在這份文件再延伸成 queue
 

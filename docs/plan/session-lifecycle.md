@@ -13,7 +13,7 @@
 - canonical pointer 已收斂到 `current_codex_thread_id`
 - 本地 management API / desktop runtime 已開始承接等價的 create-bind / reconnect control flow
 - `binding_status` / `run_status` 已開始透過 shared resolver 與 `runtime-state-machine` 對齊
-- Telegram thread 內的一般輸入與 session-control gate 已開始直接讀 canonical state，而不是各自重寫 archived / broken / running 判定
+- Telegram thread 內的一般輸入、圖片分析、session-control gate、以及 stale busy reconciliation 已開始直接讀 canonical state，而不是各自重寫 archived / broken / running 判定
 - canonical continuity mutation 已開始透過 repository 內部共用 transition path 收斂
   - bind
   - verify
@@ -69,6 +69,7 @@
 
 - Telegram 在已綁定 thread 收到文字或圖片分析請求
 - 使用 `current_codex_thread_id`
+- 但只有在 canonical `binding_status=healthy` 且存在可用 current session id 時，才能把它視為可直接 resume 的 continuity
 - 透過共享 workspace daemon 對同一個 Codex thread 發 turn
 
 ### `/new_session`
@@ -86,6 +87,7 @@
 - 失敗則保留原 binding，但標成 broken，要求 `/new_session` 或重試
 - `/repair_session` 對 Telegram 來說是主要 continuity repair 命令
 - 本地 management API 目前也提供等價的 reconnect control action
+- 即使 thread 已進入 `binding_status=broken`，保存中的 `current_codex_thread_id` 仍可保留作 repair 驗證目標
 - 但現階段不能把它理解成「保證 shared ws endpoint 之後持續存活」
 - 如果 `current.json` 指到 stale endpoint，本地 `hcodex` 不會再 self-heal，而是要求 desktop runtime repair runtime
 - `broken` 的語義應理解成「既有 workspace continuity 失效」
@@ -133,6 +135,12 @@
   - 是 continuity/binding 相關的持久化欄位
 - `binding_status`
   - 是對外 canonical state
+
+另外要固定一個語義：
+
+- `current_codex_thread_id`
+  - 是保存中的 canonical continuity pointer
+  - 但它的存在不等於目前一定可直接作為 usable turn entrypoint；能否直接使用仍取決於 `binding_status`
 
 也就是說，不應把 `session_broken` 當成和 `binding_status` 平行的另一套主狀態。
 

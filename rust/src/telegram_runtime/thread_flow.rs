@@ -53,7 +53,7 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         Some(path) => workspace_execution_mode(path).await.ok(),
         None => None,
     };
-    let current_codex_thread_id = usable_bound_session_id(session.as_ref())
+    let current_codex_thread_id = current_bound_session_id(session.as_ref())
         .map(str::to_owned)
         .unwrap_or_else(|| "none".to_owned());
     let current_execution_mode = session
@@ -61,10 +61,12 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         .and_then(|binding| binding.current_execution_mode)
         .map(|mode| mode.as_str().to_owned())
         .unwrap_or_else(|| "none".to_owned());
-    let current_snapshot = if let Some(path) = workspace_path.as_ref() {
-        read_session_status(path, &current_codex_thread_id).await?
-    } else {
-        None
+    let current_snapshot = match (
+        workspace_path.as_ref(),
+        current_bound_session_id(session.as_ref()),
+    ) {
+        (Some(path), Some(session_id)) => read_session_status(path, session_id).await?,
+        _ => None,
     };
     let tui_active_codex_thread_id = session
         .as_ref()
@@ -310,7 +312,8 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
+            let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref())
+            else {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -447,7 +450,8 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
+            let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref())
+            else {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -643,7 +647,7 @@ pub(crate) async fn run_text_message(
         .await?;
         return Ok(());
     }
-    let Some(existing_thread_id) = usable_bound_session_id(session.as_ref()) else {
+    let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
         send_scoped_message(
             bot,
             msg.chat.id,
