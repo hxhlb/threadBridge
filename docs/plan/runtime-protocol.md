@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-這份文檔目前仍是草稿，但已不只是命名建議；其中一部分 view / action / event 已經掛進本地 management API 和 desktop runtime。
+這份文檔已開始部分落地，但仍不是完整的 transport-neutral 主規格；其中一部分 view / action / event 已經掛進本地 management API 和 desktop runtime。
 
 目前代碼狀態：
 
@@ -106,6 +106,8 @@
 
 - `thread_key`
 - `title`
+- `chat_id`
+- `message_thread_id`
 - `workspace_cwd`
 - `lifecycle_status`
 - `binding_status`
@@ -113,7 +115,13 @@
 - `current_codex_thread_id`
 - `tui_active_codex_thread_id`
 - `tui_session_adoption_pending`
+- `session_broken_reason`
+- `last_verified_at`
+- `last_codex_turn_at`
 - `archived_at`
+
+目前已存在、但應視為 compatibility / debug 欄位：
+
 - `last_used_at`
 - `last_error`
 

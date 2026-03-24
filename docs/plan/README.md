@@ -51,7 +51,7 @@
   - 本地 management API 已開始承接它的 view / action 命名
   - local HTTP + SSE 已從草稿變成實際 transport
   - 近期已再補上 runtime-owner reconcile、managed Codex build defaults、workspace launch config、continue-current launch control、thread transcript read API，以及 session summary / session records read API
-  - `GET /api/threads` 已開始對外暴露 canonical `lifecycle_status`
+  - `GET /api/threads` 已開始對外暴露 canonical `lifecycle_status`，並補齊 `chat_id` / `message_thread_id` / `session_broken_reason` / `last_verified_at` / `last_codex_turn_at`
   - runtime health 已改成 owner-canonical，`workspace_state` 僅保留 debug/observation 語義
   - `runtime_protocol` 共享 view builder 已開始把 `ThreadStateView` / `ManagedWorkspaceView` / `ArchivedThreadView` / `RuntimeHealthView` / `WorkingSession*View` 從 transport 層抽離
   - `GET /api/events` 已開始輸出 typed SSE event，而不是每輪都推整包 snapshot

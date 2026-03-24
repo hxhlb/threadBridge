@@ -139,6 +139,8 @@ pub struct ManagedWorkspaceView {
 pub struct ThreadStateView {
     pub thread_key: String,
     pub title: Option<String>,
+    pub chat_id: i64,
+    pub message_thread_id: Option<i32>,
     pub workspace_cwd: Option<String>,
     pub workspace_execution_mode: Option<ExecutionMode>,
     pub current_execution_mode: Option<ExecutionMode>,
@@ -150,8 +152,13 @@ pub struct ThreadStateView {
     pub current_codex_thread_id: Option<String>,
     pub tui_active_codex_thread_id: Option<String>,
     pub tui_session_adoption_pending: bool,
+    pub session_broken_reason: Option<String>,
+    pub last_verified_at: Option<String>,
+    pub last_codex_turn_at: Option<String>,
     pub archived_at: Option<String>,
+    // Compatibility alias for consumers that still read `last_used_at`.
     pub last_used_at: Option<String>,
+    // Compatibility/debug alias for consumers that still read a generic error field.
     pub last_error: Option<String>,
 }
 
@@ -376,9 +383,16 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             None => None,
         };
         let resolved_state = resolve_thread_state(&record.metadata, binding.as_ref()).await?;
+        let session_broken_reason = binding
+            .as_ref()
+            .and_then(|binding| binding.session_broken_reason.clone())
+            .or(record.metadata.session_broken_reason.clone());
+        let metadata = record.metadata;
         views.push(ThreadStateView {
-            thread_key: record.metadata.thread_key,
-            title: record.metadata.title,
+            thread_key: metadata.thread_key,
+            title: metadata.title,
+            chat_id: metadata.chat_id,
+            message_thread_id: metadata.message_thread_id,
             workspace_cwd,
             workspace_execution_mode,
             current_execution_mode: binding
@@ -402,12 +416,14 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             tui_session_adoption_pending: binding
                 .as_ref()
                 .is_some_and(|binding| binding.tui_session_adoption_pending),
-            archived_at: record.metadata.archived_at,
-            last_used_at: record.metadata.last_codex_turn_at,
-            last_error: binding
+            session_broken_reason: session_broken_reason.clone(),
+            last_verified_at: binding
                 .as_ref()
-                .and_then(|binding| binding.session_broken_reason.clone())
-                .or(record.metadata.session_broken_reason),
+                .and_then(|binding| binding.last_verified_at.clone()),
+            last_codex_turn_at: metadata.last_codex_turn_at.clone(),
+            archived_at: metadata.archived_at,
+            last_used_at: metadata.last_codex_turn_at,
+            last_error: session_broken_reason,
         });
     }
     views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
@@ -976,6 +992,8 @@ mod tests {
         let view = ThreadStateView {
             thread_key: "thread-1".to_owned(),
             title: Some("Workspace".to_owned()),
+            chat_id: 1,
+            message_thread_id: Some(42),
             workspace_cwd: Some("/tmp/workspace".to_owned()),
             workspace_execution_mode: Some(ExecutionMode::FullAuto),
             current_execution_mode: Some(ExecutionMode::FullAuto),
@@ -987,15 +1005,23 @@ mod tests {
             current_codex_thread_id: Some("thr_current".to_owned()),
             tui_active_codex_thread_id: None,
             tui_session_adoption_pending: false,
+            session_broken_reason: None,
+            last_verified_at: Some("2026-03-24T09:00:00.000Z".to_owned()),
+            last_codex_turn_at: Some("2026-03-24T10:00:00.000Z".to_owned()),
             archived_at: None,
-            last_used_at: None,
+            last_used_at: Some("2026-03-24T10:00:00.000Z".to_owned()),
             last_error: None,
         };
 
         let value = serde_json::to_value(view).unwrap();
+        assert_eq!(value["chat_id"], 1);
+        assert_eq!(value["message_thread_id"], 42);
         assert_eq!(value["lifecycle_status"], "active");
         assert_eq!(value["binding_status"], "healthy");
         assert_eq!(value["run_status"], "idle");
+        assert_eq!(value["last_verified_at"], "2026-03-24T09:00:00.000Z");
+        assert_eq!(value["last_codex_turn_at"], "2026-03-24T10:00:00.000Z");
+        assert_eq!(value["last_used_at"], "2026-03-24T10:00:00.000Z");
     }
 
     #[test]

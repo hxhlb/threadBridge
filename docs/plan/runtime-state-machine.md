@@ -155,6 +155,8 @@ source of truth：
 
 目前代碼中已存在名稱相近的 `ThreadStateView` / `ManagedWorkspaceView`，但欄位與來源仍是過渡狀態；後續應往這份文檔收斂，而不是把現在的回傳 shape 直接當成最終主規格。
 
+`runtime-protocol` 若暫時保留 `title`、`last_used_at`、`last_error` 這類 compatibility / debug 欄位，可以接受；但它們不應取代這裡列出的 canonical state / identity / timeline 欄位。
+
 這裡要明確固定一個命名原則：
 
 - 若描述 Telegram thread 目前正式採用的 Codex continuity，應直接寫 `current_codex_thread_id`
