@@ -63,6 +63,7 @@ pub enum CodexThreadEvent {
 #[derive(Debug, Clone, Serialize)]
 pub struct CodexRunResult {
     pub final_response: String,
+    pub final_plan_text: Option<String>,
     pub selected_factory: String,
     pub thread_id: String,
     pub thread_id_changed: bool,
@@ -80,6 +81,12 @@ pub struct CodexThreadBinding {
 struct AppServerClient {
     transport: AppServerTransport,
     next_request_id: i64,
+}
+
+#[derive(Debug, Clone)]
+struct TurnRunResult {
+    final_response: String,
+    final_plan_text: Option<String>,
 }
 
 #[derive(Debug)]
@@ -523,7 +530,7 @@ impl CodexRunner {
                 |_| async {},
             )
             .await?;
-        self.ensure_ready_response(&ready, "workspace initialization")?;
+        self.ensure_ready_response(&ready.final_response, "workspace initialization")?;
         Ok(binding)
     }
 
@@ -600,12 +607,13 @@ impl CodexRunner {
             thread_id: binding.thread_id.clone(),
         })
         .await;
-        let final_response = self
+        let turn_result = self
             .run_turn_on_client(&mut client, &binding, input, on_event)
             .await?;
 
         Ok(CodexRunResult {
-            final_response,
+            final_response: turn_result.final_response,
+            final_plan_text: turn_result.final_plan_text,
             selected_factory: selected_factory.to_owned(),
             thread_id_changed: existing_thread_id.is_some_and(|id| id != binding.thread_id),
             thread_id: binding.thread_id,
@@ -617,6 +625,7 @@ impl CodexRunner {
         method: &str,
         params: Value,
         latest_agent_message_by_id: &mut HashMap<String, String>,
+        latest_plan_by_id: &mut HashMap<String, String>,
     ) -> Result<Option<CodexThreadEvent>> {
         match method {
             "thread/started" => {
@@ -679,6 +688,25 @@ impl CodexRunner {
                 Ok(Some(CodexThreadEvent::ItemUpdated {
                     item: json!({
                         "type": "agent_message",
+                        "id": item_id,
+                        "text": entry,
+                    }),
+                }))
+            }
+            "item/plan/delta" => {
+                let item_id = params
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .context("item/plan/delta missing itemId")?;
+                let delta = params
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .context("item/plan/delta missing delta")?;
+                let entry = latest_plan_by_id.entry(item_id.to_owned()).or_default();
+                entry.push_str(delta);
+                Ok(Some(CodexThreadEvent::ItemUpdated {
+                    item: json!({
+                        "type": "plan",
                         "id": item_id,
                         "text": entry,
                     }),
@@ -863,7 +891,7 @@ impl CodexRunner {
         binding: &CodexThreadBinding,
         input: Vec<CodexInputItem>,
         mut on_event: F,
-    ) -> Result<String>
+    ) -> Result<TurnRunResult>
     where
         F: FnMut(CodexThreadEvent) -> Fut,
         Fut: Future<Output = ()>,
@@ -879,6 +907,8 @@ impl CodexRunner {
         let mut turn_completed = false;
         let mut final_response = String::new();
         let mut latest_agent_message_by_id: HashMap<String, String> = HashMap::new();
+        let mut latest_plan_by_id: HashMap<String, String> = HashMap::new();
+        let mut final_plan_text: Option<String> = None;
 
         while !(request_acked && turn_completed) {
             match client.read_message().await? {
@@ -897,6 +927,7 @@ impl CodexRunner {
                         &method,
                         params.unwrap_or(Value::Null),
                         &mut latest_agent_message_by_id,
+                        &mut latest_plan_by_id,
                     )? {
                         match &event {
                             CodexThreadEvent::ItemStarted { item } => {
@@ -909,6 +940,14 @@ impl CodexRunner {
                                     if let Some(text) = item.get("text").and_then(Value::as_str) {
                                         final_response = text.to_owned();
                                     }
+                                } else if item.get("type").and_then(Value::as_str) == Some("plan")
+                                {
+                                    final_plan_text = item
+                                        .get("text")
+                                        .and_then(Value::as_str)
+                                        .map(str::trim)
+                                        .filter(|text| !text.is_empty())
+                                        .map(str::to_owned);
                                 }
                             }
                             CodexThreadEvent::ItemUpdated { item } => {
@@ -942,7 +981,10 @@ impl CodexRunner {
             }
         }
 
-        Ok(final_response)
+        Ok(TurnRunResult {
+            final_response,
+            final_plan_text,
+        })
     }
 
     fn ensure_ready_response(&self, response: &str, context: &str) -> Result<()> {
@@ -1073,6 +1115,7 @@ mod tests {
             "thread-123",
             super::CodexRunResult {
                 final_response: "ok".to_owned(),
+                final_plan_text: None,
                 selected_factory: "resumeThread".to_owned(),
                 thread_id: "thread-999".to_owned(),
                 thread_id_changed: true,
@@ -1106,6 +1149,7 @@ mod tests {
                 "delta": "Hello"
             }),
             &mut latest,
+            &mut std::collections::HashMap::new(),
         )
         .unwrap()
         .unwrap();
@@ -1123,5 +1167,28 @@ mod tests {
     fn normalize_item_handles_non_object_values() {
         let normalized = normalize_item(Value::String("oops".to_owned()));
         assert_eq!(normalized, Value::String("oops".to_owned()));
+    }
+
+    #[test]
+    fn map_plan_delta_emits_item_updated() {
+        let event = CodexRunner::map_notification(
+            "item/plan/delta",
+            json!({
+                "itemId": "plan_1",
+                "delta": "# Plan\n"
+            }),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+        )
+        .unwrap()
+        .unwrap();
+
+        match event {
+            super::CodexThreadEvent::ItemUpdated { item } => {
+                assert_eq!(item["type"], "plan");
+                assert_eq!(item["text"], "# Plan\n");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

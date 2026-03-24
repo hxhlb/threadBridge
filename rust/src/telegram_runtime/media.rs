@@ -9,7 +9,7 @@ use teloxide::types::{
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
-use super::final_reply::send_final_assistant_reply;
+use super::final_reply::{compose_visible_final_reply, send_final_assistant_reply};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::status_sync;
 use super::*;
@@ -762,12 +762,14 @@ async fn execute_image_analysis_turn(
             return Err(error);
         }
     };
+    let visible_final_text =
+        compose_visible_final_reply(&result.final_response, result.final_plan_text.as_deref());
     record_bot_status_event(
         &workspace_path,
         "bot_turn_completed",
         Some(existing_thread_id),
         None,
-        Some(&result.final_response),
+        visible_final_text.as_deref(),
     )
     .await?;
     let record = state
@@ -778,7 +780,26 @@ async fn execute_image_analysis_turn(
         .repository
         .update_session_execution_snapshot(record, &result.execution)
         .await?;
-    let preview_finalized = preview.lock().await.complete(&result.final_response).await;
+    let preview_finalized = if let Some(final_text) = visible_final_text.as_deref() {
+        preview.lock().await.complete(final_text).await
+    } else {
+        false
+    };
+    let artifact_result_text = if let Some(final_text) = visible_final_text {
+        final_text
+    } else {
+        let fallback = preview
+            .lock()
+            .await
+            .fallback_final_response()
+            .trim()
+            .to_owned();
+        if fallback.is_empty() {
+            "Codex completed image analysis without a final answer.".to_owned()
+        } else {
+            fallback
+        }
+    };
     preview_heartbeat.stop().await;
     typing.stop().await;
     let artifact = ImageAnalysisArtifact {
@@ -796,21 +817,7 @@ async fn execute_image_analysis_turn(
             })
             .collect(),
         prompt,
-        result_text: if result.final_response.trim().is_empty() {
-            let fallback = preview
-                .lock()
-                .await
-                .fallback_final_response()
-                .trim()
-                .to_owned();
-            if fallback.is_empty() {
-                "Codex completed image analysis without a final answer.".to_owned()
-            } else {
-                fallback
-            }
-        } else {
-            result.final_response.trim().to_owned()
-        },
+        result_text: artifact_result_text,
     };
     state
         .repository
@@ -824,6 +831,22 @@ async fn execute_image_analysis_turn(
             LogDirection::Assistant,
             artifact.result_text.clone(),
             None,
+        )
+        .await?;
+    let _ = state
+        .repository
+        .append_transcript_mirror(
+            &record,
+            &crate::repository::TranscriptMirrorEntry {
+                timestamp: chrono::Utc::now()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                session_id: existing_thread_id.to_owned(),
+                origin: crate::repository::TranscriptMirrorOrigin::Telegram,
+                role: crate::repository::TranscriptMirrorRole::Assistant,
+                delivery: crate::repository::TranscriptMirrorDelivery::Final,
+                phase: None,
+                text: artifact.result_text.clone(),
+            },
         )
         .await?;
     if !preview_finalized {

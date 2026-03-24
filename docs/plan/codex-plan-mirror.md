@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-這份文檔描述的是一個**部分落地**、但尚未收斂完成的 mirror 子問題。
+這份文檔描述的是一個**已落地主要修正**、但後續仍可再收斂觀測細節的 mirror 子問題。
 
 目前已確認的代碼狀態：
 
@@ -11,15 +11,17 @@
   - turn item 會發 `plan`
   - assistant message 內的 `<proposed_plan>` 內容會被剝離，不會作為最終 assistant 文本直接暴露
 - `threadBridge` 已有 final / process transcript 分流，也已有 Telegram rolling preview 與 TUI proxy mirror
-- `threadBridge` 目前已能把部分 finalized `plan` item 映射為 process transcript
-- 但 `threadBridge` 仍未完整消費 live `item/plan/delta`
-- Telegram final reply 仍主要依賴 upstream assistant final text；因此 plan-only turn 目前可能缺少 user-visible final assistant reply
+- `threadBridge` 已能消費 `item/plan/delta`，並把 live plan snapshot 送進 process transcript / preview
+- direct bot path 與 raw workspace / TUI proxy path 都已補上 finalized `plan` item 的 final reply fallback
+- Telegram final reply 不再只依賴 upstream assistant final text；plan-only turn 會使用 finalized plan text，mixed case 會組合 assistant text 與 plan markdown
 
-目前未完成的部分：
+目前仍可後續收斂的部分：
 
-- direct bot path 尚未把 `item/plan/delta` 映射進 `CodexThreadEvent`
-- raw workspace / TUI proxy path 尚未把 `item/plan/delta` 轉成 process transcript
-- Telegram adapter 尚未在 plan-only turn 中使用 finalized plan text 作為 final reply fallback
+- plan snapshot 是否需要進一步做 transcript compaction / coalescing
+- management / observability UI 是否要對 combined final reply 做更明確的 plan 區塊呈現
+- TUI / app-server 的互動式回應目前仍未完整進入 Telegram：
+  - 使用者不能在 Telegram 發起或完成 `request_user_input` / elicitation
+  - 本地 / TUI session 產生的互動式請求也還不能穩定 mirror 回 Telegram
 
 ## 問題
 
@@ -29,14 +31,14 @@
 
 - upstream 已經把 plan 拆成獨立事件與 item
 - `threadBridge` 目前只完整接上了 `agentMessage` delta 與部分 `plan` finalized item
-- live `item/plan/delta` 沒有進入 `threadBridge` 的 normalization / process transcript / Telegram preview 路徑
-- plan-only turn 在 upstream assistant final text 為空時，Telegram adapter 也沒有 fallback final reply
+- 過去 live `item/plan/delta` 沒有進入 `threadBridge` 的 normalization / process transcript / Telegram preview 路徑
+- 過去 plan-only turn 在 upstream assistant final text 為空時，Telegram adapter 也沒有 fallback final reply
 
 結果就是：
 
-- mirror preview 可能看不到 live plan 文本
-- process transcript 對 plan 的覆蓋不穩定
-- Telegram 使用者在 plan-only turn 結束後，可能看不到明確的最終文本
+- live plan 已可進入 preview / process transcript
+- Telegram 使用者在 plan-only turn 結束後，可收到 finalized plan text
+- 若同一輪同時有 assistant final text 與 finalized plan，Telegram 會發送 combined final reply
 
 ## 已驗證的上游事實
 
@@ -58,6 +60,10 @@ v1 要達成三件事：
 1. live `item/plan/delta` 需要進入 mirror preview / process transcript 路徑
 2. finalized `plan` item 需要穩定落入 process transcript
 3. 若 turn 為 plan-only 且 upstream assistant final text 為空，Telegram 應以 finalized plan text 作為 final reply fallback
+4. 若同一輪同時有 assistant final text 與 finalized plan，Telegram 應送出 combined final reply：
+   - assistant text
+   - `## Proposed Plan`
+   - plan markdown
 
 v1 明確不做：
 
@@ -90,7 +96,7 @@ v1 明確不做：
 - `plan` 類 `ItemUpdated` 應映射為：
   - `TranscriptMirrorDelivery::Process`
   - `TranscriptMirrorPhase::Plan`
-- raw websocket path 的 `process_entry_from_workspace_message` 需要額外解析 `item/plan/delta`
+- raw websocket path 在 `tui_proxy.rs` 內直接累積 `item/plan/delta`
 - 對 `item/plan/delta`，v1 直接使用「累積後的完整 plan snapshot 文本」作為 process transcript 文本
 
 v1 的取捨是：
@@ -131,21 +137,16 @@ Telegram rolling preview 仍沿用現在的模型：
 
 在 `rust/src/telegram_runtime/thread_flow.rs` 與圖片 / media 的對應 turn completion 路徑：
 
-- final reply 文本的選擇順序固定為：
-  1. upstream `final_response`，如果非空
-  2. latest finalized plan text，如果 `final_response` 為空
-  3. 若兩者都空，則不送 final assistant reply
+- final reply 文本的選擇規則固定為：
+  1. 只有 `final_response`：直接送 `final_response`
+  2. 只有 finalized plan text：直接送 plan markdown
+  3. 兩者同時存在：送 `final_response + ## Proposed Plan + plan markdown`
+  4. 兩者都空：不送 final assistant reply
 
 這裡要明確保持一個語義：
 
-- assistant final text 仍是 canonical final assistant reply
-- plan text fallback 只是 Telegram adapter 的 user-visible convenience
-- 它不改變 upstream 對 assistant / plan 的原始語義分工
-
-當一輪 turn 同時有 assistant final text 和 plan text 時：
-
-- final reply 只使用 assistant final text
-- plan text 繼續只留在 process transcript
+- upstream assistant / plan 分工仍不變
+- `threadBridge` final transcript 記錄的是 user-visible final assistant delivery text，因此 mixed case 允許 final transcript 與 process transcript 同時包含 plan
 
 ## 實作邊界
 
@@ -156,13 +157,14 @@ Telegram rolling preview 仍沿用現在的模型：
 - `rust/src/tui_proxy.rs`
 - `rust/src/telegram_runtime/thread_flow.rs`
 - `rust/src/telegram_runtime/media.rs`
+- `rust/src/telegram_runtime/final_reply.rs`
 
 其中：
 
 - `codex.rs` 解決 direct bot path 的 event intake
 - `process_transcript.rs` 收斂 direct bot path 與 raw workspace path 的 plan normalization
 - `tui_proxy.rs` 繼續承接 local/TUI mirror 的 process transcript record
-- Telegram runtime completion path 解決 plan-only turn 的 final reply fallback
+- Telegram runtime completion path 解決 plan-only 與 mixed case 的 final reply 組裝
 
 ## 測試要求
 
@@ -175,8 +177,11 @@ Telegram rolling preview 仍沿用現在的模型：
   - raw websocket `item/plan/delta` 也會映射成 `Process + Plan`
 - Telegram adapter
   - plan-only turn 在 `final_response` 為空時，會用 finalized plan text 送出 final reply
+  - mixed case 會送出 assistant text + `## Proposed Plan` + plan markdown
 - local/TUI mirror
   - `item/plan/delta` 會產生 process transcript，而不是被靜默忽略
+- interactive response
+  - 先把「不能在 Telegram 發起與 mirror 的 TUI 互動式回應」單獨列成後續缺口，不與 plan delta / final reply 混做一題
 
 同時要保證不回歸：
 

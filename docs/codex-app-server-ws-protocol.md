@@ -186,7 +186,7 @@ server notification 例子：
 - `item/reasoning/summaryTextDelta`
 - `item/reasoning/textDelta`
 
-但 `threadBridge` 目前直接消費的，主要只有：
+`threadBridge` 現在直接消費的主要 methods 包括：
 
 - `thread/started`
 - `turn/started`
@@ -194,10 +194,11 @@ server notification 例子：
 - `item/started`
 - `item/completed`
 - `item/agentMessage/delta`
+- `item/plan/delta`
 - `error`
 
-也就是說，雖然 upstream 已提供 `item/plan/delta`，但以今天的 `threadBridge` 代碼來看，這條 notification 尚未在 `codex.rs` 的 direct consumer 路徑被直接接住。
-`codex plan` mirror 的具體補齊方向見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)。
+也就是說，`threadBridge` 已經直接消費 `item/plan/delta`，並把它接進 plan mirror / process transcript / Telegram preview 路徑。
+另外要明確記住：`~/.codex/sessions/*.jsonl` 裡的 raw `<proposed_plan>` 只屬於證據層；runtime source of truth 仍然是 app-server 的 wire-level `item/plan/delta` 與 completed `plan` item。
 
 ## `ThreadItem` 真實形狀
 

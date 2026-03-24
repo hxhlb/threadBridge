@@ -445,7 +445,7 @@ v1 至少保留：
 目前新增確認的缺口是：
 
 - mirror / observability 已開始承接更完整的 Codex 過程文本，event model 應收斂成等價的 process transcript 事件，而不是各 adapter 自己拼 `plan_text` / `tool_text`
-- `codex plan` 消息流目前尚未完整進入 mirror；依現有驗證，問題更接近 `threadBridge` protocol consumer / adapter 尚未接齊，詳見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
+- `codex plan` 消息流已接入 mirror；目前重點轉為 combined final reply 與 plan snapshot 在 transcript / observability 上的呈現收斂，詳見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
 - `managed_codex_changed` 這類更細的 owner / build event 尚未獨立落地
 - event stream 雖然已 typed 化，但目前仍只直接驅動 top-level views；更細的 observability record 仍未走完整增量 payload
 

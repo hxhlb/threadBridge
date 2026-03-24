@@ -23,6 +23,13 @@
 
 - Telegram observability 應優先接上已落地的 session-first API，而不只停留在 thread transcript feed
 - Telegram 之後應可提供 Codex 工作模型與 execution mode 的設定入口
+- Telegram 之後也應可提供 collaboration mode 設定入口：
+  - 進入 `Plan mode`
+  - 回到普通 / default mode
+  - 並明確和 execution mode 分開
+- Telegram 之後也應能承接 app-server / TUI 的互動式回應面：
+  - 例如 `request_user_input` / elicitation / 其他需要使用者明確選擇的互動請求
+  - 不只要能在 Telegram 發起，也要能從本地 / TUI session 正確 mirror 回 Telegram
 - Telegram 之後也應可提供 desktop launch control surface：
   - 用 slash command 觸發 desktop endpoint 的 `launch new` / `launch current` / `launch resume`
   - 但這條能力不應被表達成 `codex / hcodex` 二選一
@@ -90,12 +97,28 @@
 
 - Telegram 之後可補上 Codex 工作模型設定入口
 - Telegram 之後也可補上 execution mode 設定入口
+- Telegram 之後也應補上 collaboration mode 設定入口
 - 這兩者應視為不同控制面：
   - `Codex 工作模型`
     - 回答「用哪個模型」
   - `execution mode`
     - 回答「以什麼 approval / sandbox contract 執行」
+- `collaboration mode`
+  - 回答「這一輪 / 這個 session 是普通模式還是 Plan mode」
+- 尤其要避免把 `Plan / Normal` 誤表達成 execution mode；它和 `full_auto / yolo` 不是同一層語義
 - 它們若要在 Telegram 露出，都應只是 runtime protocol control action 的 adapter surface
+
+### 2.1. Interactive response / elicitation surface
+
+- Telegram 目前還沒有正式承接互動式回應：
+  - 使用者不能在 Telegram 端完整處理 `request_user_input`
+  - 本地 / TUI session 產生的互動式請求，目前也不能穩定 mirror 回 Telegram
+- 這代表 Telegram 雖能承接普通文字 turn、preview、final reply、plan/tool process transcript，但還不是完整的互動式 session adapter
+- 後續要補的最小能力至少包括：
+  - 顯示互動式問題 / 選項
+  - 讓使用者在 Telegram 回答
+  - 把回答寫回同一條 app-server / session continuity
+  - 本地 / TUI 產生的互動請求能以同一種 Telegram surface 呈現，而不是靜默消失
 
 ### 2.2. Desktop launch control surface
 
@@ -155,6 +178,7 @@
 - `forwarded input`
 - topic title
 - preview draft
+- interactive response / elicitation UI
 - desktop launch slash command
 - Telegram-specific render / callback / media send policy
 
@@ -307,6 +331,7 @@ core runtime 應負責：
 - 如果先搬檔案再想語意，會只是形式重組
 - 若 Telegram command 行為沒有先重新表達成 control action，很難抽出 adapter
 - 若 preview 機制仍綁在 Telegram message edit，上層協議會失真
+- 若互動式回應仍只留在本地 / TUI，Telegram 就不能算完整 session adapter
 
 ## 開放問題
 
@@ -315,6 +340,8 @@ core runtime 應負責：
 - preview 在 custom app 裡應該是 delta stream、replace stream，還是 terminal-style replay？
 - Telegram adapter 是否仍然是預設 entrypoint，還是未來要支援多 adapter 同時註冊？
 - 近期 Telegram 是否應補上 Codex 工作模型與 execution mode 的設定入口？
+- 近期 Telegram 是否應補上 collaboration mode 切換入口，並明確支持從 `Plan mode` 回到普通模式？
+- 互動式回應近期是否只先支持 `request_user_input` / elicitation，還是要一併設計更一般的 interrupt / questionnaire surface？
 - Busy Gate 下的新輸入是否應正式支持：
   - `STOP 並插入發言`
   - `序列發言`

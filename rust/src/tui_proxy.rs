@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
@@ -16,9 +16,12 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tracing::{debug, info, warn};
 
 use crate::app_server_runtime::{WorkspaceRuntimeState, write_workspace_runtime_state_file};
-use crate::process_transcript::{process_entry_from_workspace_message, workspace_item_diagnostic};
+use crate::process_transcript::{
+    process_entry_from_codex_event, process_entry_from_workspace_message, workspace_item_diagnostic,
+};
 use crate::repository::ThreadRepository;
 use crate::repository::TranscriptMirrorOrigin;
+use crate::telegram_runtime::final_reply::compose_visible_final_reply;
 use crate::workspace_status::{
     record_tui_proxy_completed, record_tui_proxy_connected, record_tui_proxy_disconnected,
     record_tui_proxy_preview_text, record_tui_proxy_process_event, record_tui_proxy_prompt,
@@ -229,6 +232,8 @@ async fn handle_proxy_connection(
     let mut local_turn_ids: HashSet<String> = HashSet::new();
     let mut latest_assistant_message = String::new();
     let mut latest_preview_segment = String::new();
+    let mut latest_plan_by_id: HashMap<String, String> = HashMap::new();
+    let mut latest_completed_plan_text: Option<String> = None;
 
     info!(
         event = "tui_proxy.connection.accepted",
@@ -273,6 +278,8 @@ async fn handle_proxy_connection(
                     &mut local_turn_ids,
                     &mut latest_assistant_message,
                     &mut latest_preview_segment,
+                    &mut latest_plan_by_id,
+                    &mut latest_completed_plan_text,
                 ).await?;
                 if matches!(daemon_message, WsMessage::Close(_)) {
                     let _ = client_ws.send(daemon_message).await;
@@ -457,6 +464,8 @@ async fn maybe_track_server_message(
     local_turn_ids: &mut HashSet<String>,
     latest_assistant_message: &mut String,
     latest_preview_segment: &mut String,
+    latest_plan_by_id: &mut HashMap<String, String>,
+    latest_completed_plan_text: &mut Option<String>,
 ) -> Result<()> {
     if let Some(session_id) = maybe_track_server_response(
         repository,
@@ -490,6 +499,33 @@ async fn maybe_track_server_message(
             *latest_preview_segment = text.clone();
             preview_text = Some(text);
         }
+    }
+
+    if let Some((item_id, delta)) = maybe_extract_plan_delta(message)? {
+        let accumulated = latest_plan_by_id.entry(item_id.clone()).or_default();
+        accumulated.push_str(&delta);
+        if let Some(session_id) = current_session_id.as_deref()
+            && let Some(entry) = process_entry_from_codex_event(
+                &crate::codex::CodexThreadEvent::ItemUpdated {
+                    item: json!({
+                        "type": "plan",
+                        "id": item_id,
+                        "text": accumulated,
+                    }),
+                },
+                session_id,
+                TranscriptMirrorOrigin::Tui,
+            )
+        {
+            if let Some(crate::repository::TranscriptMirrorPhase::Plan) = entry.phase {
+                record_tui_proxy_process_event(workspace_path, session_id, "plan", &entry.text)
+                    .await?;
+            }
+        }
+    }
+
+    if let Some(plan_text) = maybe_extract_completed_plan_text(message)? {
+        *latest_completed_plan_text = Some(plan_text);
     }
 
     if let Some(session_id) = current_session_id.as_deref() {
@@ -531,24 +567,27 @@ async fn maybe_track_server_message(
         }
         if let Some(completed_turn_id) = extract_completed_turn_id(message)? {
             if local_turn_ids.remove(&completed_turn_id) {
-                let final_text = if latest_assistant_message.trim().is_empty() {
-                    None
-                } else {
-                    Some(latest_assistant_message.as_str())
-                };
+                let final_text = compose_visible_final_reply(
+                    latest_assistant_message,
+                    latest_completed_plan_text.as_deref(),
+                );
                 record_tui_proxy_completed(
                     workspace_path,
                     session_id,
                     Some(&completed_turn_id),
-                    final_text,
+                    final_text.as_deref(),
                 )
                 .await?;
             }
             latest_assistant_message.clear();
             latest_preview_segment.clear();
+            latest_plan_by_id.clear();
+            *latest_completed_plan_text = None;
         } else if is_turn_completed(message)? {
             latest_assistant_message.clear();
             latest_preview_segment.clear();
+            latest_plan_by_id.clear();
+            *latest_completed_plan_text = None;
         }
     }
     Ok(())
@@ -634,6 +673,65 @@ fn is_agent_message_delta(message: &WsMessage) -> Result<bool> {
     Ok(payload.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta"))
 }
 
+fn maybe_extract_plan_delta(message: &WsMessage) -> Result<Option<(String, String)>> {
+    let text = match message {
+        WsMessage::Text(text) => text.as_str(),
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
+        _ => return Ok(None),
+    };
+    let payload: Value = match serde_json::from_str(text) {
+        Ok(payload) => payload,
+        Err(_) => return Ok(None),
+    };
+    if payload.get("method").and_then(Value::as_str) != Some("item/plan/delta") {
+        return Ok(None);
+    }
+    let item_id = payload
+        .get("params")
+        .and_then(|params| params.get("itemId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let delta = payload
+        .get("params")
+        .and_then(|params| params.get("delta"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(item_id.zip(delta))
+}
+
+fn maybe_extract_completed_plan_text(message: &WsMessage) -> Result<Option<String>> {
+    let text = match message {
+        WsMessage::Text(text) => text.as_str(),
+        WsMessage::Binary(bytes) => {
+            std::str::from_utf8(bytes).context("invalid utf8 daemon frame")?
+        }
+        _ => return Ok(None),
+    };
+    let payload: Value = match serde_json::from_str(text) {
+        Ok(payload) => payload,
+        Err(_) => return Ok(None),
+    };
+    if payload.get("method").and_then(Value::as_str) != Some("item/completed") {
+        return Ok(None);
+    }
+    let item = payload.get("params").and_then(|params| params.get("item"));
+    if item
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        != Some("plan")
+    {
+        return Ok(None);
+    }
+    Ok(item
+        .and_then(|item| item.get("text"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned))
+}
+
 fn extract_completed_turn_id(message: &WsMessage) -> Result<Option<String>> {
     let text = match message {
         WsMessage::Text(text) => text.as_str(),
@@ -683,8 +781,8 @@ fn canonical_workspace_key(workspace_path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TrackedRequestMethod, should_reset_assistant_preview_segment, should_reuse_existing_proxy,
-        track_client_request,
+        TrackedRequestMethod, maybe_extract_completed_plan_text, maybe_extract_plan_delta,
+        should_reset_assistant_preview_segment, should_reuse_existing_proxy, track_client_request,
     };
     use serde_json::json;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -752,5 +850,41 @@ mod tests {
             .into(),
         );
         assert!(!should_reset_assistant_preview_segment(&message).unwrap());
+    }
+
+    #[test]
+    fn plan_delta_is_extracted_from_workspace_message() {
+        let message = WsMessage::Text(
+            json!({
+                "method": "item/plan/delta",
+                "params": {
+                    "itemId": "plan_1",
+                    "delta": "# Plan\n"
+                }
+            })
+            .to_string()
+            .into(),
+        );
+        let extracted = maybe_extract_plan_delta(&message).unwrap();
+        assert_eq!(extracted, Some(("plan_1".to_owned(), "# Plan\n".to_owned())));
+    }
+
+    #[test]
+    fn completed_plan_text_is_extracted_from_workspace_message() {
+        let message = WsMessage::Text(
+            json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "plan",
+                        "text": "# Final plan\n- one"
+                    }
+                }
+            })
+            .to_string()
+            .into(),
+        );
+        let extracted = maybe_extract_completed_plan_text(&message).unwrap();
+        assert_eq!(extracted.as_deref(), Some("# Final plan\n- one"));
     }
 }

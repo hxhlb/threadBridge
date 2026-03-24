@@ -13,10 +13,10 @@
 - process transcript 已正式區分 final / process，並補上 management transcript read API、session summary / records API、web observability pane 與 Telegram rolling preview
 - Telegram 文本顯示已開始從舊 `CLI/TUI` label 收斂到更明確的使用者 / assistant / system 呈現
 
-目前已知缺口：
+目前已知剩餘議題：
 
-- 尚未支持 `codex plan` 消息流的 mirror
-- 已驗證 upstream source 已存在；剩餘缺口更接近 `threadBridge` 的 consumer / adapter 路徑，見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
+- `codex plan` mirror 主路徑已落地；後續重點轉為 transcript compaction / observability 呈現細節
+- 目前行為與設計說明見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
 
 ## 現況定位
 
@@ -80,7 +80,10 @@
 - Telegram 與 management UI 共用同一份 transcript/mirror 基礎
 - management API / web 管理面已開始把這份 mirror 基礎整理成 session summary / session records view
 - transport/source metadata 只保留作 debug / observability，不再作為 Telegram 可見角色命名
-- 但目前要明確承認：`codex plan` 類消息流尚未完整進入 mirror；具體缺口與修改方向見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
+- `codex plan` 類消息流已完整進入 mirror：
+  - `item/plan/delta` 會進入 process transcript / preview
+  - plan-only turn 會有 final assistant delivery
+  - mixed case 會把 assistant text 與 plan markdown 組合成最終 Telegram 回覆
 
 ## 與本地管理面的關係
 
@@ -111,5 +114,5 @@
 ## 下一步
 
 1. 繼續把 transcript / event contract 往更完整的 transport-neutral protocol 收斂。
-2. 依 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md) 補齊 `item/plan/delta` 的 consumer、process transcript 與 adapter fallback。
+2. 依 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md) 繼續收斂 combined final reply 與 plan snapshot 的 transcript / UI 呈現細節。
 3. 在 owner 去 Telegram 化之後，再推進更完整的 transport / adapter 抽象。

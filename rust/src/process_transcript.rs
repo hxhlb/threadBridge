@@ -23,6 +23,7 @@ pub fn process_entry_from_codex_event(
 ) -> Option<TranscriptMirrorEntry> {
     let (lifecycle, item) = match event {
         CodexThreadEvent::ItemStarted { item } => ("item.started", item),
+        CodexThreadEvent::ItemUpdated { item } => ("item.updated", item),
         CodexThreadEvent::ItemCompleted { item } => ("item.completed", item),
         _ => return None,
     };
@@ -242,6 +243,21 @@ mod tests {
             entry.text,
             "Plan: inspect runtime owner | wire transcript API"
         );
+    }
+
+    #[test]
+    fn codex_plan_update_event_maps_to_plan_process_entry() {
+        let event = CodexThreadEvent::ItemUpdated {
+            item: json!({
+                "type": "plan",
+                "text": "stream live plan"
+            }),
+        };
+        let entry =
+            process_entry_from_codex_event(&event, "session-1", TranscriptMirrorOrigin::Telegram)
+                .expect("process entry");
+        assert_eq!(entry.phase, Some(TranscriptMirrorPhase::Plan));
+        assert_eq!(entry.text, "Plan: stream live plan");
     }
 
     #[test]

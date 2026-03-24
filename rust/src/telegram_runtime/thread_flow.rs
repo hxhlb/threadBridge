@@ -10,7 +10,7 @@ use crate::execution_mode::workspace_execution_mode;
 use crate::local_control::LocalControlHandle;
 use crate::process_transcript::process_entry_from_codex_event;
 
-use super::final_reply::send_final_assistant_reply;
+use super::final_reply::{compose_visible_final_reply, send_final_assistant_reply};
 use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
@@ -853,12 +853,14 @@ async fn execute_text_turn(
 
     match result {
         Ok(result) => {
+            let visible_final_text =
+                compose_visible_final_reply(&result.final_response, result.final_plan_text.as_deref());
             record_bot_status_event(
                 &workspace_path,
                 "bot_turn_completed",
                 Some(existing_thread_id),
                 None,
-                Some(&result.final_response),
+                visible_final_text.as_deref(),
             )
             .await?;
             record = state
@@ -869,44 +871,29 @@ async fn execute_text_turn(
                 .repository
                 .update_session_execution_snapshot(record, &result.execution)
                 .await?;
-            state
-                .repository
-                .append_log(
-                    &record,
-                    LogDirection::Assistant,
-                    result.final_response.clone(),
-                    None,
-                )
-                .await?;
-            let _ = state
-                .repository
-                .append_transcript_mirror(
-                    &record,
-                    &TranscriptMirrorEntry {
-                        timestamp: chrono::Utc::now()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                        session_id: existing_thread_id.to_owned(),
-                        origin: TranscriptMirrorOrigin::Telegram,
-                        role: TranscriptMirrorRole::Assistant,
-                        delivery: TranscriptMirrorDelivery::Final,
-                        phase: None,
-                        text: result.final_response.clone(),
-                    },
-                )
-                .await?;
-            if !preview.lock().await.complete(&result.final_response).await {
-                let final_text = if result.final_response.trim().is_empty() {
-                    preview
-                        .lock()
-                        .await
-                        .fallback_final_response()
-                        .trim()
-                        .to_owned()
-                } else {
-                    result.final_response
-                };
-                if !final_text.trim().is_empty() {
-                    send_final_assistant_reply(bot, &record, Some(thread_id), &final_text).await?;
+            if let Some(final_text) = visible_final_text.as_deref() {
+                state
+                    .repository
+                    .append_log(&record, LogDirection::Assistant, final_text, None)
+                    .await?;
+                let _ = state
+                    .repository
+                    .append_transcript_mirror(
+                        &record,
+                        &TranscriptMirrorEntry {
+                            timestamp: chrono::Utc::now()
+                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            session_id: existing_thread_id.to_owned(),
+                            origin: TranscriptMirrorOrigin::Telegram,
+                            role: TranscriptMirrorRole::Assistant,
+                            delivery: TranscriptMirrorDelivery::Final,
+                            phase: None,
+                            text: final_text.to_owned(),
+                        },
+                    )
+                    .await?;
+                if !preview.lock().await.complete(final_text).await {
+                    send_final_assistant_reply(bot, &record, Some(thread_id), final_text).await?;
                 }
             }
             dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
