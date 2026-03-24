@@ -838,8 +838,7 @@ async fn execute_image_analysis_turn(
         .append_transcript_mirror(
             &record,
             &crate::repository::TranscriptMirrorEntry {
-                timestamp: chrono::Utc::now()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 session_id: existing_thread_id.to_owned(),
                 origin: crate::repository::TranscriptMirrorOrigin::Telegram,
                 role: crate::repository::TranscriptMirrorRole::Assistant,

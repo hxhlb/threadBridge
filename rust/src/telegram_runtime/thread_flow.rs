@@ -853,8 +853,10 @@ async fn execute_text_turn(
 
     match result {
         Ok(result) => {
-            let visible_final_text =
-                compose_visible_final_reply(&result.final_response, result.final_plan_text.as_deref());
+            let visible_final_text = compose_visible_final_reply(
+                &result.final_response,
+                result.final_plan_text.as_deref(),
+            );
             record_bot_status_event(
                 &workspace_path,
                 "bot_turn_completed",

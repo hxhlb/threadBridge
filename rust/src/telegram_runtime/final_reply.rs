@@ -89,9 +89,7 @@ pub(crate) fn compose_visible_final_reply(
         .filter(|text| !text.is_empty());
 
     match (!final_response.is_empty(), final_plan_text) {
-        (true, Some(plan)) => Some(format!(
-            "{final_response}\n\n## Proposed Plan\n\n{plan}"
-        )),
+        (true, Some(plan)) => Some(format!("{final_response}\n\n## Proposed Plan\n\n{plan}")),
         (true, None) => Some(final_response.to_owned()),
         (false, Some(plan)) => Some(plan.to_owned()),
         (false, None) => None,

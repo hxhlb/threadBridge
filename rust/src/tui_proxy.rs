@@ -866,7 +866,10 @@ mod tests {
             .into(),
         );
         let extracted = maybe_extract_plan_delta(&message).unwrap();
-        assert_eq!(extracted, Some(("plan_1".to_owned(), "# Plan\n".to_owned())));
+        assert_eq!(
+            extracted,
+            Some(("plan_1".to_owned(), "# Plan\n".to_owned()))
+        );
     }
 
     #[test]

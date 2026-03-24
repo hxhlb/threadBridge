@@ -940,8 +940,7 @@ impl CodexRunner {
                                     if let Some(text) = item.get("text").and_then(Value::as_str) {
                                         final_response = text.to_owned();
                                     }
-                                } else if item.get("type").and_then(Value::as_str) == Some("plan")
-                                {
+                                } else if item.get("type").and_then(Value::as_str) == Some("plan") {
                                     final_plan_text = item
                                         .get("text")
                                         .and_then(Value::as_str)

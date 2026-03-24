@@ -1,9 +1,15 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot, workspace_execution_mode};
@@ -189,6 +195,7 @@ impl ThreadRecord {
 #[derive(Debug, Clone)]
 pub struct ThreadRepository {
     data_root_path: PathBuf,
+    jsonl_append_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 fn now_iso() -> String {
@@ -312,11 +319,85 @@ impl SessionBinding {
     }
 }
 
+#[derive(Debug)]
+struct ParsedJsonl<T> {
+    entries: Vec<T>,
+    truncate_to: Option<usize>,
+}
+
+fn parse_jsonl_entries<T: DeserializeOwned>(path: &Path, content: &str) -> ParsedJsonl<T> {
+    let mut entries = Vec::new();
+    let mut cursor = 0usize;
+    let mut valid_prefix_len = 0usize;
+    let mut malformed_tail_start: Option<usize> = None;
+    let mut valid_non_empty_after_malformed = false;
+
+    for (line_no, chunk) in content.split_inclusive('\n').enumerate() {
+        let line_start = cursor;
+        cursor += chunk.len();
+        let raw_line = chunk.trim_end_matches(['\r', '\n']);
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            if malformed_tail_start.is_none() {
+                valid_prefix_len = cursor;
+            }
+            continue;
+        }
+        match serde_json::from_str::<T>(trimmed) {
+            Ok(entry) => {
+                if malformed_tail_start.is_some() {
+                    valid_non_empty_after_malformed = true;
+                } else {
+                    valid_prefix_len = cursor;
+                }
+                entries.push(entry);
+            }
+            Err(error) => {
+                warn!(
+                    event = "repository.jsonl.line_parse_failed",
+                    path = %path.display(),
+                    line_no = line_no + 1,
+                    error = %error,
+                    "skipping malformed jsonl line"
+                );
+                malformed_tail_start.get_or_insert(line_start);
+            }
+        }
+    }
+
+    let truncate_to = malformed_tail_start
+        .filter(|_| !valid_non_empty_after_malformed)
+        .map(|_| valid_prefix_len);
+    ParsedJsonl {
+        entries,
+        truncate_to,
+    }
+}
+
+async fn append_jsonl_line(path: &Path, line: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    file.write_all(line.as_bytes()).await?;
+    file.write_all(b"\n").await?;
+    file.flush().await?;
+    Ok(())
+}
+
 impl ThreadRepository {
     pub async fn open(data_root_path: impl AsRef<Path>) -> Result<Self> {
         let data_root_path = data_root_path.as_ref().to_path_buf();
         fs::create_dir_all(&data_root_path).await?;
-        Ok(Self { data_root_path })
+        Ok(Self {
+            data_root_path,
+            jsonl_append_locks: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub async fn get_main_thread(&self, chat_id: i64) -> Result<ThreadRecord> {
@@ -421,13 +502,8 @@ impl ThreadRepository {
             text: text.into(),
             user_id,
         };
-        let line = format!("{}\n", serde_json::to_string(&entry)?);
-        let mut existing = String::new();
-        if let Ok(content) = fs::read_to_string(&record.log_path).await {
-            existing = content;
-        }
-        existing.push_str(&line);
-        fs::write(&record.log_path, existing).await?;
+        self.append_jsonl_line_repairing(&record.log_path, &entry)
+            .await?;
         Ok(())
     }
 
@@ -437,26 +513,15 @@ impl ThreadRepository {
         entry: &TranscriptMirrorEntry,
     ) -> Result<bool> {
         let path = record.transcript_mirror_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
+        let lock = self.jsonl_file_lock(&path).await;
+        let _guard = lock.lock().await;
+        let existing_entries = self
+            .load_jsonl_entries_locked::<TranscriptMirrorEntry>(&path)
+            .await?;
+        if existing_entries.iter().any(|existing| existing == entry) {
+            return Ok(false);
         }
-        let mut existing = String::new();
-        if let Ok(content) = fs::read_to_string(&path).await {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let existing_entry: TranscriptMirrorEntry = serde_json::from_str(trimmed)?;
-                if &existing_entry == entry {
-                    return Ok(false);
-                }
-            }
-            existing = content;
-        }
-        let line = format!("{}\n", serde_json::to_string(entry)?);
-        existing.push_str(&line);
-        fs::write(path, existing).await?;
+        append_jsonl_line(&path, &serde_json::to_string(entry)?).await?;
         Ok(true)
     }
 
@@ -588,29 +653,23 @@ impl ThreadRepository {
         record: &ThreadRecord,
         limit: usize,
     ) -> Result<Vec<ThreadLogEntry>> {
-        let content = match fs::read_to_string(&record.log_path).await {
-            Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read {}", record.log_path.display()));
-            }
-        };
-        let mut entries = Vec::new();
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let entry: ThreadLogEntry = serde_json::from_str(trimmed)?;
-            match entry.direction {
-                LogDirection::User | LogDirection::Assistant => entries.push(entry),
-                LogDirection::System => {}
-            }
-        }
+        let lock = self.jsonl_file_lock(&record.log_path).await;
+        let _guard = lock.lock().await;
+        let entries = self
+            .load_jsonl_entries_locked::<ThreadLogEntry>(&record.log_path)
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    entry.direction,
+                    LogDirection::User | LogDirection::Assistant
+                )
+            })
+            .collect::<Vec<_>>();
         if entries.len() <= limit {
             return Ok(entries);
         }
+        let mut entries = entries;
         Ok(entries.split_off(entries.len() - limit))
     }
 
@@ -624,32 +683,70 @@ impl ThreadRepository {
             return Ok(Vec::new());
         }
         let path = record.transcript_mirror_path();
-        let content = match fs::read_to_string(&path).await {
+        let lock = self.jsonl_file_lock(&path).await;
+        let _guard = lock.lock().await;
+        let mut entries = self
+            .load_jsonl_entries_locked::<TranscriptMirrorEntry>(&path)
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                delivery
+                    .as_ref()
+                    .is_none_or(|expected| expected == &entry.delivery)
+            })
+            .collect::<Vec<_>>();
+        if entries.len() <= limit {
+            return Ok(entries);
+        }
+        Ok(entries.split_off(entries.len() - limit))
+    }
+
+    async fn jsonl_file_lock(&self, path: &Path) -> Arc<Mutex<()>> {
+        let key = path.to_string_lossy().to_string();
+        let mut locks = self.jsonl_append_locks.lock().await;
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    async fn append_jsonl_line_repairing<T: Serialize>(
+        &self,
+        path: &Path,
+        value: &T,
+    ) -> Result<()> {
+        let lock = self.jsonl_file_lock(path).await;
+        let _guard = lock.lock().await;
+        let _ = self
+            .load_jsonl_entries_locked::<serde_json::Value>(path)
+            .await?;
+        append_jsonl_line(path, &serde_json::to_string(value)?).await
+    }
+
+    async fn load_jsonl_entries_locked<T: DeserializeOwned>(&self, path: &Path) -> Result<Vec<T>> {
+        let content = match fs::read_to_string(path).await {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
                 return Err(error).with_context(|| format!("failed to read {}", path.display()));
             }
         };
-        let mut entries = Vec::new();
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let entry: TranscriptMirrorEntry = serde_json::from_str(trimmed)?;
-            if delivery
-                .as_ref()
-                .is_some_and(|expected| expected != &entry.delivery)
-            {
-                continue;
-            }
-            entries.push(entry);
+        let parsed = parse_jsonl_entries::<T>(path, &content);
+        if let Some(truncate_to) = parsed.truncate_to
+            && truncate_to < content.len()
+        {
+            fs::write(path, &content[..truncate_to])
+                .await
+                .with_context(|| format!("failed to repair {}", path.display()))?;
+            warn!(
+                event = "repository.jsonl.trailing_tail_repaired",
+                path = %path.display(),
+                truncate_to = truncate_to,
+                original_len = content.len(),
+                "repaired malformed trailing jsonl tail"
+            );
         }
-        if entries.len() <= limit {
-            return Ok(entries);
-        }
-        Ok(entries.split_off(entries.len() - limit))
+        Ok(parsed.entries)
     }
 
     pub async fn read_full_transcript_mirror(
@@ -1316,9 +1413,9 @@ pub struct AppendPendingImageInput {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppendPendingImageInput, SessionBinding, ThreadRepository, ThreadScope, ThreadStatus,
-        TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
-        TranscriptMirrorPhase, TranscriptMirrorRole,
+        AppendPendingImageInput, LogDirection, SessionBinding, ThreadLogEntry, ThreadRepository,
+        ThreadScope, ThreadStatus, TranscriptMirrorDelivery, TranscriptMirrorEntry,
+        TranscriptMirrorOrigin, TranscriptMirrorPhase, TranscriptMirrorRole,
     };
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use crate::image_artifacts::ImageAnalysisArtifact;
@@ -1672,6 +1769,159 @@ mod tests {
         assert_eq!(latest.len(), 2);
         assert_eq!(latest[0].text, "Command: cargo test");
         assert_eq!(latest[1].text, "done");
+    }
+
+    #[tokio::test]
+    async fn concurrent_transcript_mirror_appends_stay_parseable() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+
+        let mut tasks = Vec::new();
+        for index in 0..24 {
+            let repo = repo.clone();
+            let record = record.clone();
+            tasks.push(tokio::spawn(async move {
+                repo.append_transcript_mirror(
+                    &record,
+                    &TranscriptMirrorEntry {
+                        timestamp: format!("2026-03-21T00:00:{index:02}.000Z"),
+                        session_id: "thr_123".to_owned(),
+                        origin: TranscriptMirrorOrigin::Tui,
+                        role: TranscriptMirrorRole::Assistant,
+                        delivery: TranscriptMirrorDelivery::Process,
+                        phase: Some(TranscriptMirrorPhase::Plan),
+                        text: format!("Plan chunk {index}"),
+                    },
+                )
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let content = fs::read_to_string(record.transcript_mirror_path())
+            .await
+            .unwrap();
+        let lines = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 24);
+        for line in lines {
+            let _: TranscriptMirrorEntry = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_log_appends_stay_parseable() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+
+        let mut tasks = Vec::new();
+        for index in 0..24 {
+            let repo = repo.clone();
+            let record = record.clone();
+            tasks.push(tokio::spawn(async move {
+                repo.append_log(
+                    &record,
+                    if index % 2 == 0 {
+                        LogDirection::User
+                    } else {
+                        LogDirection::Assistant
+                    },
+                    format!("line {index}"),
+                    Some(7),
+                )
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let content = fs::read_to_string(&record.log_path).await.unwrap();
+        let lines = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 24);
+        for line in lines {
+            let _: ThreadLogEntry = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn read_transcript_mirror_repairs_malformed_trailing_tail() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let path = record.transcript_mirror_path();
+        let valid = serde_json::to_string(&TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            origin: TranscriptMirrorOrigin::Tui,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "done".to_owned(),
+        })
+        .unwrap();
+        fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        fs::write(&path, format!("{valid}\nn- malformed tail"))
+            .await
+            .unwrap();
+
+        let entries = repo.read_full_transcript_mirror(&record).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "done");
+
+        let repaired = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(repaired, format!("{valid}\n"));
+    }
+
+    #[tokio::test]
+    async fn read_transcript_mirror_skips_malformed_middle_line() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let path = record.transcript_mirror_path();
+        let first = serde_json::to_string(&TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            origin: TranscriptMirrorOrigin::Tui,
+            role: TranscriptMirrorRole::User,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "hi".to_owned(),
+        })
+        .unwrap();
+        let second = serde_json::to_string(&TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:01.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            origin: TranscriptMirrorOrigin::Tui,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "done".to_owned(),
+        })
+        .unwrap();
+        fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        fs::write(&path, format!("{first}\nn- malformed middle\n{second}\n"))
+            .await
+            .unwrap();
+
+        let entries = repo.read_full_transcript_mirror(&record).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, "hi");
+        assert_eq!(entries[1].text, "done");
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        assert!(content.contains("n- malformed middle"));
     }
 
     #[tokio::test]
