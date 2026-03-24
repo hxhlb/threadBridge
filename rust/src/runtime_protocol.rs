@@ -40,6 +40,8 @@ pub enum RuntimeEventKind {
     ThreadStateChanged,
     WorkspaceStateChanged,
     ArchivedThreadChanged,
+    WorkingSessionChanged,
+    TranscriptChanged,
     Error,
 }
 
@@ -51,6 +53,8 @@ impl RuntimeEventKind {
             Self::ThreadStateChanged => "thread_state_changed",
             Self::WorkspaceStateChanged => "workspace_state_changed",
             Self::ArchivedThreadChanged => "archived_thread_changed",
+            Self::WorkingSessionChanged => "working_session_changed",
+            Self::TranscriptChanged => "transcript_changed",
             Self::Error => "error",
         }
     }
@@ -249,6 +253,34 @@ impl WorkspaceRuntimeHealth {
     }
 }
 
+fn canonical_binding_broken_reason(
+    metadata: &crate::repository::ThreadMetadata,
+    binding: Option<&SessionBinding>,
+) -> Option<String> {
+    let binding = binding?;
+    if !binding.session_broken {
+        return None;
+    }
+    binding
+        .session_broken_reason
+        .clone()
+        .or(metadata.session_broken_reason.clone())
+}
+
+fn canonical_binding_broken_at(
+    metadata: &crate::repository::ThreadMetadata,
+    binding: Option<&SessionBinding>,
+) -> Option<String> {
+    let binding = binding?;
+    if !binding.session_broken {
+        return None;
+    }
+    binding
+        .session_broken_at
+        .clone()
+        .or(metadata.session_broken_at.clone())
+}
+
 pub async fn build_workspace_views(
     repository: &ThreadRepository,
     runtime_owner: Option<&DesktopRuntimeOwner>,
@@ -282,10 +314,8 @@ pub async fn build_workspace_views(
             .await
             .unwrap_or_default();
         let resolved_state = resolve_thread_state(&record.metadata, Some(&binding)).await?;
-        let session_broken_reason = binding
-            .session_broken_reason
-            .clone()
-            .or(record.metadata.session_broken_reason.clone());
+        let session_broken_reason =
+            canonical_binding_broken_reason(&record.metadata, Some(&binding));
         let recovery_hint = workspace_recovery_hint(
             false,
             resolved_state.binding_status.as_str(),
@@ -377,11 +407,8 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             None => None,
         };
         let resolved_state = resolve_thread_state(&record.metadata, binding.as_ref()).await?;
-        let session_broken_reason = binding
-            .as_ref()
-            .and_then(|binding| binding.session_broken_reason.clone())
-            .or(record.metadata.session_broken_reason.clone());
         let metadata = record.metadata;
+        let session_broken_reason = canonical_binding_broken_reason(&metadata, binding.as_ref());
         views.push(ThreadStateView {
             thread_key: metadata.thread_key,
             title: metadata.title,
@@ -558,18 +585,9 @@ async fn build_working_session_aggregates(
 
     if resolve_binding_status(&record.metadata, Some(binding)) == BindingStatus::Broken {
         if let Some(session_id) = binding.current_codex_thread_id.as_ref() {
-            let reason = binding.session_broken_reason.clone().or_else(|| {
-                if record.metadata.session_broken {
-                    record.metadata.session_broken_reason.clone()
-                } else {
-                    None
-                }
-            });
+            let reason = canonical_binding_broken_reason(&record.metadata, Some(binding));
             if let Some(reason) = reason {
-                let timestamp = binding
-                    .session_broken_at
-                    .clone()
-                    .or_else(|| record.metadata.session_broken_at.clone())
+                let timestamp = canonical_binding_broken_at(&record.metadata, Some(binding))
                     .unwrap_or_else(|| binding.updated_at.clone());
                 aggregates.entry(session_id.clone()).or_default().last_error =
                     Some(WorkingSessionError { timestamp, reason });
@@ -944,12 +962,12 @@ mod tests {
     use super::{
         ManagedCodexBuildDefaultsView, ManagedCodexView, ManagedWorkspaceView, ThreadStateView,
         WorkingSessionRecordKind, aggregate_handoff_status, build_runtime_health,
-        build_working_session_records, build_working_session_summaries,
+        build_thread_views, build_working_session_records, build_working_session_summaries,
     };
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use crate::repository::{
-        ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
-        TranscriptMirrorPhase, TranscriptMirrorRole,
+        ThreadMetadata, ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry,
+        TranscriptMirrorOrigin, TranscriptMirrorPhase, TranscriptMirrorRole,
     };
     use crate::runtime_owner::RuntimeOwnerStatus;
     use crate::workspace_status::record_bot_status_event;
@@ -1053,6 +1071,46 @@ mod tests {
         assert_eq!(value["run_status"], "idle");
         assert_eq!(value["current_codex_thread_id"], "thr_current");
         assert!(value.get("session_broken").is_none());
+    }
+
+    #[tokio::test]
+    async fn build_thread_views_ignores_stale_metadata_broken_aliases() {
+        let root = temp_path();
+        let workspace = temp_path();
+        fs::create_dir_all(&workspace).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
+        let record = repo
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+                full_auto_snapshot(),
+            )
+            .await
+            .unwrap();
+
+        let mut metadata: ThreadMetadata =
+            serde_json::from_str(&fs::read_to_string(&record.metadata_path).await.unwrap())
+                .unwrap();
+        metadata.session_broken = true;
+        metadata.session_broken_reason = Some("stale metadata".to_owned());
+        fs::write(
+            &record.metadata_path,
+            format!("{}\n", serde_json::to_string_pretty(&metadata).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let views = build_thread_views(&repo).await.unwrap();
+        assert_eq!(views[0].binding_status, "healthy");
+        assert_eq!(views[0].session_broken_reason, None);
+
+        let _ = fs::remove_dir_all(root).await;
+        let _ = fs::remove_dir_all(workspace).await;
     }
 
     #[test]

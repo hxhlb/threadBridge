@@ -746,6 +746,22 @@ struct ManagementEventSnapshot {
     threads: BTreeMap<String, Value>,
     workspaces: BTreeMap<String, Value>,
     archived_threads: BTreeMap<String, Value>,
+    working_sessions: BTreeMap<String, Value>,
+    transcripts: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkingSessionsEventView {
+    thread_key: String,
+    updated_at: Option<String>,
+    session_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TranscriptEventView {
+    thread_key: String,
+    updated_at: Option<String>,
+    entry_count: usize,
 }
 
 async fn build_management_event_snapshot(
@@ -766,12 +782,22 @@ async fn build_management_event_snapshot(
         thread.thread_key.clone()
     })
     .map_err(anyhow::Error::from)?;
+    let working_sessions = keyed_json_map(state.working_sessions_event_views().await?, |item| {
+        item.thread_key.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    let transcripts = keyed_json_map(state.transcript_event_views().await?, |item| {
+        item.thread_key.clone()
+    })
+    .map_err(anyhow::Error::from)?;
     Ok(ManagementEventSnapshot {
         setup,
         runtime,
         threads,
         workspaces,
         archived_threads,
+        working_sessions,
+        transcripts,
     })
 }
 
@@ -833,6 +859,18 @@ fn diff_management_event_snapshots(
         RuntimeEventKind::ArchivedThreadChanged,
         previous.map(|snapshot| &snapshot.archived_threads),
         &current.archived_threads,
+    );
+    push_keyed_runtime_events(
+        &mut events,
+        RuntimeEventKind::WorkingSessionChanged,
+        previous.map(|snapshot| &snapshot.working_sessions),
+        &current.working_sessions,
+    );
+    push_keyed_runtime_events(
+        &mut events,
+        RuntimeEventKind::TranscriptChanged,
+        previous.map(|snapshot| &snapshot.transcripts),
+        &current.transcripts,
     );
 
     events
@@ -1310,6 +1348,54 @@ impl ManagementApiState {
                     "session `{session_id}` not found for active thread `{thread_key}`"
                 ))
             })
+    }
+
+    async fn working_sessions_event_views(&self) -> Result<Vec<WorkingSessionsEventView>> {
+        let active_threads = self.repository.list_active_threads().await?;
+        let mut views = Vec::new();
+        for record in active_threads {
+            let thread_key = record.metadata.thread_key.clone();
+            let Some(binding) = self.repository.read_session_binding(&record).await? else {
+                views.push(WorkingSessionsEventView {
+                    thread_key,
+                    updated_at: None,
+                    session_count: 0,
+                });
+                continue;
+            };
+            let summaries = if binding.workspace_cwd.is_some() {
+                build_working_session_summaries(&self.repository, &record, &binding).await?
+            } else {
+                Vec::new()
+            };
+            let updated_at = summaries
+                .iter()
+                .map(|summary| &summary.updated_at)
+                .max()
+                .cloned();
+            views.push(WorkingSessionsEventView {
+                thread_key,
+                updated_at,
+                session_count: summaries.len(),
+            });
+        }
+        views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
+        Ok(views)
+    }
+
+    async fn transcript_event_views(&self) -> Result<Vec<TranscriptEventView>> {
+        let active_threads = self.repository.list_active_threads().await?;
+        let mut views = Vec::new();
+        for record in active_threads {
+            let entries = self.repository.read_full_transcript_mirror(&record).await?;
+            views.push(TranscriptEventView {
+                thread_key: record.metadata.thread_key,
+                updated_at: entries.last().map(|entry| entry.timestamp.clone()),
+                entry_count: entries.len(),
+            });
+        }
+        views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
+        Ok(views)
     }
 
     async fn archived_thread_views(&self) -> Result<Vec<ArchivedThreadView>> {
@@ -2379,6 +2465,16 @@ mod tests {
             ))
             .collect(),
             archived_threads: BTreeMap::new(),
+            working_sessions: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "session_count": 1, "updated_at": "2026-03-24T10:00:00.000Z"}),
+            ))
+            .collect(),
+            transcripts: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "entry_count": 1, "updated_at": "2026-03-24T10:00:00.000Z"}),
+            ))
+            .collect(),
         };
         let current = ManagementEventSnapshot {
             setup: json!({"telegram_polling_state": "active"}),
@@ -2392,6 +2488,16 @@ mod tests {
             archived_threads: std::iter::once((
                 "thread-1".to_owned(),
                 json!({"thread_key": "thread-1", "archived_at": "2026-03-24T00:00:00.000Z"}),
+            ))
+            .collect(),
+            working_sessions: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "session_count": 2, "updated_at": "2026-03-24T10:05:00.000Z"}),
+            ))
+            .collect(),
+            transcripts: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "entry_count": 2, "updated_at": "2026-03-24T10:05:00.000Z"}),
             ))
             .collect(),
         };
@@ -2413,6 +2519,16 @@ mod tests {
         }));
         assert!(events.iter().any(|event| {
             event.kind == RuntimeEventKind::ArchivedThreadChanged
+                && event.op == RuntimeEventOperation::Upsert
+                && event.key.as_deref() == Some("thread-1")
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::WorkingSessionChanged
+                && event.op == RuntimeEventOperation::Upsert
+                && event.key.as_deref() == Some("thread-1")
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::TranscriptChanged
                 && event.op == RuntimeEventOperation::Upsert
                 && event.key.as_deref() == Some("thread-1")
         }));

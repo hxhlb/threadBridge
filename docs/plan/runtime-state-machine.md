@@ -19,6 +19,7 @@
 - topic title 的 `broken` suffix 已開始從 canonical binding state 派生；`busy` 已退出 title 語義
 - `binding_status=conflict`、`run_status=unbound` 這類過渡值已從 canonical state axes 中移除
 - `session_broken` 目前仍保留在部分 view 作為 compatibility/debug 欄位，但不再應被視為和 `binding_status` 平行的另一條 canonical state axis
+- canonical `binding_status` 的 primary owner 已收斂到 `session-binding.json`；`metadata.json` 內的 `session_broken*` 應只視為 compatibility mirror
 - repository 內部的 canonical write path 已開始透過共用 transition service 收斂
   - `bind_workspace`
   - `mark_session_binding_verified`
@@ -103,10 +104,9 @@ source of truth：
 
 source of truth：
 
-- canonical 判定以 usable workspace binding + `session_broken` flag 為準
-- `session-binding.json`
-- `session_broken`
-- `session_broken_reason`
+- canonical 判定以 usable workspace binding + `session-binding.json.session_broken` 為準
+- primary owner 是 `session-binding.json`
+- `metadata.json` 內的 `session_broken*` 只保留作 compatibility mirror / 遷移回寫，不再作新的主判定入口
 
 判定規則：
 
@@ -120,7 +120,7 @@ source of truth：
 相容性備註：
 
 - `session_broken`
-  - 目前仍可能出現在部分 workspace/thread view 中
+  - 目前仍可能出現在部分 metadata / debug surface 中
   - 但它應被理解成 `binding_status=broken` 的 compatibility/debug 映射，而不是新的對外主狀態欄位
 - `current_codex_thread_id`
   - 在 `binding_status=broken` 時仍可保留作 repair/debug 參考

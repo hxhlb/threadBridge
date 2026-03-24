@@ -41,9 +41,11 @@
   - `thread_state_changed`
   - `workspace_state_changed`
   - `archived_thread_changed`
+  - `working_session_changed`
+  - `transcript_changed`
   - `error`
 - web UI 已開始直接套用 `setup` / `runtime_health` / `workspace` / `archived_thread` 的 typed SSE payload，而不是每次事件都重抓整包 snapshot
-- transcript / working sessions observability 目前仍維持 query-based，收到相關 thread/workspace event 時做 targeted refetch，而不是 records 級 incremental applier
+- transcript / working sessions observability 目前仍維持 query-based；`working_session_changed` / `transcript_changed` 的責任是提供明確 refetch 邊界，而不是 records 級 incremental payload
 
 目前新增記錄的近期方向是：
 
@@ -139,6 +141,9 @@
 這裡再補一個行為要求：
 
 - `ThreadStateView` 的 consumer 不應繞過 `binding_status` / `run_status` 的 canonical 判定
+- `last_used_at`
+  - 只保留作 compatibility alias
+  - 語義上等同 `last_codex_turn_at`
 
 ### 2. `ArchivedThreadView`
 
@@ -164,6 +169,7 @@
   - 代表 active Codex turn 是否 busy，不等於 local session claim 是否存在
 - broken count、recovery hint、以及其他 workspace-level 衍生判斷，也應以 `binding_status` 為準
 - repository 內部的 transition service 不改變這個對外語義；它只是把 write-side state mutation 收斂到同一條內部路徑
+- public control naming 應維持 runtime-facing 名稱；不要把 repository 內部的 `BindWorkspace` / `VerifySession` / `MarkBroken` 直接當成對外 action 名稱
 
 至少包含：
 
@@ -439,7 +445,7 @@ v1 至少保留：
 目前新增確認的缺口是：
 
 - mirror / observability 已開始承接更完整的 Codex 過程文本，event model 應收斂成等價的 process transcript 事件，而不是各 adapter 自己拼 `plan_text` / `tool_text`
-- `codex plan` 消息流目前尚未穩定進入 mirror；問題暫時懷疑更接近 Codex source/event 輸出缺口，而不是單純 protocol consumer 沒接上
+- `codex plan` 消息流目前尚未完整進入 mirror；依現有驗證，問題更接近 `threadBridge` protocol consumer / adapter 尚未接齊，詳見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
 - `managed_codex_changed` 這類更細的 owner / build event 尚未獨立落地
 - event stream 雖然已 typed 化，但目前仍只直接驅動 top-level views；更細的 observability record 仍未走完整增量 payload
 

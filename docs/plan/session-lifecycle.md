@@ -116,6 +116,8 @@
 - 最小但明確的 binding 文件
 - source of truth 是 Telegram thread 對 workspace 與 current Codex thread 的綁定
 - 但 canonical 對外判定仍應回到 `runtime-state-machine` 的 `binding_status`
+- continuity/binding 相關的 primary owner 應是 `session-binding.json`
+- `metadata.json` 內的 `session_broken*` 只保留作 compatibility mirror / 遷移回寫
 
 現行欄位重點：
 
@@ -132,7 +134,8 @@
 這裡要明確區分：
 
 - `session_broken*`
-  - 是 continuity/binding 相關的持久化欄位
+  - 在目前實作中仍可能同時出現在 metadata 與 binding
+  - 但對外 canonical 判定應優先以 `session-binding.json` 為主
 - `binding_status`
   - 是對外 canonical state
 

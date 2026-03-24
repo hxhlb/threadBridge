@@ -125,10 +125,11 @@ pub fn resolve_binding_status(
     metadata: &ThreadMetadata,
     binding: Option<&SessionBinding>,
 ) -> BindingStatus {
+    let _ = metadata;
     if binding_workspace_path(binding).is_none() {
         return BindingStatus::Unbound;
     }
-    if binding.is_some_and(|binding| binding.session_broken) || metadata.session_broken {
+    if binding.is_some_and(|binding| binding.session_broken) {
         BindingStatus::Broken
     } else {
         BindingStatus::Healthy
@@ -417,6 +418,22 @@ mod tests {
         assert_eq!(state.lifecycle_status, LifecycleStatus::Archived);
         assert_eq!(state.binding_status, BindingStatus::Broken);
         assert_eq!(state.run_status, RunStatus::Idle);
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn resolve_thread_state_ignores_stale_metadata_broken_flag_when_binding_is_healthy() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let state = resolve_thread_state(
+            &metadata(ThreadStatus::Active, true),
+            Some(&binding(&workspace, Some("thr_current"), None, false)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.binding_status, BindingStatus::Healthy);
 
         let _ = fs::remove_dir_all(workspace).await;
     }
