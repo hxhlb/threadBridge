@@ -25,6 +25,7 @@ use crate::interactive::{
 const APP_SERVER_CLIENT_NAME: &str = "threadbridge";
 const APP_SERVER_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const WORKSPACE_READY_PROMPT: &str = "Read and follow the workspace AGENTS.md, including the threadBridge appendix if present, then reply with exactly READY. Do not ask follow-up questions. Do not run tools.";
+pub(crate) const COLLABORATION_MODE_UNAVAILABLE_PREFIX: &str = "collaboration mode unavailable:";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CodexWorkspace {
@@ -78,6 +79,8 @@ pub struct CodexRunResult {
 pub struct CodexThreadBinding {
     pub thread_id: String,
     pub cwd: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
     pub execution: SessionExecutionSnapshot,
 }
 
@@ -160,6 +163,19 @@ fn log_item_event(lifecycle: &str, item: &Value) {
 }
 
 impl AppServerClient {
+    fn initialize_params() -> Value {
+        json!({
+            "clientInfo": {
+                "name": APP_SERVER_CLIENT_NAME,
+                "title": null,
+                "version": APP_SERVER_CLIENT_VERSION,
+            },
+            "capabilities": {
+                "experimentalApi": true,
+            }
+        })
+    }
+
     async fn start(workspace: &CodexWorkspace) -> Result<Self> {
         if let Some(app_server_url) = workspace.app_server_url.as_deref() {
             return Self::start_websocket(app_server_url).await;
@@ -214,17 +230,9 @@ impl AppServerClient {
     }
 
     async fn initialize(&mut self) -> Result<()> {
-        let params = json!({
-            "clientInfo": {
-                "name": APP_SERVER_CLIENT_NAME,
-                "title": null,
-                "version": APP_SERVER_CLIENT_VERSION,
-            },
-            "capabilities": {
-                "experimental_api": true,
-            }
-        });
-        let _ = self.request_simple("initialize", params).await?;
+        let _ = self
+            .request_simple("initialize", Self::initialize_params())
+            .await?;
         self.send_notification("initialized", None).await?;
         Ok(())
     }
@@ -488,14 +496,14 @@ impl CodexRunner {
     fn build_turn_start_params(
         thread_id: &str,
         input: &[CodexInputItem],
-        collaboration_mode: Option<CollaborationMode>,
+        collaboration_mode: Option<Value>,
     ) -> Value {
         let mut params = json!({
             "threadId": thread_id,
             "input": Self::normalize_input(input),
         });
         if let Some(collaboration_mode) = collaboration_mode {
-            params["collaborationMode"] = Value::String(collaboration_mode.as_str().to_owned());
+            params["collaborationMode"] = collaboration_mode;
         }
         params
     }
@@ -518,8 +526,88 @@ impl CodexRunner {
         Ok(CodexThreadBinding {
             thread_id,
             cwd,
+            model: result
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            reasoning_effort: result
+                .get("reasoningEffort")
+                .or_else(|| result.get("reasoning_effort"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             execution: SessionExecutionSnapshot::from_thread_result(result),
         })
+    }
+
+    async fn resolve_collaboration_mode_payload(
+        client: &mut AppServerClient,
+        binding: &CodexThreadBinding,
+        collaboration_mode: Option<CollaborationMode>,
+    ) -> Result<Option<Value>> {
+        if !Self::requires_collaboration_mode_payload(collaboration_mode) {
+            return Ok(None);
+        }
+        let Some(collaboration_mode) = collaboration_mode else {
+            return Ok(None);
+        };
+        let masks = client
+            .request_simple("collaborationMode/list", json!({}))
+            .await
+            .with_context(|| {
+                format!(
+                    "{COLLABORATION_MODE_UNAVAILABLE_PREFIX} failed to fetch collaboration modes"
+                )
+            })?;
+        let items = masks
+            .get("data")
+            .and_then(Value::as_array)
+            .context("collaborationMode/list result missing data array")
+            .with_context(|| {
+                format!("{COLLABORATION_MODE_UNAVAILABLE_PREFIX} invalid collaboration mode list")
+            })?;
+        let selected = items
+            .iter()
+            .find(|mask| {
+                mask.get("mode").and_then(Value::as_str) == Some(collaboration_mode.as_str())
+            })
+            .context("selected collaboration mode is unavailable")
+            .with_context(|| {
+                format!(
+                    "{COLLABORATION_MODE_UNAVAILABLE_PREFIX} {}",
+                    collaboration_mode.as_str()
+                )
+            })?;
+        let model = selected
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| binding.model.clone())
+            .context("session model is unavailable")
+            .with_context(|| {
+                format!(
+                    "{COLLABORATION_MODE_UNAVAILABLE_PREFIX} missing session model for {}",
+                    collaboration_mode.as_str()
+                )
+            })?;
+        let reasoning_effort = selected
+            .get("reasoning_effort")
+            .and_then(|value| (!value.is_null()).then_some(value))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| binding.reasoning_effort.clone());
+
+        Ok(Some(json!({
+            "mode": collaboration_mode.as_str(),
+            "settings": {
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "developer_instructions": Value::Null,
+            },
+        })))
+    }
+
+    fn requires_collaboration_mode_payload(collaboration_mode: Option<CollaborationMode>) -> bool {
+        matches!(collaboration_mode, Some(CollaborationMode::Plan))
     }
 
     fn ensure_workspace_cwd(
@@ -1015,6 +1103,8 @@ impl CodexRunner {
         H: FnMut(CodexServerRequest) -> Hf,
         Hf: Future<Output = Result<Option<ToolRequestUserInputResponse>>>,
     {
+        let collaboration_mode =
+            Self::resolve_collaboration_mode_payload(client, binding, collaboration_mode).await?;
         let request_id = client
             .send_request(
                 "turn/start",
@@ -1042,9 +1132,10 @@ impl CodexRunner {
                     bail!("turn/start failed: {message} ({details})");
                 }
                 RpcMessage::Notification { method, params } => {
-                    if let Some(notification) =
-                        Self::map_server_notification(&method, params.clone().unwrap_or(Value::Null))
-                    {
+                    if let Some(notification) = Self::map_server_notification(
+                        &method,
+                        params.clone().unwrap_or(Value::Null),
+                    ) {
                         match notification {
                             CodexServerNotification::ServerRequestResolved(resolved) => {
                                 debug!(
@@ -1105,31 +1196,28 @@ impl CodexRunner {
                         on_event(event).await;
                     }
                 }
-                RpcMessage::Request { id, method, params } => {
-                    match method.as_str() {
-                        "item/tool/requestUserInput" => {
-                            let params: ToolRequestUserInputParams =
-                                serde_json::from_value(params.unwrap_or(Value::Null)).with_context(
-                                    || "invalid item/tool/requestUserInput params".to_owned(),
-                                )?;
-                            if let Some(response) = on_server_request(
-                                CodexServerRequest::RequestUserInput {
-                                    request_id: id,
-                                    params,
-                                },
-                            )
+                RpcMessage::Request { id, method, params } => match method.as_str() {
+                    "item/tool/requestUserInput" => {
+                        let params: ToolRequestUserInputParams = serde_json::from_value(
+                            params.unwrap_or(Value::Null),
+                        )
+                        .with_context(|| "invalid item/tool/requestUserInput params".to_owned())?;
+                        if let Some(response) =
+                            on_server_request(CodexServerRequest::RequestUserInput {
+                                request_id: id,
+                                params,
+                            })
                             .await?
-                            {
-                                client.send_server_request_response(id, &response).await?;
-                            } else {
-                                client.reject_server_request(id, &method).await?;
-                            }
-                        }
-                        _ => {
+                        {
+                            client.send_server_request_response(id, &response).await?;
+                        } else {
                             client.reject_server_request(id, &method).await?;
                         }
                     }
-                }
+                    _ => {
+                        client.reject_server_request(id, &method).await?;
+                    }
+                },
                 RpcMessage::Response { .. } | RpcMessage::Error { .. } => {}
             }
         }
@@ -1140,10 +1228,7 @@ impl CodexRunner {
         })
     }
 
-    fn map_server_notification(
-        method: &str,
-        params: Value,
-    ) -> Option<CodexServerNotification> {
+    fn map_server_notification(method: &str, params: Value) -> Option<CodexServerNotification> {
         match method {
             "serverRequest/resolved" => serde_json::from_value(params)
                 .ok()
@@ -1195,7 +1280,10 @@ fn normalize_item(item: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodexInputItem, CodexRunner, CodexWorkspace, Value, json, normalize_item};
+    use super::{
+        AppServerClient, CodexInputItem, CodexRunner, CodexWorkspace, Value, json, normalize_item,
+    };
+    use crate::collaboration_mode::CollaborationMode;
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use std::path::PathBuf;
 
@@ -1254,6 +1342,51 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_params_keep_collaboration_mode_object() {
+        let params = CodexRunner::build_turn_start_params(
+            "thr_123",
+            &[CodexInputItem::Text {
+                text: "hello".to_owned(),
+            }],
+            Some(json!({
+                "mode": "plan",
+                "settings": {
+                    "model": "gpt-test",
+                    "reasoning_effort": "medium",
+                    "developer_instructions": null,
+                }
+            })),
+        );
+        assert_eq!(params["collaborationMode"]["mode"], "plan");
+        assert_eq!(
+            params["collaborationMode"]["settings"]["reasoning_effort"],
+            "medium"
+        );
+    }
+
+    #[test]
+    fn initialize_params_enable_experimental_api_with_camel_case() {
+        let params = AppServerClient::initialize_params();
+        assert_eq!(params["capabilities"]["experimentalApi"], true);
+        assert!(params["capabilities"].get("experimental_api").is_none());
+    }
+
+    #[test]
+    fn default_mode_does_not_require_collaboration_mode_payload() {
+        assert!(!CodexRunner::requires_collaboration_mode_payload(Some(
+            CollaborationMode::Default,
+        )));
+        assert!(!CodexRunner::requires_collaboration_mode_payload(None));
+    }
+
+    #[test]
+    fn plan_mode_requires_collaboration_mode_payload() {
+        assert!(CodexRunner::requires_collaboration_mode_payload(Some(
+            CollaborationMode::Plan,
+        )));
+    }
+
+    #[test]
     fn normalize_item_converts_known_types_to_snake_case() {
         let normalized = normalize_item(json!({
             "type": "commandExecution",
@@ -1296,11 +1429,15 @@ mod tests {
             "thread": {
                 "id": "thr_123",
                 "cwd": "/tmp/workspace"
-            }
+            },
+            "model": "gpt-test",
+            "reasoningEffort": "high"
         }))
         .unwrap();
         assert_eq!(binding.thread_id, "thr_123");
         assert_eq!(binding.cwd, "/tmp/workspace");
+        assert_eq!(binding.model.as_deref(), Some("gpt-test"));
+        assert_eq!(binding.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(binding.execution.execution_mode, None);
     }
 
