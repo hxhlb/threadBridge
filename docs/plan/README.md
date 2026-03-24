@@ -132,7 +132,8 @@
   - Telegram adapter 遷移草稿
   - owner authority 應先從 Telegram 路徑抽離，再做更完整的 adapter migration
   - 近期優先級應是補齊 Telegram 自身適配，而不是先做第二個 IM adapter 驗證
-  - 近期 Telegram v0 能力面包括 session-first observability、model/mode 設定、desktop launch control、Busy Gate follow-up control surface，以及 `main chat = control 面板` 下的 `forwarded input`
+  - Telegram collaboration mode slash commands 與最小 `request_user_input` / `Implement this plan` 互動面已先行落地
+  - 近期 Telegram v0 剩餘能力面包括 session-first observability、model/mode 設定、desktop launch control、Busy Gate follow-up control surface，以及 `main chat = control 面板` 下的 `forwarded input`
 
 ## 主規格
 

@@ -47,10 +47,10 @@
 目前新增記錄的產品想法是：
 
 - Telegram 之後應能直接設定 Codex 的 execution mode
-- 但 Telegram user-facing 文案是否應顯示為 `Plan / Normal`，還是沿用 `full_auto / yolo`，目前仍未定案
+- 但 Telegram user-facing execution mode 文案是否沿用 `full_auto / yolo`，目前仍未定案
 - `execution mode` 與 `Codex 工作模型` 應明確視為兩個不同控制面，不應混成同一個切換器
-- 另外要明確記錄：Telegram 的 `Plan mode / 普通模式` 切換，不屬於 execution mode
-- 換句話說，Telegram 之後若支持進入 / 離開 `Plan mode`，那應是 collaboration mode control surface，不應掛進這份 execution mode 語義
+- 另外要明確記錄：Telegram 的 `Plan mode / 普通模式` 切換已作為 collaboration mode command surface 落地，不屬於 execution mode
+- 換句話說，現有 `/plan_mode` / `/default_mode` 應視為 collaboration mode control surface，不應掛進這份 execution mode 語義
 
 ## 問題
 
@@ -225,8 +225,8 @@ web 管理面現在也已提供：
 ## 開放問題
 
 - Telegram 是否應提供只讀 mode 顯示，還是未來允許直接切 mode？
-- 若 Telegram 真的提供 mode 切換，user-facing naming 應該是 `Plan / Normal`、`full_auto / yolo`，還是其他更穩定的高階命名？
-- 若 Telegram 之後支持 `Plan mode / 普通模式` 切換，應如何避免和 `full_auto / yolo` 混淆？
+- 若 Telegram 真的提供 execution mode 切換，user-facing naming 應該沿用 `full_auto / yolo`，還是改成其他更穩定的高階命名？
+- 既然 Telegram 已支持 `Plan mode / 普通模式` collaboration mode 切換，應如何避免它和 `full_auto / yolo` 混淆？
 - `Codex 工作模型` 是否也應由 Telegram 提供對應設定入口，且與 execution mode 明確拆成兩條 control surface？
 - execution mode 是否需要額外的 audit retention 或更長 process transcript 保留？
 - 未來若 Codex 支持更多 approval / sandbox 組合，threadBridge 是否仍只暴露高階 mode？

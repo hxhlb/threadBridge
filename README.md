@@ -18,6 +18,9 @@ The current codebase has already landed these major pieces:
 - workspace-first binding model: one managed workspace thread per workspace
 - shared workspace app-server daemon plus local TUI proxy
 - Telegram text and image turns bound to the saved Codex session
+- Telegram collaboration mode commands plus the current Telegram-side interactive question flow:
+  - workspace threads can switch between `default` and `plan`
+  - Telegram can answer `Questions` prompts and the post-plan `Implement this plan?` callback on the same session continuity
 - Telegram preview drafts and final replies now use the current Telegram delivery pipeline:
   - preview drafts go through `sendMessageDraft`, prefer HTML rendering, and fall back to plain text if draft HTML send fails
   - final replies prefer inline Telegram HTML, fall back to plain text on send failure, and switch to a Markdown attachment when the inline reply is too long
@@ -148,12 +151,25 @@ The current workspace-thread flow uses these commands:
 - `/archive_workspace`
 - `/restore_workspace`
 - `/rename_workspace`
+- `/plan_mode`
+- `/default_mode`
 
 Operationally:
 
 - the main private chat is the control console
 - each managed workspace gets its own Telegram topic/thread
 - normal messages in that workspace thread continue the saved Codex session
+
+## Telegram Collaboration
+
+Current collaboration behavior is:
+
+- `/plan_mode` switches the current workspace thread into Plan collaboration mode
+- `/default_mode` switches the current workspace thread back to Default collaboration mode
+- direct Telegram turns and TUI-mirrored turns can surface `Questions` prompts in Telegram
+- option-based questions render inline buttons plus `Other`; freeform questions use the next text message in the same thread
+- secret input is still not supported in Telegram v1
+- plan-mode turns can end with an `Implement this plan?` inline prompt that continues on the same saved session
 
 ## Telegram Delivery
 

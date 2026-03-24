@@ -19,9 +19,7 @@
 
 - plan snapshot 是否需要進一步做 transcript compaction / coalescing
 - management / observability UI 是否要對 combined final reply 做更明確的 plan 區塊呈現
-- TUI / app-server 的互動式回應目前仍未完整進入 Telegram：
-  - 使用者不能在 Telegram 發起或完成 `request_user_input` / elicitation
-  - 本地 / TUI session 產生的互動式請求也還不能穩定 mirror 回 Telegram
+- Telegram 的 `Questions` / `Implement this plan?` 最小互動面已接上同一路徑；若之後要做更一般的 interrupt / questionnaire surface，應視為 adapter follow-up，而不是這份 plan mirror 子規格的責任
 
 ## 問題
 
@@ -180,8 +178,6 @@ Telegram rolling preview 仍沿用現在的模型：
   - mixed case 會送出 assistant text + `## Proposed Plan` + plan markdown
 - local/TUI mirror
   - `item/plan/delta` 會產生 process transcript，而不是被靜默忽略
-- interactive response
-  - 先把「不能在 Telegram 發起與 mirror 的 TUI 互動式回應」單獨列成後續缺口，不與 plan delta / final reply 混做一題
 
 同時要保證不回歸：
 

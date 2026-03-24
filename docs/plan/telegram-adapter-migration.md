@@ -2,13 +2,22 @@
 
 ## 目前進度
 
-這份文檔目前仍是草稿，尚未正式進入遷移階段。
+這份文檔目前仍是草稿，尚未正式進入完整的 adapter migration 階段。
 
-目前已有少量前置收斂：
+目前已有的前置收斂：
 
 - final reply renderer 已有較清楚的 Telegram 專用邊界
 - topic title watcher / busy gate 開始把平台表現和狀態來源分開
 - desktop runtime 已成為正式 owner 啟動模型，Telegram 不再是共享 runtime 的正式 owner
+- Telegram collaboration mode command surface 已落地：
+  - `/plan_mode`
+  - `/default_mode`
+  - `current_collaboration_mode` 已開始持久化到 session binding
+- Telegram interactive response 已有最小 v1：
+  - direct bot path 可顯示並回覆 `request_user_input`
+  - 本地 / TUI session 產生的 `request_user_input` 可 mirror 回 Telegram
+  - plan-only turn 結束後可送出 `Implement this plan?` prompt
+  - secret input 仍不支持
 - 本地 session-first observability API 與 workspace-card `Sessions` pane 已落地，但 Telegram 仍未接上這條能力面
 
 但整體架構仍未完成 Telegram adapter 化。
@@ -23,13 +32,11 @@
 
 - Telegram observability 應優先接上已落地的 session-first API，而不只停留在 thread transcript feed
 - Telegram 之後應可提供 Codex 工作模型與 execution mode 的設定入口
-- Telegram 之後也應可提供 collaboration mode 設定入口：
-  - 進入 `Plan mode`
-  - 回到普通 / default mode
-  - 並明確和 execution mode 分開
-- Telegram 之後也應能承接 app-server / TUI 的互動式回應面：
-  - 例如 `request_user_input` / elicitation / 其他需要使用者明確選擇的互動請求
-  - 不只要能在 Telegram 發起，也要能從本地 / TUI session 正確 mirror 回 Telegram
+- Telegram collaboration mode 設定入口已先行落地，且應持續和 execution mode 分開
+- Telegram 已承接最小 v1 的 app-server / TUI 互動式回應面：
+  - `request_user_input`
+  - post-plan `Implement this plan?`
+  - 後續仍可再擴成更一般的 interrupt / questionnaire surface
 - Telegram 之後也應可提供 desktop launch control surface：
   - 用 slash command 觸發 desktop endpoint 的 `launch new` / `launch current` / `launch resume`
   - 但這條能力不應被表達成 `codex / hcodex` 二選一
@@ -97,7 +104,7 @@
 
 - Telegram 之後可補上 Codex 工作模型設定入口
 - Telegram 之後也可補上 execution mode 設定入口
-- Telegram 之後也應補上 collaboration mode 設定入口
+- Telegram 已補上 collaboration mode 設定入口
 - 這兩者應視為不同控制面：
   - `Codex 工作模型`
     - 回答「用哪個模型」
@@ -110,15 +117,15 @@
 
 ### 2.1. Interactive response / elicitation surface
 
-- Telegram 目前還沒有正式承接互動式回應：
-  - 使用者不能在 Telegram 端完整處理 `request_user_input`
-  - 本地 / TUI session 產生的互動式請求，目前也不能穩定 mirror 回 Telegram
-- 這代表 Telegram 雖能承接普通文字 turn、preview、final reply、plan/tool process transcript，但還不是完整的互動式 session adapter
-- 後續要補的最小能力至少包括：
-  - 顯示互動式問題 / 選項
-  - 讓使用者在 Telegram 回答
-  - 把回答寫回同一條 app-server / session continuity
-  - 本地 / TUI 產生的互動請求能以同一種 Telegram surface 呈現，而不是靜默消失
+- Telegram 已承接最小 v1 的互動式回應：
+  - direct bot path 可顯示互動式問題 / 選項並回寫回答
+  - 本地 / TUI session 產生的 `request_user_input` 可用同一種 Telegram surface mirror 回來
+  - plan-only turn 可送出 `Implement this plan?` callback
+- 這代表 Telegram 已不再只承接普通文字 turn、preview、final reply、plan/tool process transcript，也開始具備最小互動式 session adapter 能力
+- 目前仍未完成的部分包括：
+  - secret input 仍不支持
+  - 更一般的 interrupt / questionnaire surface 仍未 formalize
+  - Telegram observability / debug UI 仍未接到這條互動流程
 
 ### 2.2. Desktop launch control surface
 
@@ -331,7 +338,7 @@ core runtime 應負責：
 - 如果先搬檔案再想語意，會只是形式重組
 - 若 Telegram command 行為沒有先重新表達成 control action，很難抽出 adapter
 - 若 preview 機制仍綁在 Telegram message edit，上層協議會失真
-- 若互動式回應仍只留在本地 / TUI，Telegram 就不能算完整 session adapter
+- 若互動式回應長期只停在目前最小 v1，而沒有 formalize 成更一般的 control surface，adapter 邊界仍會模糊
 
 ## 開放問題
 
@@ -340,8 +347,8 @@ core runtime 應負責：
 - preview 在 custom app 裡應該是 delta stream、replace stream，還是 terminal-style replay？
 - Telegram adapter 是否仍然是預設 entrypoint，還是未來要支援多 adapter 同時註冊？
 - 近期 Telegram 是否應補上 Codex 工作模型與 execution mode 的設定入口？
-- 近期 Telegram 是否應補上 collaboration mode 切換入口，並明確支持從 `Plan mode` 回到普通模式？
-- 互動式回應近期是否只先支持 `request_user_input` / elicitation，還是要一併設計更一般的 interrupt / questionnaire surface？
+- collaboration mode 是否應進一步進入更公開的 runtime protocol / management views，而不只留在 session binding 與 Telegram adapter？
+- 互動式回應近期是否只先停在已落地的 `request_user_input` / plan prompt v1，還是要一併設計更一般的 interrupt / questionnaire surface？
 - Busy Gate 下的新輸入是否應正式支持：
   - `STOP 並插入發言`
   - `序列發言`
