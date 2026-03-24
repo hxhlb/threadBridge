@@ -999,6 +999,45 @@ mod tests {
     }
 
     #[test]
+    fn managed_workspace_view_serializes_canonical_and_compatibility_fields() {
+        let view = ManagedWorkspaceView {
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            title: Some("Workspace".to_owned()),
+            thread_key: Some("thread-1".to_owned()),
+            workspace_execution_mode: ExecutionMode::FullAuto,
+            current_execution_mode: Some(ExecutionMode::Yolo),
+            current_approval_policy: Some("on-request".to_owned()),
+            current_sandbox_policy: Some("workspace-write".to_owned()),
+            mode_drift: true,
+            binding_status: "broken",
+            run_status: "idle",
+            current_codex_thread_id: Some("thr_current".to_owned()),
+            tui_active_codex_thread_id: Some("thr_tui".to_owned()),
+            tui_session_adoption_pending: false,
+            session_broken: true,
+            last_used_at: Some("2026-03-24T10:00:00.000Z".to_owned()),
+            conflict: false,
+            app_server_status: "running",
+            tui_proxy_status: "running",
+            handoff_readiness: "ready",
+            runtime_health_source: "owner_heartbeat",
+            heartbeat_last_checked_at: Some("2026-03-24T10:00:00.000Z".to_owned()),
+            heartbeat_last_error: None,
+            session_broken_reason: Some("continuity lost".to_owned()),
+            recovery_hint: Some("repair".to_owned()),
+            hcodex_path: "/tmp/workspace/.threadbridge/bin/hcodex".to_owned(),
+            hcodex_available: true,
+            recent_codex_sessions: Vec::new(),
+        };
+
+        let value = serde_json::to_value(view).unwrap();
+        assert_eq!(value["binding_status"], "broken");
+        assert_eq!(value["run_status"], "idle");
+        assert_eq!(value["current_codex_thread_id"], "thr_current");
+        assert_eq!(value["session_broken"], true);
+    }
+
+    #[test]
     fn runtime_health_counts_use_workspace_view_conflict_flag() {
         let workspaces = vec![
             ManagedWorkspaceView {

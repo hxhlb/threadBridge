@@ -18,6 +18,7 @@
 - final reply attachment 已開始做 Telegram 文件大小 preflight
 - workspace outbox `photo` 已開始在超過 Telegram photo upload 上限時 fallback 成 `document`
 - workspace outbox `document` 與 oversized final reply attachment 已開始在超限時回到明確 warning / notice 路徑，而不是只留下底層 API 錯誤
+- workspace outbox 目前已明確形成 `content` / `status` 的最小契約；`draft` / `control` / `edit` 在 workspace tool surface 上仍只保留為保守兼容值，還不是正式保證的 tool-facing lane
 
 目前尚未實作這份文檔想要的內容：
 
@@ -74,6 +75,7 @@
 - content 與 status 不是同一種 payload，應該明確分開。
 - preview 仍然是 Telegram draft surface，但 renderer 已可與 final reply 共用。
 - v1 不引入 persistent outbound queue。
+- workspace outbox v1 只正式承諾 `content` / `status`；`draft` / `control` / `edit` 仍屬 adapter-owned surface，不在這一輪擴成 workspace tool 的完整對外契約。
 
 ## Queue Partition
 
@@ -149,6 +151,11 @@ preview draft surface。
 
 - restore page `editMessageText`
 - media control message update
+
+目前要明確承認一件事：
+
+- 這三類 surface 雖然已存在於 parser / wire shape 中，但在 workspace outbox v1 上仍只保留兼容語義
+- 近期不應把它們誤寫成「已可由 workspace tool 穩定驅動」的能力
 
 ## 現有 Telegram Surfaces
 

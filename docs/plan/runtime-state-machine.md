@@ -13,8 +13,10 @@
 - management API 的 `ThreadStateView` 已開始直接暴露 canonical `lifecycle_status` / `binding_status` / `run_status`
 - management API 的 `ThreadStateView` / `ManagedWorkspaceView` / `ArchivedThreadView` / `RuntimeHealthView` 已開始透過共享的 protocol/view builder 收斂，而不是各自在 handler 內重組狀態
 - `/api/events` 已開始從 canonical view diff 輸出 typed SSE event，而不是每輪都推整包 snapshot
+- web 管理面已開始直接套用 top-level typed SSE payload，而不是每次事件都重抓整包 snapshot
 - topic title 的 `broken` suffix 已開始從 canonical binding state 派生；`busy` 已退出 title 語義
 - `binding_status=conflict`、`run_status=unbound` 這類過渡值已從 canonical state axes 中移除
+- `session_broken` 目前仍保留在部分 view 作為 compatibility/debug 欄位，但不再應被視為和 `binding_status` 平行的另一條 canonical state axis
 
 目前尚未完成的部分：
 
@@ -104,6 +106,12 @@ source of truth：
   - binding 存在，且 `session_broken = false`
 - `broken`
   - binding 存在，且 `session_broken = true`
+
+相容性備註：
+
+- `session_broken`
+  - 目前仍可能出現在部分 workspace/thread view 中
+  - 但它應被理解成 `binding_status=broken` 的 compatibility/debug 映射，而不是新的對外主狀態欄位
 
 ### 3. `run_status`
 

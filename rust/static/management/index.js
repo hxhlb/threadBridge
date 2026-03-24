@@ -145,6 +145,31 @@ function workspaceByThreadKey(threadKey) {
   return (appState.workspaces || []).find(item => item.thread_key === threadKey) || null;
 }
 
+function workspaceIndexByCwd(workspaceCwd) {
+  return (appState.workspaces || []).findIndex(item => item.workspace_cwd === workspaceCwd);
+}
+
+function archivedThreadIndexByKey(threadKey) {
+  return (appState.archived || []).findIndex(item => item.thread_key === threadKey);
+}
+
+function upsertArrayItem(items, index, value) {
+  if (index >= 0) {
+    items[index] = value;
+    return items;
+  }
+  items.push(value);
+  return items;
+}
+
+function removeArrayItem(items, index) {
+  if (index < 0) {
+    return items;
+  }
+  items.splice(index, 1);
+  return items;
+}
+
 function reconcileExecutionModeDrafts() {
   for (const [threadKey, draftValue] of Object.entries(appState.executionModeDrafts || {})) {
     const workspace = workspaceByThreadKey(threadKey);
@@ -177,6 +202,142 @@ function shouldDeferWorkspaceCardsRender() {
     return true;
   }
   return Object.keys(appState.executionModeDrafts || {}).length > 0;
+}
+
+const pendingObservabilityRefreshThreadKeys = new Set();
+let renderScheduled = false;
+let observabilityRefreshScheduled = false;
+let fullRefreshScheduled = false;
+let initialSnapshotLoaded = false;
+
+function markObservabilityRefresh(threadKey) {
+  if (!threadKey) {
+    return;
+  }
+  if (transcriptCache(threadKey).loaded || sessionCache(threadKey).loaded) {
+    pendingObservabilityRefreshThreadKeys.add(threadKey);
+  }
+}
+
+async function refreshPendingObservability() {
+  const threadKeys = [...pendingObservabilityRefreshThreadKeys];
+  pendingObservabilityRefreshThreadKeys.clear();
+  await Promise.all(threadKeys.flatMap(threadKey => {
+    const tasks = [];
+    if (transcriptCache(threadKey).loaded) {
+      tasks.push(loadTranscript(threadKey, false));
+    }
+    if (sessionCache(threadKey).loaded) {
+      tasks.push(loadWorkingSessions(threadKey, false));
+    }
+    return tasks;
+  }));
+}
+
+function scheduleRender() {
+  if (renderScheduled) {
+    return;
+  }
+  renderScheduled = true;
+  window.setTimeout(() => {
+    renderScheduled = false;
+    reconcileExecutionModeDrafts();
+    renderAll();
+  }, 50);
+}
+
+function scheduleObservabilityRefresh() {
+  if (observabilityRefreshScheduled || !pendingObservabilityRefreshThreadKeys.size) {
+    return;
+  }
+  observabilityRefreshScheduled = true;
+  window.setTimeout(async () => {
+    observabilityRefreshScheduled = false;
+    await refreshPendingObservability();
+  }, 50);
+}
+
+function scheduleFullRefresh() {
+  if (fullRefreshScheduled) {
+    return;
+  }
+  fullRefreshScheduled = true;
+  window.setTimeout(async () => {
+    fullRefreshScheduled = false;
+    await refresh();
+  }, 150);
+}
+
+function applyRuntimeEvent(payload) {
+  if (!initialSnapshotLoaded) {
+    scheduleFullRefresh();
+    return;
+  }
+  if (!payload?.kind) {
+    scheduleFullRefresh();
+    return;
+  }
+
+  let shouldRender = false;
+  switch (payload.kind) {
+    case 'setup_changed':
+      if (payload.op === 'upsert' && payload.current) {
+        appState.setup = payload.current;
+        shouldRender = true;
+      }
+      break;
+    case 'runtime_health_changed':
+      if (payload.op === 'upsert' && payload.current) {
+        appState.health = payload.current;
+        shouldRender = true;
+      }
+      break;
+    case 'workspace_state_changed': {
+      const key = payload.key;
+      const existingIndex = typeof key === 'string' ? workspaceIndexByCwd(key) : -1;
+      const previousThreadKey = existingIndex >= 0 ? appState.workspaces[existingIndex]?.thread_key : null;
+      if (payload.op === 'remove') {
+        removeArrayItem(appState.workspaces, existingIndex);
+        markObservabilityRefresh(previousThreadKey);
+        shouldRender = true;
+        break;
+      }
+      if (payload.op === 'upsert' && payload.current) {
+        upsertArrayItem(appState.workspaces, existingIndex, payload.current);
+        markObservabilityRefresh(payload.current.thread_key || previousThreadKey);
+        shouldRender = true;
+      }
+      break;
+    }
+    case 'archived_thread_changed': {
+      const key = payload.key;
+      const existingIndex = typeof key === 'string' ? archivedThreadIndexByKey(key) : -1;
+      if (payload.op === 'remove') {
+        removeArrayItem(appState.archived, existingIndex);
+        shouldRender = true;
+        break;
+      }
+      if (payload.op === 'upsert' && payload.current) {
+        upsertArrayItem(appState.archived, existingIndex, payload.current);
+        shouldRender = true;
+      }
+      break;
+    }
+    case 'thread_state_changed':
+      markObservabilityRefresh(payload.key || payload.current?.thread_key || null);
+      break;
+    case 'error':
+      scheduleFullRefresh();
+      return;
+    default:
+      scheduleFullRefresh();
+      return;
+  }
+
+  if (shouldRender) {
+    scheduleRender();
+  }
+  scheduleObservabilityRefresh();
 }
 
 function renderSetupCard(setup) {
@@ -477,7 +638,7 @@ function renderWorkspaceCards(items) {
         <button class="secondary" onclick="openWorkspace('${item.thread_key}')">Open Workspace</button>
         <button ${item.conflict ? 'disabled' : ''} onclick="launchNew('${item.thread_key}')">New Session</button>
         <button ${item.conflict || !item.current_codex_thread_id ? 'disabled' : ''} onclick="launchCurrent('${item.thread_key}')">Continue Telegram Session</button>
-        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', ${item.session_broken ? 'true' : 'false'}, ${item.tui_session_adoption_pending ? 'true' : 'false'})">${item.tui_session_adoption_pending ? 'Adopt TUI' : 'Repair Session'}</button>
+        <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity('${item.thread_key}', '${item.binding_status}', ${item.tui_session_adoption_pending ? 'true' : 'false'})">${item.tui_session_adoption_pending ? 'Adopt TUI' : item.binding_status === 'broken' ? 'Repair Session' : 'Reconnect Session'}</button>
         <button class="secondary" onclick="repairRuntime('${item.thread_key}')">Repair Runtime</button>
         <button ${item.conflict ? 'disabled' : ''} onclick="showLaunchConfig('${item.thread_key}')">Show Launch Commands</button>
         <button onclick='archiveThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(workspacePrimaryLabel(item))})'>Archive</button>
@@ -616,6 +777,7 @@ async function refresh() {
   appState.health = health;
   appState.workspaces = workspaces;
   appState.archived = archived;
+  initialSnapshotLoaded = true;
   reconcileExecutionModeDrafts();
   renderAll();
   await Promise.all([refreshLoadedTranscripts(), refreshLoadedSessions()]);
@@ -717,12 +879,12 @@ async function reconnectCodex(threadKey) {
   await refresh();
 }
 
-async function repairContinuity(threadKey, sessionBroken, adoptionPending) {
+async function repairContinuity(threadKey, bindingStatus, adoptionPending) {
   if (adoptionPending) {
     await adoptTuiSession(threadKey);
     return;
   }
-  if (sessionBroken) {
+  if (bindingStatus === 'broken') {
     await reconnectCodex(threadKey);
     return;
   }
@@ -1073,18 +1235,6 @@ document.getElementById('workspace-filter').addEventListener('input', () => rend
 
 refresh();
 const events = new EventSource('/api/events');
-let refreshScheduled = false;
-
-function scheduleRefresh() {
-  if (refreshScheduled) {
-    return;
-  }
-  refreshScheduled = true;
-  window.setTimeout(async () => {
-    refreshScheduled = false;
-    await refresh();
-  }, 150);
-}
 
 for (const eventName of [
   'setup_changed',
@@ -1093,13 +1243,22 @@ for (const eventName of [
   'workspace_state_changed',
   'archived_thread_changed',
 ]) {
-  events.addEventListener(eventName, () => scheduleRefresh());
+  events.addEventListener(eventName, event => {
+    try {
+      applyRuntimeEvent(JSON.parse(event.data));
+    } catch (error) {
+      console.warn(`management SSE ${eventName} parse failed`, error);
+      scheduleFullRefresh();
+    }
+  });
 }
 
 events.addEventListener('error', event => {
   console.warn('management SSE error event', event);
+  scheduleFullRefresh();
 });
 
 events.onerror = error => {
   console.warn('management SSE transport error', error);
+  scheduleFullRefresh();
 };

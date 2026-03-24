@@ -2367,4 +2367,22 @@ mod tests {
                 && event.key.as_deref() == Some("thread-1")
         }));
     }
+
+    #[test]
+    fn runtime_event_remove_serialization_omits_current_payload() {
+        let event = crate::runtime_protocol::RuntimeEvent {
+            kind: RuntimeEventKind::WorkspaceStateChanged,
+            op: RuntimeEventOperation::Remove,
+            key: Some("/tmp/workspace".to_owned()),
+            current: None,
+            message: None,
+        };
+
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["kind"], "workspace_state_changed");
+        assert_eq!(value["op"], "remove");
+        assert_eq!(value["key"], "/tmp/workspace");
+        assert!(value.get("current").is_none());
+        assert!(value.get("message").is_none());
+    }
 }

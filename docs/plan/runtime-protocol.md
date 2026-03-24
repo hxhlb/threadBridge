@@ -39,7 +39,8 @@
   - `workspace_state_changed`
   - `archived_thread_changed`
   - `error`
-- web UI 目前仍主要把這些 event 當成 refresh trigger，而不是完整的 incremental state applier
+- web UI 已開始直接套用 `setup` / `runtime_health` / `workspace` / `archived_thread` 的 typed SSE payload，而不是每次事件都重抓整包 snapshot
+- transcript / working sessions observability 目前仍維持 query-based，收到相關 thread/workspace event 時做 targeted refetch，而不是 records 級 incremental applier
 
 目前新增記錄的近期方向是：
 
@@ -138,6 +139,8 @@
   - 是 workspace-level 衍生欄位，不是 `binding_status` 的另一個枚舉值
 - `run_status`
   - 代表 active Codex turn 是否 busy，不等於 local session claim 是否存在
+- `session_broken`
+  - 目前仍作為 compatibility/debug 欄位存在，但 UI 與後續文檔應以 `binding_status=broken` 為 canonical 判斷
 
 至少包含：
 
@@ -154,6 +157,7 @@
 - `current_codex_thread_id`
 - `tui_active_codex_thread_id`
 - `tui_session_adoption_pending`
+- `session_broken`
 - `recent_codex_sessions`
 - `conflict`
 - `last_used_at`
@@ -391,6 +395,17 @@ v1 至少保留：
 - `message`
   - 目前主要用在 `error`
 
+目前已收斂的 v1 wire semantics：
+
+- `setup_changed` / `runtime_health_changed`
+  - singleton upsert
+  - 不帶 `key`
+  - `current` 是完整 replacement payload
+- `thread_state_changed` / `workspace_state_changed` / `archived_thread_changed`
+  - keyed event
+  - `op=upsert` 時 `current` 是完整 replacement payload
+  - `op=remove` 時只保留 `key`，不帶 `current`
+
 如果引入 desktop capability bridge，之後也需要考慮：
 
 - `capability_requested`
@@ -402,7 +417,7 @@ v1 至少保留：
 
 - mirror / observability 已開始承接更完整的 Codex 過程文本，event model 應收斂成等價的 process transcript 事件，而不是各 adapter 自己拼 `plan_text` / `tool_text`
 - `managed_codex_changed` 這類更細的 owner / build event 尚未獨立落地
-- event stream 雖然已 typed 化，但 web 管理面仍未直接套用增量 payload
+- event stream 雖然已 typed 化，但目前仍只直接驅動 top-level views；更細的 observability record 仍未走完整增量 payload
 
 ## Query / Control / Stream 分離
 

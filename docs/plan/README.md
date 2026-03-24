@@ -55,7 +55,8 @@
   - runtime health 已改成 owner-canonical，`workspace_state` 僅保留 debug/observation 語義
   - `runtime_protocol` 共享 view builder 已開始把 `ThreadStateView` / `ManagedWorkspaceView` / `ArchivedThreadView` / `RuntimeHealthView` / `WorkingSession*View` 從 transport 層抽離
   - `GET /api/events` 已開始輸出 typed SSE event，而不是每輪都推整包 snapshot
-  - 但 web UI 目前仍主要把這些 event 當成 refresh signal，protocol 也仍未收斂成完整 transport-neutral 契約
+  - web UI 已開始直接套用 top-level typed SSE payload，並只對 transcript / sessions 做 targeted refetch
+  - 但 protocol 仍未收斂成完整 transport-neutral 契約，尤其更細的 observability record 仍未走完整增量 event 模型
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
   - `threadbridge_desktop`、macOS-first tray menu、workspace-first browser management UI 已開始落地
   - pick-and-add、adopt / reject TUI、runtime-owner reconcile、launch config 等 control 已進入 management API
@@ -83,14 +84,17 @@
   - ordinary Telegram gate、management API、topic title 已開始共用同一套 canonical state axes
   - management API 的 thread / workspace / runtime views 已開始透過共享 protocol/view builder 收斂到同一套 canonical state sources
   - `/api/events` 已開始從 canonical view diff 輸出 typed SSE event
+  - web 管理面已開始直接套用 top-level typed payload
   - `binding_status=conflict`、`run_status=unbound` 這類過渡值已退出 canonical state axes
-  - 但它仍未成為所有 surface 的完整唯一 source of truth，尤其 event payload coverage 與 observability 仍待收斂
+  - `session_broken` 仍保留為 compatibility/debug 欄位，但 canonical 判斷已收斂回 `binding_status`
+  - 但它仍未成為所有 surface 的完整唯一 source of truth，尤其更細的 event payload coverage 與 observability 仍待收斂
 - [workspace-runtime-surface.md](/Volumes/Data/Github/threadBridge/docs/plan/workspace-runtime-surface.md)
   - `.threadbridge/`、managed appendix、`hcodex`、tool request/result lane 已形成實際 workspace runtime surface
   - 但按 project type / workspace profile 選擇啟用 tools 的模型仍未收斂
 - [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
   - Telegram outbound delivery 主規格已從純草稿進入部分落地
   - workspace outbox `surface`、最小檔案大小 preflight、photo -> document fallback、以及 oversized attachment/document warning path 已開始落地
+  - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
 
 ## 純草稿
