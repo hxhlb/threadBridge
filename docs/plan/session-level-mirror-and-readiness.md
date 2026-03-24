@@ -108,6 +108,8 @@
   - 定義管理面使用的 view / action / transcript 命名
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
   - owner 收斂完成後，Telegram 才能真正退回成 transport adapter
+- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
+  - 描述未來如何把 mirror intake 從 `TUI proxy` 抽回獨立的 app-server ws observer
 - [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
   - adapter 化建立在 mirror/readiness 模型，而不是舊 CLI handoff 模型之上
 
@@ -115,4 +117,5 @@
 
 1. 繼續把 transcript / event contract 往更完整的 transport-neutral protocol 收斂。
 2. 依 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md) 繼續收斂 combined final reply 與 plan snapshot 的 transcript / UI 呈現細節。
-3. 在 owner 去 Telegram 化之後，再推進更完整的 transport / adapter 抽象。
+3. 補寫並驗證 [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md) 所描述的 observer 化路徑，逐步把 mirror intake 從 `TUI proxy` 拆出來。
+4. 在 owner 去 Telegram 化之後，再推進更完整的 transport / adapter 抽象。

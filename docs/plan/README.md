@@ -111,6 +111,9 @@
 
 ## 純草稿
 
+- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
+  - 將 local/TUI mirror intake 從 `TUI proxy` 拆成獨立 app-server ws observer 的重構草稿
+  - git 歷史支持目前 proxy 承接 mirror 高概率是 CLI 時代遺留，在 shared app-server ws 模型落地後尚未清理完畢
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
   - 本地 session-first observability API 與 workspace-card Sessions pane 已落地，但 Telegram Web App 本身仍未開始
