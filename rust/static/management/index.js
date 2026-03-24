@@ -5,8 +5,11 @@ const appState = {
   archived: [],
   transcripts: {},
   sessions: {},
+  workspacePanels: {},
   executionModeDrafts: {},
 };
+
+const WORKSPACE_PANEL_KEYS = ['advanced', 'launch', 'sessions', 'transcript'];
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -47,6 +50,38 @@ function sessionCache(threadKey) {
     };
   }
   return appState.sessions[threadKey];
+}
+
+function workspacePanelState(threadKey) {
+  if (!appState.workspacePanels[threadKey]) {
+    appState.workspacePanels[threadKey] = {
+      advanced: false,
+      launch: false,
+      sessions: false,
+      transcript: false,
+    };
+  }
+  return appState.workspacePanels[threadKey];
+}
+
+function panelOpenAttr(threadKey, panelKey) {
+  return workspacePanelState(threadKey)[panelKey] ? 'open' : '';
+}
+
+function rememberWorkspacePanelStatesFromDom() {
+  const root = document.getElementById('workspaces');
+  if (!root) {
+    return;
+  }
+  const panels = root.querySelectorAll('details[data-thread-key][data-panel-key]');
+  for (const panel of panels) {
+    const threadKey = panel.dataset.threadKey;
+    const panelKey = panel.dataset.panelKey;
+    if (!threadKey || !panelKey || !WORKSPACE_PANEL_KEYS.includes(panelKey)) {
+      continue;
+    }
+    workspacePanelState(threadKey)[panelKey] = panel.open;
+  }
 }
 
 function toneForStatus(value) {
@@ -375,6 +410,7 @@ function configureAddWorkspaceCard(setup) {
 
 function renderWorkspaceCards(items) {
   const root = document.getElementById('workspaces');
+  rememberWorkspacePanelStatesFromDom();
   const query = workspaceFilterQuery();
   const filtered = items.filter(item => matchesQuery([
     item.title,
@@ -452,7 +488,7 @@ function renderWorkspaceCards(items) {
         <button class="secondary" ${item.conflict ? 'disabled' : ''} onclick="launchResume('${item.thread_key}')">Launch Resume</button>
       </div>
 
-      <details class="raw-panel">
+      <details class="raw-panel" data-thread-key="${item.thread_key}" data-panel-key="advanced" ${panelOpenAttr(item.thread_key, 'advanced')}>
         <summary>Advanced Workspace Details</summary>
         <div class="meta-grid">
           ${metaItem('thread_key', item.thread_key || 'none')}
@@ -474,19 +510,19 @@ function renderWorkspaceCards(items) {
         ${item.tui_active_codex_thread_id ? `<div class="toolbar"><button class="secondary" onclick="rejectTuiSession('${item.thread_key}')">Keep Original Binding</button></div>` : ''}
       </details>
 
-      <details id="launch-wrap-${item.thread_key}" class="raw-panel">
+      <details id="launch-wrap-${item.thread_key}" class="raw-panel" data-thread-key="${item.thread_key}" data-panel-key="launch" ${panelOpenAttr(item.thread_key, 'launch')}>
         <summary>Launch Output</summary>
         <pre id="launch-${item.thread_key}">No launch output yet.</pre>
       </details>
 
-      <details class="raw-panel transcript-panel">
+      <details class="raw-panel transcript-panel" data-thread-key="${item.thread_key}" data-panel-key="sessions" ${panelOpenAttr(item.thread_key, 'sessions')}>
         <summary>Sessions</summary>
         <div id="sessions-${item.thread_key}" class="stack">
           ${renderWorkingSessions(item.thread_key)}
         </div>
       </details>
 
-      <details class="raw-panel transcript-panel">
+      <details class="raw-panel transcript-panel" data-thread-key="${item.thread_key}" data-panel-key="transcript" ${panelOpenAttr(item.thread_key, 'transcript')}>
         <summary>Transcript</summary>
         <div class="toolbar">
           <button class="secondary" onclick="loadTranscript('${item.thread_key}', true)">Refresh Transcript</button>
@@ -588,6 +624,7 @@ async function refresh() {
 function openLaunchOutput(threadKey, data) {
   const details = document.getElementById(`launch-wrap-${threadKey}`);
   const target = document.getElementById(`launch-${threadKey}`);
+  workspacePanelState(threadKey).launch = true;
   if (details) {
     details.open = true;
   }
