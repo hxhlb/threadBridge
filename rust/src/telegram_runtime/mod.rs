@@ -43,7 +43,7 @@ mod restore;
 pub mod status_sync;
 mod thread_flow;
 
-#[derive(Clone, BotCommands)]
+#[derive(Clone, Debug, BotCommands)]
 #[command(rename_rule = "snake_case")]
 pub enum Command {
     #[command(description = "Show commands for the control chat and managed workspaces")]
@@ -211,6 +211,30 @@ pub async fn handle_message(bot: Bot, msg: Message, state: AppState) -> Response
         return Ok(());
     };
     if text.starts_with('/') {
+        if let Some(command) = parse_fallback_command_text(text) {
+            info!(
+                event = "telegram.command.fallback_parsed",
+                chat_id = msg.chat.id.0,
+                message_thread_id = msg.thread_id.map(thread_id_to_i32),
+                command = ?command,
+                "parsed slash command via fallback message path"
+            );
+            return handle_command(bot, msg, command, state).await;
+        }
+        warn!(
+            event = "telegram.command.unknown_slash",
+            chat_id = msg.chat.id.0,
+            message_thread_id = msg.thread_id.map(thread_id_to_i32),
+            text = %text,
+            "ignored unknown slash command"
+        );
+        let _ = send_scoped_warning_message(
+            &bot,
+            msg.chat.id,
+            msg.thread_id,
+            "Unknown command. Use /start to see supported commands.",
+        )
+        .await;
         return Ok(());
     }
     if let Err(error) = thread_flow::run_text_message(&bot, &msg, text, &state).await {
@@ -876,6 +900,25 @@ pub(crate) fn command_argument_text<'a>(msg: &'a Message, command_name: &str) ->
     }
 }
 
+fn normalize_slash_command_text(text: &str) -> String {
+    let trimmed = text.trim();
+    let command_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let (command_token, remainder) = trimmed.split_at(command_end);
+    let normalized_token = match command_token.split_once('@') {
+        Some((prefix, _)) if prefix.starts_with('/') => prefix,
+        _ => command_token,
+    };
+    format!("{normalized_token}{remainder}")
+}
+
+fn parse_fallback_command_text(text: &str) -> Option<Command> {
+    if !text.trim().starts_with('/') {
+        return None;
+    }
+    let normalized = normalize_slash_command_text(text);
+    Command::parse(&normalized, "").ok()
+}
+
 pub(crate) async fn ensure_bound_workspace_runtime(
     state: &AppState,
     binding: &SessionBinding,
@@ -1081,7 +1124,8 @@ mod tests {
     use super::{
         AppState, Command, RuntimeOwnershipMode, TelegramSystemIntent, TelegramTextRole,
         command_list, current_bound_session_id, format_role_text, format_system_text,
-        maybe_route_telegram_input_to_tui_session, session_binding_hint_for_state,
+        maybe_route_telegram_input_to_tui_session, normalize_slash_command_text,
+        parse_fallback_command_text, session_binding_hint_for_state,
         should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
         usable_bound_session_id,
     };
@@ -1275,6 +1319,8 @@ mod tests {
         assert!(commands.iter().any(|command| command == "/new_session"));
         assert!(commands.iter().any(|command| command == "/add_workspace"));
         assert!(commands.iter().any(|command| command == "/workspace_info"));
+        assert!(commands.iter().any(|command| command == "/plan_mode"));
+        assert!(commands.iter().any(|command| command == "/default_mode"));
         assert!(
             commands
                 .iter()
@@ -1493,6 +1539,14 @@ mod tests {
             Command::parse("/repair_session", ""),
             Ok(Command::RepairSession)
         ));
+        assert!(matches!(
+            Command::parse("/plan_mode", ""),
+            Ok(Command::PlanMode)
+        ));
+        assert!(matches!(
+            Command::parse("/default_mode", ""),
+            Ok(Command::DefaultMode)
+        ));
         assert!(Command::parse("/new", "").is_err());
         assert!(Command::parse("/generate_title", "").is_err());
         assert!(Command::parse("/reconnect_codex", "").is_err());
@@ -1502,6 +1556,28 @@ mod tests {
         assert!(Command::parse("/new_thread", "").is_err());
         assert!(Command::parse("/bind_workspace", "").is_err());
         assert!(Command::parse("/reset_codex_session", "").is_err());
+    }
+
+    #[test]
+    fn fallback_command_parser_accepts_plain_and_qualified_mode_commands() {
+        assert!(matches!(
+            parse_fallback_command_text("/plan_mode"),
+            Some(Command::PlanMode)
+        ));
+        assert!(matches!(
+            parse_fallback_command_text("/default_mode@threadbridge_bot"),
+            Some(Command::DefaultMode)
+        ));
+        assert_eq!(
+            normalize_slash_command_text("/add_workspace@threadbridge_bot /tmp/workspace"),
+            "/add_workspace /tmp/workspace"
+        );
+    }
+
+    #[test]
+    fn fallback_command_parser_rejects_unknown_slash_commands() {
+        assert!(parse_fallback_command_text("/unknown_command").is_none());
+        assert!(parse_fallback_command_text("hello").is_none());
     }
 
     #[test]

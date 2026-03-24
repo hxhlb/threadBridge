@@ -50,6 +50,27 @@ async fn start_fresh_binding(
         .await
 }
 
+async fn persist_collaboration_mode_change(
+    state: &AppState,
+    record: ThreadRecord,
+    mode: CollaborationMode,
+) -> Result<ThreadRecord> {
+    let record = state
+        .repository
+        .update_session_collaboration_mode(record, mode)
+        .await?;
+    state
+        .repository
+        .append_log(
+            &record,
+            LogDirection::System,
+            format!("Collaboration mode changed to `{}`.", mode.as_str()),
+            None,
+        )
+        .await?;
+    Ok(record)
+}
+
 async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<String> {
     let session = state.repository.read_session_binding(record).await?;
     let (resolved_state, blocking_snapshot) =
@@ -644,10 +665,7 @@ pub(crate) async fn run_command(
                 Command::DefaultMode => CollaborationMode::Default,
                 _ => unreachable!(),
             };
-            let record = state
-                .repository
-                .update_session_collaboration_mode(record, mode)
-                .await?;
+            let record = persist_collaboration_mode_change(state, record, mode).await?;
             send_scoped_message(
                 bot,
                 msg.chat.id,
@@ -1143,6 +1161,85 @@ pub(crate) async fn launch_plan_implementation_turn(
 
 #[cfg(test)]
 mod tests {
+    use super::persist_collaboration_mode_change;
+    use crate::collaboration_mode::CollaborationMode;
+    use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
+    use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
+    use crate::repository::ThreadRepository;
+    use crate::telegram_runtime::{AppState, RuntimeOwnershipMode};
+    use crate::tui_proxy::TuiProxyManager;
+    use crate::workspace_status::WorkspaceStatusCache;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("threadbridge-thread-flow-test-{}", Uuid::new_v4()))
+    }
+
     #[test]
     fn thread_flow_module_compiles_without_attach_helpers() {}
+
+    #[tokio::test]
+    async fn collaboration_mode_change_is_persisted_and_logged() {
+        let root = temp_path();
+        let repository = ThreadRepository::open(&root).await.unwrap();
+        let record = repository
+            .create_thread(1, 7, "Title".to_owned())
+            .await
+            .unwrap();
+        let record = repository
+            .bind_workspace(
+                record,
+                "/tmp/workspace".to_owned(),
+                "thr_current".to_owned(),
+                SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+            )
+            .await
+            .unwrap();
+
+        let state = AppState {
+            config: AppConfig {
+                telegram: TelegramConfig {
+                    telegram_token: "test".to_owned(),
+                    authorized_user_ids: HashSet::from([7_i64]),
+                },
+                stream_edit_interval_ms: 10,
+                stream_message_max_chars: 1000,
+                command_output_tail_chars: 1000,
+                workspace_status_poll_interval_ms: 1000,
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                    management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
+                },
+            },
+            repository: repository.clone(),
+            codex: crate::codex::CodexRunner::new(None),
+            app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
+            tui_proxy: TuiProxyManager::new(repository.clone()),
+            interactive_requests: crate::interactive::InteractiveRequestRegistry::new(),
+            seed_template_path: root.join("seed.md"),
+            workspace_status_cache: WorkspaceStatusCache::new(),
+            runtime_ownership_mode: RuntimeOwnershipMode::SelfManaged,
+        };
+
+        let record = persist_collaboration_mode_change(&state, record, CollaborationMode::Plan)
+            .await
+            .unwrap();
+        let binding = repository
+            .read_session_binding(&record)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            binding.current_collaboration_mode,
+            Some(CollaborationMode::Plan)
+        );
+
+        let content = tokio::fs::read_to_string(&record.log_path).await.unwrap();
+        assert!(content.contains("Collaboration mode changed to `plan`."));
+    }
 }
