@@ -8,8 +8,8 @@ use tokio::fs;
 use tracing::{info, warn};
 
 use super::{
-    Bot, Requester, TelegramTextRole, ThreadRecord, format_prefixed_text, format_role_text,
-    telegram_role_marker,
+    Bot, Requester, TelegramSystemIntent, TelegramTextRole, ThreadRecord, format_prefixed_text,
+    format_role_text, format_system_text, telegram_role_marker,
 };
 
 pub const INLINE_MESSAGE_CHAR_LIMIT: usize = 4096;
@@ -17,8 +17,11 @@ const PREVIEW_CHAR_LIMIT: usize = 800;
 const OVERFLOW_FILE_NAME: &str = "reply.md";
 const OVERFLOW_NOTICE: &str =
     "Reply too long for inline Telegram delivery. Full response attached.";
+const OVERFLOW_ATTACHMENT_LIMIT_NOTICE: &str =
+    "Reply attachment exceeded Telegram's bot upload limit and wasn't delivered.";
 const DEBUG_REPLY_MARKDOWN_FILE: &str = "final-reply-last.md";
 const DEBUG_REPLY_HTML_FILE: &str = "final-reply-last.html";
+const TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TelegramReplyPlan {
@@ -172,7 +175,18 @@ pub(crate) async fn send_final_assistant_reply(
                 format_role_text(TelegramTextRole::Assistant, &notice_text),
             )
             .await?;
-            send_markdown_attachment(bot, record, thread_id, markdown).await?;
+            if !send_markdown_attachment(bot, record, thread_id, markdown).await? {
+                send_plain_text_message(
+                    bot,
+                    ChatId(record.metadata.chat_id),
+                    thread_id,
+                    format_system_text(
+                        TelegramSystemIntent::Warning,
+                        OVERFLOW_ATTACHMENT_LIMIT_NOTICE,
+                    ),
+                )
+                .await?;
+            }
         }
     }
     Ok(())
@@ -228,7 +242,7 @@ async fn send_markdown_attachment(
     record: &ThreadRecord,
     thread_id: Option<ThreadId>,
     markdown: String,
-) -> Result<()> {
+) -> Result<bool> {
     let attachment_path = overflow_attachment_path(record);
     if let Some(parent) = attachment_path.parent() {
         fs::create_dir_all(parent)
@@ -238,6 +252,23 @@ async fn send_markdown_attachment(
     fs::write(&attachment_path, markdown.as_bytes())
         .await
         .with_context(|| format!("failed to write {}", attachment_path.display()))?;
+
+    let attachment_size = fs::metadata(&attachment_path)
+        .await
+        .with_context(|| format!("failed to stat {}", attachment_path.display()))?
+        .len();
+    if attachment_size > TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES {
+        if let Err(error) = fs::remove_file(&attachment_path).await {
+            warn!(
+                event = "telegram.reply.overflow_attachment.cleanup_failed",
+                thread_key = %record.metadata.thread_key,
+                path = %attachment_path.display(),
+                error = %error,
+                "failed to remove oversized overflow attachment"
+            );
+        }
+        return Ok(false);
+    }
 
     let request = bot.send_document(
         ChatId(record.metadata.chat_id),
@@ -258,7 +289,7 @@ async fn send_markdown_attachment(
         );
     }
 
-    Ok(())
+    Ok(true)
 }
 
 fn overflow_attachment_path(record: &ThreadRecord) -> PathBuf {

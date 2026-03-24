@@ -15,6 +15,7 @@ use axum::response::{Html, IntoResponse, Sse};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -31,8 +32,8 @@ use crate::repository::{
 use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus};
 pub use crate::runtime_protocol::{
     ArchivedThreadView, ManagedCodexBuildDefaultsView, ManagedCodexBuildInfoView, ManagedCodexView,
-    ManagedWorkspaceView, RuntimeHealthView, ThreadStateView, WorkingSessionRecordView,
-    WorkingSessionSummaryView,
+    ManagedWorkspaceView, RuntimeEvent, RuntimeEventKind, RuntimeEventOperation, RuntimeHealthView,
+    ThreadStateView, WorkingSessionRecordView, WorkingSessionSummaryView,
 };
 use crate::runtime_protocol::{
     build_archived_thread_views, build_runtime_health, build_thread_views,
@@ -412,7 +413,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             "/api/threads/:thread_key/transcript",
             get(get_thread_transcript),
         )
-        .route("/api/threads/:thread_key/sessions", get(get_working_sessions))
+        .route(
+            "/api/threads/:thread_key/sessions",
+            get(get_working_sessions),
+        )
         .route(
             "/api/threads/:thread_key/sessions/:session_id/records",
             get(get_working_session_records),
@@ -733,24 +737,176 @@ async fn post_restore_thread(
     Ok(Json(state.restore_thread(&thread_key).await?))
 }
 
+#[derive(Debug, Clone)]
+struct ManagementEventSnapshot {
+    setup: Value,
+    runtime: Value,
+    threads: BTreeMap<String, Value>,
+    workspaces: BTreeMap<String, Value>,
+    archived_threads: BTreeMap<String, Value>,
+}
+
+async fn build_management_event_snapshot(
+    state: &ManagementApiState,
+) -> Result<ManagementEventSnapshot, ManagementApiError> {
+    let setup = serde_json::to_value(state.setup_state().await?).map_err(anyhow::Error::from)?;
+    let runtime =
+        serde_json::to_value(state.runtime_health().await?).map_err(anyhow::Error::from)?;
+    let threads = keyed_json_map(state.thread_views().await?, |thread| {
+        thread.thread_key.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    let workspaces = keyed_json_map(state.workspace_views().await?, |workspace| {
+        workspace.workspace_cwd.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    let archived_threads = keyed_json_map(state.archived_thread_views().await?, |thread| {
+        thread.thread_key.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    Ok(ManagementEventSnapshot {
+        setup,
+        runtime,
+        threads,
+        workspaces,
+        archived_threads,
+    })
+}
+
+fn keyed_json_map<T, F>(
+    items: Vec<T>,
+    key_fn: F,
+) -> Result<BTreeMap<String, Value>, serde_json::Error>
+where
+    T: Serialize,
+    F: Fn(&T) -> String,
+{
+    let mut map = BTreeMap::new();
+    for item in items {
+        map.insert(key_fn(&item), serde_json::to_value(item)?);
+    }
+    Ok(map)
+}
+
+fn diff_management_event_snapshots(
+    previous: Option<&ManagementEventSnapshot>,
+    current: &ManagementEventSnapshot,
+) -> Vec<RuntimeEvent> {
+    let mut events = Vec::new();
+
+    if previous.is_none_or(|snapshot| snapshot.setup != current.setup) {
+        events.push(RuntimeEvent {
+            kind: RuntimeEventKind::SetupChanged,
+            op: RuntimeEventOperation::Upsert,
+            key: None,
+            current: Some(current.setup.clone()),
+            message: None,
+        });
+    }
+
+    if previous.is_none_or(|snapshot| snapshot.runtime != current.runtime) {
+        events.push(RuntimeEvent {
+            kind: RuntimeEventKind::RuntimeHealthChanged,
+            op: RuntimeEventOperation::Upsert,
+            key: None,
+            current: Some(current.runtime.clone()),
+            message: None,
+        });
+    }
+
+    push_keyed_runtime_events(
+        &mut events,
+        RuntimeEventKind::ThreadStateChanged,
+        previous.map(|snapshot| &snapshot.threads),
+        &current.threads,
+    );
+    push_keyed_runtime_events(
+        &mut events,
+        RuntimeEventKind::WorkspaceStateChanged,
+        previous.map(|snapshot| &snapshot.workspaces),
+        &current.workspaces,
+    );
+    push_keyed_runtime_events(
+        &mut events,
+        RuntimeEventKind::ArchivedThreadChanged,
+        previous.map(|snapshot| &snapshot.archived_threads),
+        &current.archived_threads,
+    );
+
+    events
+}
+
+fn push_keyed_runtime_events(
+    target: &mut Vec<RuntimeEvent>,
+    kind: RuntimeEventKind,
+    previous: Option<&BTreeMap<String, Value>>,
+    current: &BTreeMap<String, Value>,
+) {
+    let empty = BTreeMap::new();
+    let previous = previous.unwrap_or(&empty);
+
+    for (key, value) in current {
+        if previous.get(key) != Some(value) {
+            target.push(RuntimeEvent {
+                kind,
+                op: RuntimeEventOperation::Upsert,
+                key: Some(key.clone()),
+                current: Some(value.clone()),
+                message: None,
+            });
+        }
+    }
+
+    for key in previous.keys() {
+        if !current.contains_key(key) {
+            target.push(RuntimeEvent {
+                kind,
+                op: RuntimeEventOperation::Remove,
+                key: Some(key.clone()),
+                current: None,
+                message: None,
+            });
+        }
+    }
+}
+
 async fn get_events(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Sse<impl futures_util::stream::Stream<Item = Result<Event, Infallible>>> {
     let stream = stream! {
+        let mut previous_snapshot: Option<ManagementEventSnapshot> = None;
         loop {
-            let setup = state.setup_state().await.ok();
-            let runtime = state.runtime_health().await.ok();
-            let threads = state.thread_views().await.ok();
-            let workspaces = state.workspace_views().await.ok();
-            let archived = state.archived_thread_views().await.ok();
-            let payload = serde_json::json!({
-                "setup": setup,
-                "runtime": runtime,
-                "threads": threads,
-                "workspaces": workspaces,
-                "archived_threads": archived,
-            });
-            yield Ok(Event::default().data(payload.to_string()));
+            match build_management_event_snapshot(&state).await {
+                Ok(snapshot) => {
+                    let events = diff_management_event_snapshots(previous_snapshot.as_ref(), &snapshot);
+                    previous_snapshot = Some(snapshot);
+                    for payload in events {
+                        if let Ok(data) = serde_json::to_string(&payload) {
+                            yield Ok(
+                                Event::default()
+                                    .event(payload.kind.as_str())
+                                    .data(data)
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    let payload = RuntimeEvent {
+                        kind: RuntimeEventKind::Error,
+                        op: RuntimeEventOperation::Upsert,
+                        key: None,
+                        current: None,
+                        message: Some(error.error.to_string()),
+                    };
+                    if let Ok(data) = serde_json::to_string(&payload) {
+                        yield Ok(
+                            Event::default()
+                                .event(payload.kind.as_str())
+                                .data(data)
+                        );
+                    }
+                }
+            }
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
     };
@@ -2033,7 +2189,8 @@ impl IntoResponse for ManagementApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkingSessionRecordView, WorkingSessionSummaryView, spawn_management_api,
+        ManagementEventSnapshot, WorkingSessionRecordView, WorkingSessionSummaryView,
+        diff_management_event_snapshots, spawn_management_api,
     };
     use crate::config::RuntimeConfig;
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
@@ -2041,13 +2198,20 @@ mod tests {
         ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
         TranscriptMirrorRole,
     };
-    use crate::runtime_protocol::WorkingSessionRecordKind;
+    use crate::runtime_protocol::{
+        RuntimeEventKind, RuntimeEventOperation, WorkingSessionRecordKind,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use tokio::fs;
     use uuid::Uuid;
 
     fn temp_path() -> PathBuf {
-        std::env::temp_dir().join(format!("threadbridge-management-api-test-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!(
+            "threadbridge-management-api-test-{}",
+            Uuid::new_v4()
+        ))
     }
 
     fn runtime_config(root: &PathBuf) -> RuntimeConfig {
@@ -2072,7 +2236,10 @@ mod tests {
         let repo: ThreadRepository = handle.state.repository.clone();
         let workspace = root.join("workspace");
         fs::create_dir_all(&workspace).await.unwrap();
-        let record = repo.create_thread(1, 7, "Workspace".to_owned()).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
         let record = repo
             .bind_workspace(
                 record,
@@ -2102,7 +2269,9 @@ mod tests {
                 text: "done".to_owned(),
             },
         ] {
-            repo.append_transcript_mirror(&record, &entry).await.unwrap();
+            repo.append_transcript_mirror(&record, &entry)
+                .await
+                .unwrap();
         }
 
         let client = reqwest::Client::new();
@@ -2142,5 +2311,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn diff_management_event_snapshots_emits_typed_changes() {
+        let previous = ManagementEventSnapshot {
+            setup: json!({"telegram_polling_state": "active"}),
+            runtime: json!({"handoff_readiness": "ready"}),
+            threads: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "run_status": "idle"}),
+            ))
+            .collect(),
+            workspaces: std::iter::once((
+                "/tmp/workspace".to_owned(),
+                json!({"workspace_cwd": "/tmp/workspace", "run_status": "idle"}),
+            ))
+            .collect(),
+            archived_threads: BTreeMap::new(),
+        };
+        let current = ManagementEventSnapshot {
+            setup: json!({"telegram_polling_state": "active"}),
+            runtime: json!({"handoff_readiness": "degraded"}),
+            threads: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "run_status": "running"}),
+            ))
+            .collect(),
+            workspaces: BTreeMap::new(),
+            archived_threads: std::iter::once((
+                "thread-1".to_owned(),
+                json!({"thread_key": "thread-1", "archived_at": "2026-03-24T00:00:00.000Z"}),
+            ))
+            .collect(),
+        };
+
+        let events = diff_management_event_snapshots(Some(&previous), &current);
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::RuntimeHealthChanged
+                && event.op == RuntimeEventOperation::Upsert
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::ThreadStateChanged
+                && event.op == RuntimeEventOperation::Upsert
+                && event.key.as_deref() == Some("thread-1")
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::WorkspaceStateChanged
+                && event.op == RuntimeEventOperation::Remove
+                && event.key.as_deref() == Some("/tmp/workspace")
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::ArchivedThreadChanged
+                && event.op == RuntimeEventOperation::Upsert
+                && event.key.as_deref() == Some("thread-1")
+        }));
     }
 }

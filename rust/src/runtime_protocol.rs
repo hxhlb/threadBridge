@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::execution_mode::{ExecutionMode, workspace_execution_mode};
 use crate::repository::{
@@ -29,6 +30,49 @@ pub struct RuntimeHealthView {
     pub recovery_hint: Option<String>,
     pub runtime_owner: RuntimeOwnerStatus,
     pub managed_codex: ManagedCodexView,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEventKind {
+    SetupChanged,
+    RuntimeHealthChanged,
+    ThreadStateChanged,
+    WorkspaceStateChanged,
+    ArchivedThreadChanged,
+    Error,
+}
+
+impl RuntimeEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SetupChanged => "setup_changed",
+            Self::RuntimeHealthChanged => "runtime_health_changed",
+            Self::ThreadStateChanged => "thread_state_changed",
+            Self::WorkspaceStateChanged => "workspace_state_changed",
+            Self::ArchivedThreadChanged => "archived_thread_changed",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEventOperation {
+    Upsert,
+    Remove,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeEvent {
+    pub kind: RuntimeEventKind,
+    pub op: RuntimeEventOperation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -382,11 +426,17 @@ pub async fn build_working_session_summaries(
     let aggregates = build_working_session_aggregates(repository, record, binding).await?;
     let mut summaries = Vec::new();
     for (session_id, aggregate) in aggregates {
-        let started_at = aggregate.entries.first().map(|entry| entry.timestamp.clone());
+        let started_at = aggregate
+            .entries
+            .first()
+            .map(|entry| entry.timestamp.clone());
         let updated_at = session_updated_at(&aggregate)
             .or_else(|| started_at.clone())
             .unwrap_or_else(|| binding.updated_at.clone());
-        let last_error = aggregate.last_error.as_ref().map(|error| error.reason.clone());
+        let last_error = aggregate
+            .last_error
+            .as_ref()
+            .map(|error| error.reason.clone());
         let record_count = aggregate.entries.len() + usize::from(last_error.is_some());
         summaries.push(WorkingSessionSummaryView {
             session_id,
@@ -416,7 +466,11 @@ pub async fn build_working_session_summaries(
             last_error,
         });
     }
-    summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.session_id.cmp(&b.session_id)));
+    summaries.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
     Ok(summaries)
 }
 
@@ -482,7 +536,10 @@ async fn build_working_session_aggregates(
         session_ids.insert(session_id.clone());
     }
 
-    for session in repository.read_recent_workspace_sessions(&workspace_cwd).await? {
+    for session in repository
+        .read_recent_workspace_sessions(&workspace_cwd)
+        .await?
+    {
         session_ids.insert(session.session_id.clone());
         aggregates
             .entry(session.session_id)
@@ -505,9 +562,8 @@ async fn build_working_session_aggregates(
                     .clone()
                     .or_else(|| record.metadata.session_broken_at.clone())
                     .unwrap_or_else(|| binding.updated_at.clone());
-                aggregates.entry(session_id.clone()).or_default().last_error = Some(
-                    WorkingSessionError { timestamp, reason },
-                );
+                aggregates.entry(session_id.clone()).or_default().last_error =
+                    Some(WorkingSessionError { timestamp, reason });
             }
         }
     }
@@ -554,12 +610,10 @@ fn origins_seen_for_entries(entries: &[TranscriptMirrorEntry]) -> Vec<Transcript
     seen
 }
 
-fn working_session_record_from_entry(entry: &TranscriptMirrorEntry) -> Option<WorkingSessionRecordView> {
-    let kind = match (
-        &entry.delivery,
-        &entry.role,
-        entry.phase.as_ref(),
-    ) {
+fn working_session_record_from_entry(
+    entry: &TranscriptMirrorEntry,
+) -> Option<WorkingSessionRecordView> {
+    let kind = match (&entry.delivery, &entry.role, entry.phase.as_ref()) {
         (TranscriptMirrorDelivery::Final, TranscriptMirrorRole::User, _) => {
             WorkingSessionRecordKind::UserPrompt
         }
@@ -895,7 +949,10 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_path() -> PathBuf {
-        std::env::temp_dir().join(format!("threadbridge-runtime-protocol-test-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!(
+            "threadbridge-runtime-protocol-test-{}",
+            Uuid::new_v4()
+        ))
     }
 
     fn full_auto_snapshot() -> SessionExecutionSnapshot {
@@ -1037,7 +1094,10 @@ mod tests {
         let workspace = temp_path();
         fs::create_dir_all(&workspace).await.unwrap();
         let repo = ThreadRepository::open(&root).await.unwrap();
-        let record = repo.create_thread(1, 7, "Workspace".to_owned()).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
         let record = repo
             .bind_workspace(
                 record,
@@ -1086,7 +1146,9 @@ mod tests {
                 text: "older".to_owned(),
             },
         ] {
-            repo.append_transcript_mirror(&record, &entry).await.unwrap();
+            repo.append_transcript_mirror(&record, &entry)
+                .await
+                .unwrap();
         }
 
         let binding = repo.read_session_binding(&record).await.unwrap().unwrap();
@@ -1108,7 +1170,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            records.iter().map(|record| &record.kind).collect::<Vec<_>>(),
+            records
+                .iter()
+                .map(|record| &record.kind)
+                .collect::<Vec<_>>(),
             vec![
                 &WorkingSessionRecordKind::UserPrompt,
                 &WorkingSessionRecordKind::ProcessPlan,
@@ -1123,7 +1188,10 @@ mod tests {
         let workspace = temp_path();
         fs::create_dir_all(&workspace).await.unwrap();
         let repo = ThreadRepository::open(&root).await.unwrap();
-        let record = repo.create_thread(1, 7, "Workspace".to_owned()).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
         let record = repo
             .bind_workspace(
                 record,
@@ -1180,11 +1248,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(records.iter().any(|record| {
-            record.kind == WorkingSessionRecordKind::Error
-                && record.source_ref == "session_binding"
+            record.kind == WorkingSessionRecordKind::Error && record.source_ref == "session_binding"
         }));
-        assert!(records.iter().any(|record| {
-            record.kind == WorkingSessionRecordKind::UserPrompt
-        }));
+        assert!(
+            records
+                .iter()
+                .any(|record| { record.kind == WorkingSessionRecordKind::UserPrompt })
+        );
     }
 }

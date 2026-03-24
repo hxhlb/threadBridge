@@ -15,9 +15,25 @@ use super::status_sync;
 use super::*;
 use crate::execution_mode::workspace_execution_mode;
 use crate::image_artifacts::PendingImageBatch;
+use crate::tool_results::TelegramDeliverySurface;
 
 pub(crate) const CALLBACK_IMAGE_BATCH_ANALYZE: &str = "image_batch_analyze";
 const TELEGRAM_OUTBOX_FILE: &str = ".threadbridge/tool_results/telegram_outbox.json";
+const TELEGRAM_BOT_PHOTO_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
+const TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboxFileKind {
+    Photo,
+    Document,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OutboxFileDispatchPlan {
+    SendAsPhoto,
+    SendAsDocument { notice: Option<String> },
+    Skip { notice: String },
+}
 
 #[derive(Clone)]
 pub(crate) struct IncomingImage {
@@ -167,6 +183,149 @@ fn resolve_workspace_file_path(workspace_path: &std::path::Path, relative_path: 
     workspace_path.join(relative_path)
 }
 
+async fn file_size_bytes(path: &std::path::Path) -> Result<u64> {
+    Ok(tokio::fs::metadata(path)
+        .await
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len())
+}
+
+fn outbox_notice_text(surface: TelegramDeliverySurface, message: impl AsRef<str>) -> String {
+    match surface {
+        TelegramDeliverySurface::Content => message.as_ref().to_owned(),
+        other => format!(
+            "[{}] {}",
+            format!("{other:?}").to_lowercase(),
+            message.as_ref()
+        ),
+    }
+}
+
+async fn send_outbox_notice(
+    bot: &Bot,
+    record: &ThreadRecord,
+    thread_id: ThreadId,
+    surface: TelegramDeliverySurface,
+    message: impl AsRef<str>,
+) -> Result<()> {
+    send_scoped_warning_message(
+        bot,
+        ChatId(record.metadata.chat_id),
+        Some(thread_id),
+        outbox_notice_text(surface, message),
+    )
+    .await?;
+    Ok(())
+}
+
+fn plan_outbox_file_dispatch(
+    kind: OutboxFileKind,
+    size_bytes: u64,
+    relative_path: &str,
+) -> OutboxFileDispatchPlan {
+    match kind {
+        OutboxFileKind::Photo if size_bytes > TELEGRAM_BOT_PHOTO_LIMIT_BYTES => {
+            if size_bytes <= TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES {
+                OutboxFileDispatchPlan::SendAsDocument {
+                    notice: Some(format!(
+                        "Photo `{relative_path}` exceeded Telegram's bot photo limit; sending it as a document instead."
+                    )),
+                }
+            } else {
+                OutboxFileDispatchPlan::Skip {
+                    notice: format!(
+                        "Photo `{relative_path}` exceeded Telegram's bot upload limit and was not delivered."
+                    ),
+                }
+            }
+        }
+        OutboxFileKind::Document if size_bytes > TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES => {
+            OutboxFileDispatchPlan::Skip {
+                notice: format!(
+                    "Document `{relative_path}` exceeded Telegram's bot upload limit and was not delivered."
+                ),
+            }
+        }
+        OutboxFileKind::Photo => OutboxFileDispatchPlan::SendAsPhoto,
+        OutboxFileKind::Document => OutboxFileDispatchPlan::SendAsDocument { notice: None },
+    }
+}
+
+async fn send_outbox_document(
+    bot: &Bot,
+    record: &ThreadRecord,
+    thread_id: ThreadId,
+    path: &std::path::Path,
+    caption: Option<&String>,
+) -> Result<()> {
+    let request = bot
+        .send_document(
+            ChatId(record.metadata.chat_id),
+            InputFile::file(path.to_path_buf()),
+        )
+        .message_thread_id(thread_id);
+    if let Some(caption) = caption {
+        request.caption(caption.clone()).await?;
+    } else {
+        request.await?;
+    }
+    Ok(())
+}
+
+async fn dispatch_outbox_file_item(
+    bot: &Bot,
+    record: &ThreadRecord,
+    thread_id: ThreadId,
+    workspace_path: &std::path::Path,
+    relative_path: &str,
+    caption: Option<&String>,
+    surface: TelegramDeliverySurface,
+    kind: OutboxFileKind,
+) -> Result<()> {
+    let absolute_path = resolve_workspace_file_path(workspace_path, relative_path);
+    let size_bytes = match file_size_bytes(&absolute_path).await {
+        Ok(size) => size,
+        Err(error) => {
+            send_outbox_notice(
+                bot,
+                record,
+                thread_id,
+                surface,
+                format!("Attachment `{relative_path}` is missing or unreadable: {error}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    match plan_outbox_file_dispatch(kind, size_bytes, relative_path) {
+        OutboxFileDispatchPlan::SendAsPhoto => {
+            let request = bot
+                .send_photo(
+                    ChatId(record.metadata.chat_id),
+                    InputFile::file(absolute_path),
+                )
+                .message_thread_id(thread_id);
+            if let Some(caption) = caption {
+                request.caption(caption.clone()).await?;
+            } else {
+                request.await?;
+            }
+        }
+        OutboxFileDispatchPlan::SendAsDocument { notice } => {
+            if let Some(notice) = notice {
+                send_outbox_notice(bot, record, thread_id, surface, notice).await?;
+            }
+            send_outbox_document(bot, record, thread_id, &absolute_path, caption).await?;
+        }
+        OutboxFileDispatchPlan::Skip { notice } => {
+            send_outbox_notice(bot, record, thread_id, surface, notice).await?;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn dispatch_workspace_telegram_outbox(
     bot: &Bot,
     state: &AppState,
@@ -188,40 +347,52 @@ pub(crate) async fn dispatch_workspace_telegram_outbox(
 
     for item in &outbox.items {
         match item {
-            TelegramOutboxItem::Text { text } => {
-                send_scoped_message(
+            TelegramOutboxItem::Text { text, surface } => {
+                send_scoped_system_message_with_intent(
                     bot,
                     ChatId(record.metadata.chat_id),
                     Some(thread_id),
+                    match surface {
+                        TelegramDeliverySurface::Status => TelegramSystemIntent::Warning,
+                        _ => TelegramSystemIntent::Info,
+                    },
                     text.clone(),
                 )
                 .await?;
             }
-            TelegramOutboxItem::Photo { path, caption } => {
-                let request = bot
-                    .send_photo(
-                        ChatId(record.metadata.chat_id),
-                        InputFile::file(resolve_workspace_file_path(&workspace_path, path)),
-                    )
-                    .message_thread_id(thread_id);
-                if let Some(caption) = caption {
-                    request.caption(caption.clone()).await?;
-                } else {
-                    request.await?;
-                }
+            TelegramOutboxItem::Photo {
+                path,
+                caption,
+                surface,
+            } => {
+                dispatch_outbox_file_item(
+                    bot,
+                    record,
+                    thread_id,
+                    &workspace_path,
+                    path,
+                    caption.as_ref(),
+                    *surface,
+                    OutboxFileKind::Photo,
+                )
+                .await?;
             }
-            TelegramOutboxItem::Document { path, caption } => {
-                let request = bot
-                    .send_document(
-                        ChatId(record.metadata.chat_id),
-                        InputFile::file(resolve_workspace_file_path(&workspace_path, path)),
-                    )
-                    .message_thread_id(thread_id);
-                if let Some(caption) = caption {
-                    request.caption(caption.clone()).await?;
-                } else {
-                    request.await?;
-                }
+            TelegramOutboxItem::Document {
+                path,
+                caption,
+                surface,
+            } => {
+                dispatch_outbox_file_item(
+                    bot,
+                    record,
+                    thread_id,
+                    &workspace_path,
+                    path,
+                    caption.as_ref(),
+                    *surface,
+                    OutboxFileKind::Document,
+                )
+                .await?;
             }
         }
     }
@@ -660,4 +831,35 @@ async fn execute_image_analysis_turn(
     }
     dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        OutboxFileDispatchPlan, OutboxFileKind, TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES,
+        TELEGRAM_BOT_PHOTO_LIMIT_BYTES, plan_outbox_file_dispatch,
+    };
+
+    #[test]
+    fn photo_over_limit_falls_back_to_document() {
+        let plan = plan_outbox_file_dispatch(
+            OutboxFileKind::Photo,
+            TELEGRAM_BOT_PHOTO_LIMIT_BYTES + 1,
+            "images/generated/test.png",
+        );
+        assert!(matches!(
+            plan,
+            OutboxFileDispatchPlan::SendAsDocument { notice: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn oversized_document_is_skipped_with_notice() {
+        let plan = plan_outbox_file_dispatch(
+            OutboxFileKind::Document,
+            TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES + 1,
+            "artifacts/report.zip",
+        );
+        assert!(matches!(plan, OutboxFileDispatchPlan::Skip { .. }));
+    }
 }

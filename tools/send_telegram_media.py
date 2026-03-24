@@ -31,6 +31,16 @@ def optional_non_empty_string(value, label: str) -> Optional[str]:
     return trimmed or None
 
 
+def normalize_surface(value, label: str) -> str:
+    if value is None:
+        return "content"
+    surface = ensure_non_empty_string(value, label)
+    allowed = {"content", "status", "draft", "control", "edit"}
+    if surface not in allowed:
+        fail(f"Unsupported {label}: {surface}")
+    return surface
+
+
 def normalize_workspace_file_path(workspace_dir: Path, value, label: str) -> str:
     raw = ensure_non_empty_string(value, label)
     candidate = Path(raw)
@@ -57,6 +67,7 @@ def parse_item(workspace_dir: Path, value, index: int) -> dict:
         return {
             "type": "text",
             "text": ensure_non_empty_string(item.get("text"), f"request.items[{index}].text"),
+            "surface": normalize_surface(item.get("surface"), f"request.items[{index}].surface"),
         }
     if item_type in {"photo", "document"}:
         normalized = {
@@ -66,6 +77,7 @@ def parse_item(workspace_dir: Path, value, index: int) -> dict:
                 item.get("path"),
                 f"request.items[{index}].path",
             ),
+            "surface": normalize_surface(item.get("surface"), f"request.items[{index}].surface"),
         }
         caption = optional_non_empty_string(item.get("caption"), f"request.items[{index}].caption")
         if caption is not None:

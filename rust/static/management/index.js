@@ -1073,4 +1073,33 @@ document.getElementById('workspace-filter').addEventListener('input', () => rend
 
 refresh();
 const events = new EventSource('/api/events');
-events.onmessage = () => refresh();
+let refreshScheduled = false;
+
+function scheduleRefresh() {
+  if (refreshScheduled) {
+    return;
+  }
+  refreshScheduled = true;
+  window.setTimeout(async () => {
+    refreshScheduled = false;
+    await refresh();
+  }, 150);
+}
+
+for (const eventName of [
+  'setup_changed',
+  'runtime_health_changed',
+  'thread_state_changed',
+  'workspace_state_changed',
+  'archived_thread_changed',
+]) {
+  events.addEventListener(eventName, () => scheduleRefresh());
+}
+
+events.addEventListener('error', event => {
+  console.warn('management SSE error event', event);
+});
+
+events.onerror = error => {
+  console.warn('management SSE transport error', error);
+};
