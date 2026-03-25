@@ -16,7 +16,7 @@ The current codebase has already landed these major pieces:
 
 - desktop-first runtime ownership and reconcile flow
 - workspace-first binding model: one managed workspace thread per workspace
-- shared workspace app-server daemon plus local TUI proxy
+- shared workspace app-server daemon plus local `hcodex` ingress
 - Telegram text and image turns bound to the saved Codex session
 - Telegram collaboration mode commands plus the current Telegram-side interactive question flow:
   - workspace threads can switch between `default` and `plan`
@@ -224,8 +224,8 @@ Workspace-local managed runtime surface:
 - `.threadbridge/bin/send_telegram_media`
 - `.threadbridge/state/workspace-config.json`
 - `.threadbridge/state/app-server/current.json`
-- `.threadbridge/state/shared-runtime/current.json`
-- `.threadbridge/state/shared-runtime/events.jsonl`
+- `.threadbridge/state/runtime-observer/current.json`
+- `.threadbridge/state/runtime-observer/events.jsonl`
 - `.threadbridge/tool_requests/`
 - `.threadbridge/tool_results/`
 

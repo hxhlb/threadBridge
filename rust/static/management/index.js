@@ -356,7 +356,7 @@ function renderHealthSummary(health) {
   const managedCodex = health.managed_codex || {};
   const metrics = [
     ['Global App Server', health.app_server_status || 'unknown'],
-    ['Global TUI Proxy', health.tui_proxy_status || 'unknown'],
+    ['Global hcodex Ingress', health.hcodex_ingress_status || 'unknown'],
     ['Global Runtime', health.runtime_readiness || 'unknown'],
     ['Owner State', owner.state || 'inactive'],
     ['Owner Last Success', owner.last_successful_reconcile_at || 'never'],
@@ -602,7 +602,7 @@ function renderWorkspaceCards(items) {
           ${badge('run', item.run_status)}
           ${item.conflict ? badge('conflict', 'conflict') : ''}
           ${badge('app', item.app_server_status)}
-          ${badge('proxy', item.tui_proxy_status)}
+          ${badge('ingress', item.hcodex_ingress_status)}
           ${badge('runtime', item.runtime_readiness)}
         </div>
       </div>

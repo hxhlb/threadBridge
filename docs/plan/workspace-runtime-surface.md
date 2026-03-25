@@ -257,8 +257,8 @@ threadBridge 的一個重要特徵是：
   - workspace runtime health 的 public surface 已改成 `runtime_readiness`
   - 後續若 surface profile 要對外可見，應掛進正式 view / action 命名
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
-  - `shared-runtime/*` 已開始收斂到 `runtime-observer/*`
-  - `local-session.json` 已開始收斂到 `local-tui-session.json`，但 legacy read compatibility 仍保留
+  - `runtime-observer/*` 已是主寫入 surface，`shared-runtime/*` 只保留 legacy read compatibility
+  - `local-tui-session.json` 已是主寫入 surface，legacy `local-session.json` 仍保留 read compatibility
 
 ## 開放問題
 

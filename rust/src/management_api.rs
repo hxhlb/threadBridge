@@ -2277,8 +2277,8 @@ impl IntoResponse for ManagementApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManagementEventSnapshot, WorkingSessionRecordView, WorkingSessionSummaryView,
-        diff_management_event_snapshots, spawn_management_api,
+        MANAGEMENT_UI_JS, ManagementEventSnapshot, WorkingSessionRecordView,
+        WorkingSessionSummaryView, diff_management_event_snapshots, spawn_management_api,
     };
     use crate::config::RuntimeConfig;
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
@@ -2314,6 +2314,12 @@ mod tests {
 
     fn full_auto_snapshot() -> SessionExecutionSnapshot {
         SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto)
+    }
+
+    #[test]
+    fn management_ui_uses_hcodex_ingress_status_field() {
+        assert!(MANAGEMENT_UI_JS.contains("hcodex_ingress_status"));
+        assert!(!MANAGEMENT_UI_JS.contains("tui_proxy_status"));
     }
 
     #[tokio::test]
