@@ -114,6 +114,9 @@
 - [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
   - 將 local/TUI mirror intake 從 `TUI proxy` 拆成獨立 app-server ws observer 的重構草稿
   - git 歷史支持目前 proxy 承接 mirror 高概率是 CLI 時代遺留，在 shared app-server ws 模型落地後尚未清理完畢
+- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
+  - 記錄 shared app-server / desktop owner 模型落地後，仍殘留在狀態面、管理詞彙與 `hcodex` 啟動鏈中的 CLI / handoff 時代架構債
+  - 範圍包含 `workspace_status` vocabulary、`handoff_readiness`、`local-session.json`、`hcodex-ws-bridge` 與 legacy attachment compatibility 邊界
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
   - 本地 session-first observability API 與 workspace-card Sessions pane 已落地，但 Telegram Web App 本身仍未開始
@@ -156,6 +159,8 @@
   - 把舊的本地 CLI 狀態接到同一份 busy / title 模型
 - `session-level-mirror-and-readiness`
   - 描述 local/TUI mirror、adoption、與 idle/free readiness 的現行模型
+- `post-cli-runtime-cleanup`
+  - 記錄 app-server / desktop owner 主模型成立後，剩餘 vocabulary、status surface 與 `hcodex` launch shim 的收尾工作
 - `working-session-observability`
   - 描述 working session 的可觀測入口、session timeline 與 artifact 關聯
 - `topic-title-status`
