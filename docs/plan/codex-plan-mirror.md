@@ -94,7 +94,7 @@ v1 明確不做：
 - `plan` 類 `ItemUpdated` 應映射為：
   - `TranscriptMirrorDelivery::Process`
   - `TranscriptMirrorPhase::Plan`
-- raw websocket path 在 `tui_proxy.rs` 內直接累積 `item/plan/delta`
+- raw websocket path 在 `hcodex_ingress.rs` 內直接累積 `item/plan/delta`
 - 對 `item/plan/delta`，v1 直接使用「累積後的完整 plan snapshot 文本」作為 process transcript 文本
 
 v1 的取捨是：
@@ -107,7 +107,7 @@ v1 的取捨是：
 
 ### 3. TUI proxy / local mirror
 
-在 `rust/src/tui_proxy.rs` 這條 raw workspace message 路徑：
+在 `rust/src/hcodex_ingress.rs` 這條 raw workspace message 路徑：
 
 - 保留既有 assistant preview segmentation reset 規則
 - `item/plan/delta` 應能生成 plan process transcript event
@@ -152,7 +152,7 @@ Telegram rolling preview 仍沿用現在的模型：
 
 - `rust/src/codex.rs`
 - `rust/src/process_transcript.rs`
-- `rust/src/tui_proxy.rs`
+- `rust/src/hcodex_ingress.rs`
 - `rust/src/telegram_runtime/thread_flow.rs`
 - `rust/src/telegram_runtime/media.rs`
 - `rust/src/telegram_runtime/final_reply.rs`
@@ -161,7 +161,7 @@ Telegram rolling preview 仍沿用現在的模型：
 
 - `codex.rs` 解決 direct bot path 的 event intake
 - `process_transcript.rs` 收斂 direct bot path 與 raw workspace path 的 plan normalization
-- `tui_proxy.rs` 繼續承接 local/TUI mirror 的 process transcript record
+- `hcodex_ingress.rs` 繼續承接 local/TUI mirror 的 process transcript record
 - Telegram runtime completion path 解決 plan-only 與 mixed case 的 final reply 組裝
 
 ## 測試要求

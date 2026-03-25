@@ -12,6 +12,7 @@ use crate::app_server_runtime::WorkspaceRuntimeManager;
 pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
 use crate::collaboration_mode::CollaborationMode;
 pub(crate) use crate::config::AppConfig;
+use crate::hcodex_ingress::HcodexIngressManager;
 pub(crate) use crate::image_artifacts::{
     ImageAnalysisArtifact, ImageAnalysisImage, build_image_analysis_prompt,
     render_pending_image_batch,
@@ -29,7 +30,6 @@ use crate::thread_state::{
     resolve_thread_state_with_cache,
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
-use crate::tui_proxy::TuiProxyManager;
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 pub(crate) use crate::workspace_status::{
     SessionCurrentStatus, WorkspaceStatusCache, read_local_session_claim, read_session_status,
@@ -87,7 +87,7 @@ pub struct AppState {
     pub(crate) repository: ThreadRepository,
     pub(crate) codex: CodexRunner,
     pub(crate) app_server_runtime: WorkspaceRuntimeManager,
-    pub(crate) tui_proxy: TuiProxyManager,
+    pub(crate) hcodex_ingress: HcodexIngressManager,
     pub(crate) interactive_requests: InteractiveRequestRegistry,
     pub(crate) seed_template_path: PathBuf,
     pub(crate) workspace_status_cache: WorkspaceStatusCache,
@@ -104,19 +104,19 @@ impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
         let repository = ThreadRepository::open(&config.runtime.data_root_path).await?;
         let app_server_runtime = WorkspaceRuntimeManager::new();
-        let tui_proxy = TuiProxyManager::new(repository.clone());
-        Self::new_with_runtimes(config, app_server_runtime, tui_proxy).await
+        let hcodex_ingress = HcodexIngressManager::new(repository.clone());
+        Self::new_with_runtimes(config, app_server_runtime, hcodex_ingress).await
     }
 
     pub async fn new_with_runtimes(
         config: AppConfig,
         app_server_runtime: WorkspaceRuntimeManager,
-        tui_proxy: TuiProxyManager,
+        hcodex_ingress: HcodexIngressManager,
     ) -> Result<Self> {
         Self::new_with_runtimes_and_mode(
             config,
             app_server_runtime,
-            tui_proxy,
+            hcodex_ingress,
             RuntimeOwnershipMode::SelfManaged,
         )
         .await
@@ -125,7 +125,7 @@ impl AppState {
     pub(crate) async fn new_with_runtimes_and_mode(
         config: AppConfig,
         app_server_runtime: WorkspaceRuntimeManager,
-        tui_proxy: TuiProxyManager,
+        hcodex_ingress: HcodexIngressManager,
         runtime_ownership_mode: RuntimeOwnershipMode,
     ) -> Result<Self> {
         let repository = ThreadRepository::open(&config.runtime.data_root_path).await?;
@@ -137,7 +137,7 @@ impl AppState {
                 .join("AGENTS.md"),
         )?;
         let interactive_requests = InteractiveRequestRegistry::new();
-        tui_proxy
+        hcodex_ingress
             .configure_telegram_bridge(
                 config.telegram.telegram_token.clone(),
                 interactive_requests.clone(),
@@ -146,7 +146,7 @@ impl AppState {
         Ok(Self {
             codex: CodexRunner::new(config.runtime.codex_model.clone()),
             app_server_runtime,
-            tui_proxy,
+            hcodex_ingress,
             interactive_requests,
             repository,
             seed_template_path,
@@ -762,7 +762,7 @@ pub(crate) async fn apply_interactive_advance(
                 response,
             } => {
                 state
-                    .tui_proxy
+                    .hcodex_ingress
                     .submit_request_user_input_response(&thread_key, request_id, &response)
                     .await?;
                 if let Some(message_id) = prompt_message_id {
@@ -963,8 +963,8 @@ pub(crate) async fn prepare_workspace_runtime_for_control(
         .ensure_workspace_daemon(&workspace)
         .await?;
     let _ = state
-        .tui_proxy
-        .ensure_workspace_proxy(&workspace, &runtime.daemon_ws_url)
+        .hcodex_ingress
+        .ensure_workspace_ingress(&workspace, &runtime.daemon_ws_url)
         .await?;
     Ok(CodexWorkspace {
         working_directory: workspace,
@@ -1134,10 +1134,10 @@ mod tests {
     use crate::app_server_runtime::WorkspaceRuntimeState;
     use crate::codex::CodexRunner;
     use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
+    use crate::hcodex_ingress::HcodexIngressManager;
     use crate::interactive::InteractiveRequestRegistry;
     use crate::repository::{SessionBinding, ThreadRepository};
     use crate::thread_state::{BindingStatus, LifecycleStatus, ResolvedThreadState, RunStatus};
-    use crate::tui_proxy::TuiProxyManager;
     use crate::workspace_status::{
         SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase, read_session_status,
         record_hcodex_ingress_connected, record_hcodex_launcher_started,
@@ -1476,7 +1476,7 @@ mod tests {
             repository: repository.clone(),
             codex: CodexRunner::new(None),
             app_server_runtime: WorkspaceRuntimeManager::new(),
-            tui_proxy: TuiProxyManager::new(repository.clone()),
+            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
             interactive_requests: InteractiveRequestRegistry::new(),
             seed_template_path: root.join("seed.md"),
             workspace_status_cache: WorkspaceStatusCache::new(),

@@ -1165,9 +1165,9 @@ mod tests {
     use crate::collaboration_mode::CollaborationMode;
     use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
+    use crate::hcodex_ingress::HcodexIngressManager;
     use crate::repository::ThreadRepository;
     use crate::telegram_runtime::{AppState, RuntimeOwnershipMode};
-    use crate::tui_proxy::TuiProxyManager;
     use crate::workspace_status::WorkspaceStatusCache;
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -1219,7 +1219,7 @@ mod tests {
             repository: repository.clone(),
             codex: crate::codex::CodexRunner::new(None),
             app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
-            tui_proxy: TuiProxyManager::new(repository.clone()),
+            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
             interactive_requests: crate::interactive::InteractiveRequestRegistry::new(),
             seed_template_path: root.join("seed.md"),
             workspace_status_cache: WorkspaceStatusCache::new(),

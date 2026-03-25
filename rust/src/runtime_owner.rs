@@ -10,15 +10,15 @@ use tracing::info;
 
 use crate::app_server_runtime::{WorkspaceRuntimeManager, daemon_endpoint_is_live};
 use crate::config::RuntimeConfig;
+use crate::hcodex_ingress::{HcodexIngressManager, hcodex_ingress_endpoint_is_live};
 use crate::repository::ThreadRepository;
-use crate::tui_proxy::{TuiProxyManager, proxy_endpoint_is_live};
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RuntimeOwnerReconcileReport {
     pub scanned_workspaces: usize,
     pub ensured_workspaces: usize,
-    pub ensured_proxies: usize,
+    pub ensured_ingresses: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,7 +59,7 @@ pub struct DesktopRuntimeOwner {
     runtime: RuntimeConfig,
     seed_template_path: PathBuf,
     app_server_runtime: WorkspaceRuntimeManager,
-    tui_proxy_runtime: TuiProxyManager,
+    hcodex_ingress_runtime: HcodexIngressManager,
     status: Arc<RwLock<RuntimeOwnerStatus>>,
     workspace_heartbeats: Arc<RwLock<BTreeMap<String, WorkspaceRuntimeHeartbeat>>>,
     reconcile_lock: Arc<Mutex<()>>,
@@ -78,7 +78,7 @@ impl DesktopRuntimeOwner {
             runtime,
             seed_template_path,
             app_server_runtime: WorkspaceRuntimeManager::new(),
-            tui_proxy_runtime: TuiProxyManager::new(repository),
+            hcodex_ingress_runtime: HcodexIngressManager::new(repository),
             status: Arc::new(RwLock::new(RuntimeOwnerStatus {
                 state: "idle",
                 last_reconcile_started_at: None,
@@ -100,8 +100,8 @@ impl DesktopRuntimeOwner {
         self.app_server_runtime.clone()
     }
 
-    pub fn tui_proxy_runtime(&self) -> TuiProxyManager {
-        self.tui_proxy_runtime.clone()
+    pub fn hcodex_ingress_runtime(&self) -> HcodexIngressManager {
+        self.hcodex_ingress_runtime.clone()
     }
 
     pub async fn workspace_heartbeat(
@@ -128,7 +128,7 @@ impl DesktopRuntimeOwner {
         let mut report = RuntimeOwnerReconcileReport {
             scanned_workspaces: unique_workspaces.len(),
             ensured_workspaces: 0,
-            ensured_proxies: 0,
+            ensured_ingresses: 0,
         };
         let started_at = now_iso();
         {
@@ -163,14 +163,14 @@ impl DesktopRuntimeOwner {
                     "desktop runtime owner ensured workspace app-server"
                 );
                 let _ = self
-                    .tui_proxy_runtime
-                    .ensure_workspace_proxy(workspace_path, &runtime.daemon_ws_url)
+                    .hcodex_ingress_runtime
+                    .ensure_workspace_ingress(workspace_path, &runtime.daemon_ws_url)
                     .await?;
                 info!(
                     event = "runtime_owner.workspace.proxy_ready",
                     workspace = %workspace_path.display(),
                     daemon_ws_url = %runtime.daemon_ws_url,
-                    "desktop runtime owner ensured workspace TUI proxy"
+                    "desktop runtime owner ensured workspace hcodex ingress"
                 );
                 Ok::<(), anyhow::Error>(())
             }
@@ -202,7 +202,7 @@ impl DesktopRuntimeOwner {
             )
             .await;
             report.ensured_workspaces += 1;
-            report.ensured_proxies += 1;
+            report.ensured_ingresses += 1;
         }
         self.prune_workspace_heartbeats(&unique_workspaces).await;
         let finished_at = now_iso();
@@ -285,7 +285,7 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
 
     let app_server_running = daemon_endpoint_is_live(&state.daemon_ws_url).await;
     let proxy_running = match state.hcodex_ws_url.as_deref() {
-        Some(url) => proxy_endpoint_is_live(url).await,
+        Some(url) => hcodex_ingress_endpoint_is_live(url).await,
         None => false,
     };
     let app_server_status = if app_server_running {

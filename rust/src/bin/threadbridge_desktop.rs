@@ -111,7 +111,7 @@ mod macos_app {
             .block_on(spawn_bot_runtime_from_env_with_runtimes(
                 management_api.clone(),
                 owner.app_server_runtime(),
-                owner.tui_proxy_runtime(),
+                owner.hcodex_ingress_runtime(),
             ))?
             .is_some()
         {
@@ -291,7 +291,7 @@ mod macos_app {
         if let Err(error) = spawn_bot_runtime_from_env_with_runtimes(
             management_api.clone(),
             owner.app_server_runtime(),
-            owner.tui_proxy_runtime(),
+            owner.hcodex_ingress_runtime(),
         )
         .await
         {

@@ -6,6 +6,7 @@ use tracing::{info, warn};
 
 use crate::app_server_runtime::WorkspaceRuntimeManager;
 use crate::config::{AppConfig, load_app_config, load_optional_telegram_config};
+use crate::hcodex_ingress::HcodexIngressManager;
 use crate::local_control::LocalControlHandle;
 use crate::management_api::{ManagementApiHandle, TelegramPollingState};
 use crate::telegram_runtime::{
@@ -13,7 +14,6 @@ use crate::telegram_runtime::{
     handle_message,
     status_sync::{reconcile_stale_bot_busy_sessions, spawn_workspace_status_watcher},
 };
-use crate::tui_proxy::TuiProxyManager;
 
 #[derive(Clone)]
 pub struct BotRuntimeHandle {
@@ -33,12 +33,12 @@ pub async fn spawn_bot_runtime_with_runtimes(
     config: AppConfig,
     management_api: ManagementApiHandle,
     app_server_runtime: WorkspaceRuntimeManager,
-    tui_proxy: TuiProxyManager,
+    hcodex_ingress: HcodexIngressManager,
 ) -> Result<BotRuntimeHandle> {
     let state = AppState::new_with_runtimes_and_mode(
         config.clone(),
         app_server_runtime,
-        tui_proxy,
+        hcodex_ingress,
         RuntimeOwnershipMode::DesktopOwner,
     )
     .await?;
@@ -129,7 +129,7 @@ pub async fn spawn_bot_runtime_from_env(
 pub async fn spawn_bot_runtime_from_env_with_runtimes(
     management_api: ManagementApiHandle,
     app_server_runtime: WorkspaceRuntimeManager,
-    tui_proxy: TuiProxyManager,
+    hcodex_ingress: HcodexIngressManager,
 ) -> Result<Option<BotRuntimeHandle>> {
     if load_optional_telegram_config()?.is_none() {
         management_api
@@ -138,7 +138,7 @@ pub async fn spawn_bot_runtime_from_env_with_runtimes(
         return Ok(None);
     }
     let config = load_app_config()?;
-    spawn_bot_runtime_with_runtimes(config, management_api, app_server_runtime, tui_proxy)
+    spawn_bot_runtime_with_runtimes(config, management_api, app_server_runtime, hcodex_ingress)
         .await
         .map(Some)
 }

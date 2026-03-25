@@ -6,7 +6,7 @@
 
 目前已確認的前提：
 
-- `threadBridge` 已新增獨立的 app-server ws observer，mirror intake 不再只掛在 `rust/src/tui_proxy.rs`
+- `threadBridge` 已新增獨立的 app-server ws observer，mirror intake 不再只掛在 `rust/src/hcodex_ingress.rs`
 - `TUI proxy` 目前同時承擔：
   - `hcodex` 連線入口
   - launch ticket 驗證
@@ -98,7 +98,7 @@
 
 ### 3. `TUI proxy` 是在 shared runtime 之後出現，且一開始就承接 mirror
 
-`9f71c2e` (`feat(threadbridge): add tui proxy adoption flow`) 才新增 `rust/src/tui_proxy.rs`。
+`9f71c2e` (`feat(threadbridge): add tui proxy adoption flow`) 才新增後來已收斂為 `rust/src/hcodex_ingress.rs` 的 ingress 模組。
 
 而這個初版 proxy 並不只是 relay：
 
