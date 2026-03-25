@@ -1194,6 +1194,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_session_status_falls_back_to_legacy_file() {
+        let workspace = temp_path();
+        fs::create_dir_all(legacy_session_status_path(&workspace, "thr_legacy").parent().unwrap())
+            .await
+            .unwrap();
+
+        fs::write(
+            legacy_session_status_path(&workspace, "thr_legacy"),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&SessionCurrentStatus {
+                    schema_version: 2,
+                    workspace_cwd: workspace.display().to_string(),
+                    session_id: "thr_legacy".to_owned(),
+                    activity_source: SessionActivitySource::Tui,
+                    live: true,
+                    phase: WorkspaceStatusPhase::ShellActive,
+                    shell_pid: Some(42),
+                    child_pid: None,
+                    child_pgid: None,
+                    child_command: None,
+                    client: Some("legacy-client".to_owned()),
+                    turn_id: None,
+                    summary: Some("legacy".to_owned()),
+                    updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+                })
+                .unwrap()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let session = read_session_status(&workspace, "thr_legacy")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.session_id, "thr_legacy");
+        assert_eq!(session.client.as_deref(), Some("legacy-client"));
+    }
+
+    #[tokio::test]
+    async fn read_session_status_prefers_canonical_file_over_legacy() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        fs::create_dir_all(legacy_session_status_path(&workspace, "thr_same").parent().unwrap())
+            .await
+            .unwrap();
+
+        fs::write(
+            session_status_path(&workspace, "thr_same"),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&SessionCurrentStatus {
+                    schema_version: 2,
+                    workspace_cwd: workspace.display().to_string(),
+                    session_id: "thr_same".to_owned(),
+                    activity_source: SessionActivitySource::Tui,
+                    live: true,
+                    phase: WorkspaceStatusPhase::ShellActive,
+                    shell_pid: Some(42),
+                    child_pid: None,
+                    child_pgid: None,
+                    child_command: None,
+                    client: Some("canonical-client".to_owned()),
+                    turn_id: None,
+                    summary: Some("canonical".to_owned()),
+                    updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+                })
+                .unwrap()
+            ),
+        )
+        .await
+        .unwrap();
+
+        fs::write(
+            legacy_session_status_path(&workspace, "thr_same"),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&SessionCurrentStatus {
+                    schema_version: 2,
+                    workspace_cwd: workspace.display().to_string(),
+                    session_id: "thr_same".to_owned(),
+                    activity_source: SessionActivitySource::Tui,
+                    live: true,
+                    phase: WorkspaceStatusPhase::ShellActive,
+                    shell_pid: Some(99),
+                    child_pid: None,
+                    child_pgid: None,
+                    child_command: None,
+                    client: Some("legacy-client".to_owned()),
+                    turn_id: None,
+                    summary: Some("legacy".to_owned()),
+                    updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+                })
+                .unwrap()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let session = read_session_status(&workspace, "thr_same")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.client.as_deref(), Some("canonical-client"));
+        assert_eq!(session.shell_pid, Some(42));
+    }
+
+    #[tokio::test]
     async fn remove_local_tui_session_claim_removes_legacy_and_canonical_files() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
