@@ -1124,6 +1124,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_local_tui_session_claim_prefers_canonical_file_over_legacy() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        fs::create_dir_all(legacy_local_tui_session_claim_path(&workspace).parent().unwrap())
+            .await
+            .unwrap();
+
+        let canonical_claim = default_local_tui_session_claim(&workspace, "canonical", 42);
+        super::write_local_tui_session_claim(&workspace, &canonical_claim)
+            .await
+            .unwrap();
+
+        let legacy_claim = default_local_tui_session_claim(&workspace, "legacy", 99);
+        fs::write(
+            legacy_local_tui_session_claim_path(&workspace),
+            format!("{}\n", serde_json::to_string_pretty(&legacy_claim).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
+        assert_eq!(claim.thread_key, "canonical");
+        assert_eq!(claim.shell_pid, 42);
+    }
+
+    #[tokio::test]
+    async fn read_workspace_aggregate_status_prefers_canonical_file_over_legacy() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        fs::create_dir_all(legacy_current_status_path(&workspace).parent().unwrap())
+            .await
+            .unwrap();
+
+        let canonical = WorkspaceAggregateStatus {
+            schema_version: 2,
+            workspace_cwd: workspace.display().to_string(),
+            live_tui_session_ids: vec!["thr_new".to_owned()],
+            active_shell_pids: vec![42],
+            updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+        };
+        fs::write(
+            current_status_path(&workspace),
+            format!("{}\n", serde_json::to_string_pretty(&canonical).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        fs::write(
+            legacy_current_status_path(&workspace),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&WorkspaceAggregateStatus {
+                    schema_version: 2,
+                    workspace_cwd: workspace.display().to_string(),
+                    live_tui_session_ids: vec!["thr_legacy".to_owned()],
+                    active_shell_pids: vec![99],
+                    updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+                })
+                .unwrap()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let aggregate = read_workspace_aggregate_status(&workspace).await.unwrap();
+        assert_eq!(aggregate.live_tui_session_ids, vec!["thr_new".to_owned()]);
+        assert_eq!(aggregate.active_shell_pids, vec![42]);
+    }
+
+    #[tokio::test]
     async fn remove_local_tui_session_claim_removes_legacy_and_canonical_files() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();

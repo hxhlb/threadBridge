@@ -64,6 +64,7 @@ Phase 1 對 legacy field / artifact 採用保守但有界的策略：
 - 只讀舊格式
 - 不寫回舊格式
 - 不讓舊詞重新回到 public payload、UI、或主文檔語義
+- 若 canonical 與 legacy artifact 同時存在，讀取一律優先 canonical path，legacy 只作 fallback
 
 ## Phase 1 明確不做（歷史）
 
