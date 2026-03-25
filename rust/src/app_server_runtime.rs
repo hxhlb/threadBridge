@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
@@ -11,6 +12,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceRuntimeManager {
@@ -30,11 +32,21 @@ pub struct WorkspaceRuntimeState {
     pub workspace_cwd: String,
     pub daemon_ws_url: String,
     #[serde(default)]
-    pub tui_proxy_base_ws_url: Option<String>,
+    pub hcodex_ws_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HcodexLaunchTicket {
+    pub schema_version: u32,
+    pub workspace_cwd: String,
+    pub thread_key: String,
+    pub issued_at: String,
 }
 
 const APP_SERVER_STATE_DIR: &str = ".threadbridge/state/app-server";
 const APP_SERVER_STATE_FILE: &str = "current.json";
+const HCODEX_LAUNCH_TICKETS_DIR: &str = ".threadbridge/state/app-server/launch-tickets";
+const RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
 
 impl WorkspaceRuntimeManager {
     pub fn new() -> Self {
@@ -56,12 +68,12 @@ impl WorkspaceRuntimeManager {
                 .await
                 .ok()
                 .flatten()
-                .and_then(|state| state.tui_proxy_base_ws_url);
+                .and_then(|state| state.hcodex_ws_url);
             let state = WorkspaceRuntimeState {
-                schema_version: 1,
+                schema_version: RUNTIME_STATE_SCHEMA_VERSION,
                 workspace_cwd: existing.workspace_path.display().to_string(),
                 daemon_ws_url: existing.daemon_url.clone(),
-                tui_proxy_base_ws_url: existing_proxy_url,
+                hcodex_ws_url: existing_proxy_url,
             };
             info!(
                 event = "app_server_runtime.reuse",
@@ -76,10 +88,10 @@ impl WorkspaceRuntimeManager {
 
         let runtime = spawn_workspace_runtime(workspace_path).await?;
         let state = WorkspaceRuntimeState {
-            schema_version: 1,
+            schema_version: RUNTIME_STATE_SCHEMA_VERSION,
             workspace_cwd: runtime.workspace_path.display().to_string(),
             daemon_ws_url: runtime.daemon_url.clone(),
-            tui_proxy_base_ws_url: None,
+            hcodex_ws_url: None,
         };
         info!(
             event = "app_server_runtime.spawned",
@@ -92,6 +104,18 @@ impl WorkspaceRuntimeManager {
         write_workspace_runtime_state_file(&runtime.workspace_path, &state).await?;
         Ok(state)
     }
+}
+
+fn canonical_workspace_key(workspace_path: &Path) -> Result<String> {
+    Ok(workspace_path
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_path.to_path_buf())
+        .display()
+        .to_string())
+}
+
+fn now_iso() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 async fn spawn_workspace_runtime(workspace_path: &Path) -> Result<WorkspaceRuntime> {
@@ -167,12 +191,54 @@ async fn find_free_loopback_port() -> Result<u16> {
     Ok(port)
 }
 
-fn canonical_workspace_key(workspace_path: &Path) -> Result<String> {
-    Ok(workspace_path
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_path.to_path_buf())
-        .display()
-        .to_string())
+pub async fn issue_hcodex_launch_ticket(workspace_path: &Path, thread_key: &str) -> Result<String> {
+    let tickets_dir = workspace_path.join(HCODEX_LAUNCH_TICKETS_DIR);
+    tokio::fs::create_dir_all(&tickets_dir)
+        .await
+        .with_context(|| format!("failed to create {}", tickets_dir.display()))?;
+    let ticket = Uuid::new_v4().to_string();
+    let payload = HcodexLaunchTicket {
+        schema_version: RUNTIME_STATE_SCHEMA_VERSION,
+        workspace_cwd: canonical_workspace_key(workspace_path)?,
+        thread_key: thread_key.to_owned(),
+        issued_at: now_iso(),
+    };
+    let path = tickets_dir.join(format!("{ticket}.json"));
+    tokio::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&payload)?),
+    )
+    .await
+    .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(ticket)
+}
+
+pub async fn consume_hcodex_launch_ticket(
+    workspace_path: &Path,
+    ticket: &str,
+) -> Result<Option<HcodexLaunchTicket>> {
+    if !ticket
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Ok(None);
+    }
+    let path = workspace_path
+        .join(HCODEX_LAUNCH_TICKETS_DIR)
+        .join(format!("{ticket}.json"));
+    let contents = match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    tokio::fs::remove_file(&path)
+        .await
+        .with_context(|| format!("failed to remove {}", path.display()))?;
+    let parsed = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(Some(parsed))
 }
 
 pub async fn write_workspace_runtime_state_file(

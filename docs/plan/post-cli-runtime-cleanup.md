@@ -13,12 +13,18 @@
   - public runtime health field 已從 `handoff_readiness` 改為 `runtime_readiness`
   - `workspace_status` 內部已開始把 `SessionStatusOwner` 收斂為非 ownership 語義的 `SessionActivitySource`
   - 舊序列化值 `bot` / `local` 與 `live_local_session_ids` 仍保留 deserialize compatibility
+- Phase 2 已開始落地 launch / proxy cleanup：
+  - `resolve_hcodex_launch.py` 已移除
+  - `hcodex-ws-bridge` 已移除
+  - workspace runtime state 已從 `tui_proxy_base_ws_url` 收斂到 `hcodex_ws_url`
+  - `hcodex` launch contract 已改成 canonical ws endpoint + one-shot `launch_ticket`
+  - local/TUI mirror intake 已開始從 proxy relay 熱路徑拆到獨立 app-server observer
 
 目前尚未完成：
 
 - 尚未把這些遺留分成「應保留的 local TUI core」與「應被移除或重命名的過渡語義」
-- 尚未把 `shared-runtime` 狀態面、`local-session.json`、`hcodex-ws-bridge` 等結構收斂成更符合 owner-managed app-server runtime 的模型
-- 尚未完成 `hcodex` launch contract 與 artifact rename 的 Phase 2 收尾
+- 尚未把 `shared-runtime` 狀態面、`local-session.json`、以及 public `tui_proxy` naming 收斂成更符合 owner-managed app-server runtime 的模型
+- 尚未完成 launch-surface / observer 邊界的 public vocabulary 與 documentation rename 收尾
 
 ## Phase 1 目標終態
 
@@ -57,12 +63,14 @@ Phase 1 對 legacy field / artifact 採用保守但有界的策略：
 - 不寫回舊格式
 - 不讓舊詞重新回到 public payload、UI、或主文檔語義
 
-## Phase 1 明確不做
+## Phase 1 明確不做（歷史）
 
 - 不改 `tui_proxy_base_ws_url`
 - 不改 `/thread/<thread_key>` sideband
 - 不處理 `hcodex-ws-bridge` 存廢
 - 不把 mirror intake 從 `TUI proxy` 拆到獨立 observer
+
+以上限制只適用於當時的 Phase 1。後續實作已經跨入下一階段，這些項目現在都已開始被清理。
 
 ## 問題
 

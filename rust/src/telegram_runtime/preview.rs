@@ -240,7 +240,7 @@ impl PreviewRenderer {
                 self.in_progress = false;
                 self.status = preview_status("Finalizing...");
             }
-            CodexThreadEvent::TurnFailed { error } => {
+            CodexThreadEvent::TurnFailed { error, .. } => {
                 self.in_progress = false;
                 self.status = format!(
                     "Preview unavailable\n{}",

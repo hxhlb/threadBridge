@@ -2,16 +2,16 @@
 
 ## 目前進度
 
-這份文檔目前仍是純草稿，尚未開始重構。
+這份文檔目前已進入「部分落地」。
 
 目前已確認的前提：
 
-- `threadBridge` 現在的 `hcodex` mirror 主要掛在 `rust/src/tui_proxy.rs`
+- `threadBridge` 已新增獨立的 app-server ws observer，mirror intake 不再只掛在 `rust/src/tui_proxy.rs`
 - `TUI proxy` 目前同時承擔：
   - `hcodex` 連線入口
-  - TUI session / turn 追蹤
-  - process / preview / final transcript mirror
-  - `request_user_input` 橋接
+  - launch ticket 驗證
+  - TUI session / turn metadata 追蹤
+  - live request-response injection
 - upstream `codex app-server` 已具備：
   - websocket transport
   - thread-scoped streaming notifications
@@ -20,9 +20,9 @@
 
 目前尚未完成：
 
-- `threadBridge` 尚未實作一個獨立於 `TUI proxy` 的 app-server ws mirror observer
-- mirror 的 read-side 仍與 `hcodex` inline interception 綁在一起
-- `TUI proxy` 的責任尚未收斂到更清楚的 `hcodex` 專有生命週期管理
+- observer 目前仍建立在 `thread/resume` attach 語義上，而不是正式的 upstream subscribe API
+- public naming 與 runtime protocol 仍沿用 `tui_proxy` 詞彙，尚未完全對齊新的 ingress/observer 分層
+- broader session observability 與 transport-neutral observer contract 仍未完成
 
 ## 問題
 

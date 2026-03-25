@@ -108,16 +108,17 @@
   - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
   - 已補記一個明確缺口：`codex mirror -> Telegram` 的 draft message 尚未實作 heartbeat，因此長時間 draft 仍會自動消失
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
+- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
+  - local/TUI mirror intake 已開始從 `TUI proxy` 拆到獨立 app-server ws observer
+  - proxy relay 熱路徑已不再承接 preview / process / final / request lifecycle mirror
+  - 但 public vocabulary、transport-neutral observer contract、以及 broader observability 收斂仍未完成
+- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
+  - `hcodex` launch contract 已開始從 Python resolver + path sideband + ws bridge 收斂到 canonical `hcodex_ws_url + launch_ticket`
+  - `resolve_hcodex_launch.py` 與 `hcodex-ws-bridge` 已退出 runtime surface
+  - 但 `workspace_status` / public naming / legacy compatibility policy 的 broader 收尾仍未完成
 
 ## 純草稿
 
-- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
-  - 將 local/TUI mirror intake 從 `TUI proxy` 拆成獨立 app-server ws observer 的重構草稿
-  - git 歷史支持目前 proxy 承接 mirror 高概率是 CLI 時代遺留，在 shared app-server ws 模型落地後尚未清理完畢
-- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
-  - 記錄 shared app-server / desktop owner 模型落地後，仍殘留在狀態面、管理詞彙與 `hcodex` 啟動鏈中的 CLI / handoff 時代架構債
-  - Phase 1 已開始把 public/runtime-facing vocabulary 從 `handoff_readiness` 收斂到 `runtime_readiness`
-  - 範圍包含 `workspace_status` vocabulary、`runtime_readiness` migration、`local-session.json`、`hcodex-ws-bridge` 與 legacy attachment compatibility 邊界
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
   - Telegram Web App 觀測面草稿
   - 本地 session-first observability API 與 workspace-card Sessions pane 已落地，但 Telegram Web App 本身仍未開始

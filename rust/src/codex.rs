@@ -52,9 +52,15 @@ pub enum CodexThreadEvent {
     #[serde(rename = "turn.started")]
     TurnStarted,
     #[serde(rename = "turn.completed")]
-    TurnCompleted { usage: Option<Value> },
+    TurnCompleted {
+        turn_id: Option<String>,
+        usage: Option<Value>,
+    },
     #[serde(rename = "turn.failed")]
-    TurnFailed { error: Value },
+    TurnFailed {
+        turn_id: Option<String>,
+        error: Value,
+    },
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "item.started")]
@@ -852,12 +858,15 @@ impl CodexRunner {
             "turn/started" => Ok(Some(CodexThreadEvent::TurnStarted)),
             "turn/completed" => {
                 let turn = params.get("turn").cloned().unwrap_or(Value::Null);
+                let turn_id = turn.get("id").and_then(Value::as_str).map(str::to_owned);
                 if turn.get("status").and_then(Value::as_str) == Some("failed") {
                     Ok(Some(CodexThreadEvent::TurnFailed {
+                        turn_id,
                         error: turn.get("error").cloned().unwrap_or(Value::Null),
                     }))
                 } else {
                     Ok(Some(CodexThreadEvent::TurnCompleted {
+                        turn_id,
                         usage: turn.get("usage").cloned(),
                     }))
                 }
@@ -1225,7 +1234,7 @@ impl CodexRunner {
                             CodexThreadEvent::TurnCompleted { .. } => {
                                 turn_completed = true;
                             }
-                            CodexThreadEvent::TurnFailed { error } => {
+                            CodexThreadEvent::TurnFailed { error, .. } => {
                                 turn_completed = true;
                                 if !error.is_null() {
                                     final_response = error.to_string();
@@ -1284,6 +1293,79 @@ impl CodexRunner {
             bail!("{context} did not return READY: {}", response.trim());
         }
         Ok(())
+    }
+}
+
+pub(crate) async fn observe_thread_with_handlers<F, Fut, H, Hf, N, Nf>(
+    app_server_url: &str,
+    thread_id: &str,
+    mut on_event: F,
+    mut on_server_request: H,
+    mut on_server_notification: N,
+) -> Result<()>
+where
+    F: FnMut(CodexThreadEvent) -> Fut,
+    Fut: Future<Output = Result<()>>,
+    H: FnMut(CodexServerRequest) -> Hf,
+    Hf: Future<Output = Result<()>>,
+    N: FnMut(CodexServerNotification) -> Nf,
+    Nf: Future<Output = Result<()>>,
+{
+    let mut client = AppServerClient::start_websocket(app_server_url).await?;
+    let result = client
+        .request_simple(
+            "thread/resume",
+            CodexRunner::build_thread_resume_params(thread_id, None),
+        )
+        .await?;
+    let binding = CodexRunner::parse_binding(&result)?;
+    if binding.thread_id != thread_id {
+        bail!(
+            "Codex thread continuity changed while attaching observer: expected {}, got {}",
+            thread_id,
+            binding.thread_id
+        );
+    }
+    on_event(CodexThreadEvent::ThreadStarted {
+        thread_id: binding.thread_id.clone(),
+    })
+    .await?;
+
+    let mut latest_agent_message_by_id: HashMap<String, String> = HashMap::new();
+    let mut latest_plan_by_id: HashMap<String, String> = HashMap::new();
+    loop {
+        match client.read_message().await? {
+            RpcMessage::Notification { method, params } => {
+                if let Some(notification) = CodexRunner::map_server_notification(
+                    &method,
+                    params.clone().unwrap_or(Value::Null),
+                ) {
+                    on_server_notification(notification).await?;
+                }
+                if let Some(event) = CodexRunner::map_notification(
+                    &method,
+                    params.unwrap_or(Value::Null),
+                    &mut latest_agent_message_by_id,
+                    &mut latest_plan_by_id,
+                )? {
+                    on_event(event).await?;
+                }
+            }
+            RpcMessage::Request { id, method, params } => {
+                if method == "item/tool/requestUserInput" {
+                    let params: ToolRequestUserInputParams = serde_json::from_value(
+                        params.unwrap_or(Value::Null),
+                    )
+                    .with_context(|| "invalid item/tool/requestUserInput params".to_owned())?;
+                    on_server_request(CodexServerRequest::RequestUserInput {
+                        request_id: id,
+                        params,
+                    })
+                    .await?;
+                }
+            }
+            RpcMessage::Response { .. } | RpcMessage::Error { .. } => {}
+        }
     }
 }
 

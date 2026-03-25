@@ -1282,10 +1282,10 @@ mod tests {
         let state_dir = workspace.join(".threadbridge/state/app-server");
         fs::create_dir_all(&state_dir).await?;
         let state = WorkspaceRuntimeState {
-            schema_version: 1,
+            schema_version: 2,
             workspace_cwd: workspace.display().to_string(),
             daemon_ws_url: daemon_ws_url.to_owned(),
-            tui_proxy_base_ws_url: None,
+            hcodex_ws_url: None,
         };
         fs::write(
             state_dir.join("current.json"),

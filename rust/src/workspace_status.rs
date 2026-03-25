@@ -455,7 +455,11 @@ pub async fn record_bot_status_event(
     let mut current = read_session_status(workspace_path, session_id)
         .await?
         .unwrap_or_else(|| {
-            default_session_status(workspace_path, session_id, SessionActivitySource::ManagedRuntime)
+            default_session_status(
+                workspace_path,
+                session_id,
+                SessionActivitySource::ManagedRuntime,
+            )
         });
     let payload = json!({
         "session_id": session_id,
@@ -833,9 +837,9 @@ pub async fn busy_selected_session_status(
 mod tests {
     use super::{
         SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
-        WorkspaceStatusCache, WorkspaceStatusPhase,
-        busy_selected_session_status, current_status_path, ensure_workspace_status_surface,
-        events_path, list_live_local_sessions, read_local_session_claim, read_session_status,
+        WorkspaceStatusCache, WorkspaceStatusPhase, busy_selected_session_status,
+        current_status_path, ensure_workspace_status_surface, events_path,
+        list_live_local_sessions, read_local_session_claim, read_session_status,
         read_workspace_aggregate_status, record_bot_status_event, record_hcodex_launcher_ended,
         record_hcodex_launcher_started, record_tui_proxy_completed, record_tui_proxy_connected,
         session_status_path,
@@ -947,7 +951,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(session.activity_source, SessionActivitySource::ManagedRuntime);
+        assert_eq!(
+            session.activity_source,
+            SessionActivitySource::ManagedRuntime
+        );
         assert_eq!(session.phase, WorkspaceStatusPhase::TurnRunning);
         assert!(!session.live);
     }
@@ -991,7 +998,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(session.activity_source, SessionActivitySource::ManagedRuntime);
+        assert_eq!(
+            session.activity_source,
+            SessionActivitySource::ManagedRuntime
+        );
         assert_eq!(session.phase, WorkspaceStatusPhase::TurnRunning);
         assert!(!session.live);
         assert_eq!(session.shell_pid, None);
@@ -1060,7 +1070,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(session.activity_source, SessionActivitySource::ManagedRuntime);
+        assert_eq!(
+            session.activity_source,
+            SessionActivitySource::ManagedRuntime
+        );
         assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
         assert_eq!(session.turn_id, None);
         assert_eq!(session.summary.as_deref(), Some("prompt summary"));

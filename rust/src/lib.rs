@@ -1,3 +1,4 @@
+pub mod app_server_observer;
 pub mod app_server_runtime;
 pub mod bot_runner;
 pub mod codex;
@@ -5,7 +6,6 @@ pub mod collaboration_mode;
 pub mod config;
 pub mod execution_mode;
 pub mod hcodex_runtime;
-pub mod hcodex_ws_bridge;
 pub mod image_artifacts;
 pub mod interactive;
 pub mod local_control;

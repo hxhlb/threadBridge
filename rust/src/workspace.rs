@@ -75,12 +75,6 @@ fn build_hcodex_launcher_script(
 ) -> String {
     let workspace = shell_single_quote(&workspace_path.display().to_string());
     let data_root = shell_single_quote(&data_root.display().to_string());
-    let resolver = shell_single_quote(
-        &repo_root
-            .join("tools/resolve_hcodex_launch.py")
-            .display()
-            .to_string(),
-    );
     let threadbridge_executable =
         shell_single_quote(&threadbridge_executable.display().to_string());
     let managed_codex_path = match codex_source_preference {
@@ -99,7 +93,6 @@ fn build_hcodex_launcher_script(
         "set -euo pipefail".to_owned(),
         format!("THREADBRIDGE_WORKSPACE_ROOT={workspace}"),
         format!("THREADBRIDGE_DATA_ROOT={data_root}"),
-        format!("THREADBRIDGE_HCODEX_RESOLVER={resolver}"),
         format!("THREADBRIDGE_EXECUTABLE={threadbridge_executable}"),
         format!(
             "THREADBRIDGE_CODEX_SOURCE={}",
@@ -166,10 +159,10 @@ fn build_hcodex_launcher_script(
         "fi".to_owned(),
         "launch_info=\"\"".to_owned(),
         "if [ -n \"$requested_thread_key\" ]; then".to_owned(),
-        "  launch_info=\"$(python3 \"$THREADBRIDGE_HCODEX_RESOLVER\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$requested_thread_key\")\""
+        "  launch_info=\"$(\"$THREADBRIDGE_EXECUTABLE\" resolve-hcodex-launch --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --thread-key \"$requested_thread_key\")\""
             .to_owned(),
         "else".to_owned(),
-        "  launch_info=\"$(python3 \"$THREADBRIDGE_HCODEX_RESOLVER\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\")\""
+        "  launch_info=\"$(\"$THREADBRIDGE_EXECUTABLE\" resolve-hcodex-launch --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\")\""
             .to_owned(),
         "fi".to_owned(),
         "daemon_ws_url=\"\"".to_owned(),
@@ -178,34 +171,6 @@ fn build_hcodex_launcher_script(
         "IFS=$'\\t' read -r daemon_ws_url resolved_thread_key current_thread_id <<< \"$launch_info\""
             .to_owned(),
         "remote_ws_url=\"$daemon_ws_url\"".to_owned(),
-        "case \"$daemon_ws_url\" in".to_owned(),
-        "  ws://*/*|wss://*/*)".to_owned(),
-        "    ready_file=\"$(mktemp -t threadbridge-hcodex-ws-bridge.XXXXXX)\"".to_owned(),
-        "    \"$THREADBRIDGE_EXECUTABLE\" hcodex-ws-bridge --upstream \"$daemon_ws_url\" --ready-file \"$ready_file\" >/dev/null 2>&1 &".to_owned(),
-        "    bridge_pid=$!".to_owned(),
-        "    ready_json=\"\"".to_owned(),
-        "    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do".to_owned(),
-        "      if [ -s \"$ready_file\" ]; then".to_owned(),
-        "        ready_json=\"$(cat \"$ready_file\")\"".to_owned(),
-        "        break".to_owned(),
-        "      fi".to_owned(),
-        "      sleep 0.05".to_owned(),
-        "    done".to_owned(),
-        "    if [ -z \"$ready_json\" ]; then".to_owned(),
-        "      kill \"$bridge_pid\" >/dev/null 2>&1 || true".to_owned(),
-        "      rm -f \"$ready_file\"".to_owned(),
-        "      echo \"hcodex: local websocket bridge did not become ready\" >&2".to_owned(),
-        "      exit 2".to_owned(),
-        "    fi".to_owned(),
-        "    remote_ws_url=\"$(python3 - \"$ready_file\" <<'PY'\nimport json, sys\nfrom pathlib import Path\nprint(json.loads(Path(sys.argv[1]).read_text(encoding='utf-8')).get('ws_url',''))\nPY\n)\"".to_owned(),
-        "    rm -f \"$ready_file\"".to_owned(),
-        "    if [ -z \"$remote_ws_url\" ]; then".to_owned(),
-        "      kill \"$bridge_pid\" >/dev/null 2>&1 || true".to_owned(),
-        "      echo \"hcodex: local websocket bridge did not return ws_url\" >&2".to_owned(),
-        "      exit 2".to_owned(),
-        "    fi".to_owned(),
-        "    ;;".to_owned(),
-        "esac".to_owned(),
         "if [ \"${#codex_args[@]}\" -gt 0 ]; then".to_owned(),
         "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$remote_ws_url\" -- \"${codex_args[@]}\"".to_owned(),
         "else".to_owned(),
@@ -549,19 +514,20 @@ mod tests {
             fs::read_to_string(workspace.join(".threadbridge/shell/codex-sync.bash"))
                 .await
                 .unwrap();
-        assert!(hcodex_launcher.contains("THREADBRIDGE_HCODEX_RESOLVER"));
         assert!(hcodex_launcher.contains("THREADBRIDGE_EXECUTABLE"));
         assert!(hcodex_launcher.contains("THREADBRIDGE_CODEX_SOURCE='brew'"));
         assert!(hcodex_launcher.contains("THREADBRIDGE_MANAGED_CODEX"));
         assert!(hcodex_launcher.contains(".threadbridge/bin/codex"));
         assert!(hcodex_launcher.contains("remote_ws_url=\"$daemon_ws_url\""));
         assert!(hcodex_launcher.contains("ensure-hcodex-runtime"));
+        assert!(hcodex_launcher.contains("resolve-hcodex-launch"));
         assert!(hcodex_launcher.contains("shared runtime did not become ready"));
-        assert!(hcodex_launcher.contains("\"$THREADBRIDGE_EXECUTABLE\" hcodex-ws-bridge"));
         assert!(hcodex_launcher.contains("run-hcodex-session"));
         assert!(hcodex_launcher.contains("--remote-ws-url \"$remote_ws_url\""));
         assert!(hcodex_launcher.contains("if [ \"${#codex_args[@]}\" -gt 0 ]; then"));
         assert!(hcodex_launcher.contains("codex_bin=\"$(command -v codex 2>/dev/null || true)\""));
+        assert!(!hcodex_launcher.contains("THREADBRIDGE_HCODEX_RESOLVER"));
+        assert!(!hcodex_launcher.contains("hcodex-ws-bridge"));
         assert!(compat_shell.contains("hcodex() {"));
         assert!(compat_shell.contains(".threadbridge/bin/hcodex"));
     }

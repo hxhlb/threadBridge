@@ -1108,7 +1108,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(session.activity_source, SessionActivitySource::ManagedRuntime);
+        assert_eq!(
+            session.activity_source,
+            SessionActivitySource::ManagedRuntime
+        );
         assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
         assert_eq!(session.turn_id, None);
 

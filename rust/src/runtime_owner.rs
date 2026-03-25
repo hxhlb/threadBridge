@@ -284,7 +284,7 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
         };
 
     let app_server_running = daemon_endpoint_is_live(&state.daemon_ws_url).await;
-    let proxy_running = match state.tui_proxy_base_ws_url.as_deref() {
+    let proxy_running = match state.hcodex_ws_url.as_deref() {
         Some(url) => proxy_endpoint_is_live(url).await,
         None => false,
     };
@@ -293,7 +293,7 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
     } else {
         "stale"
     };
-    let tui_proxy_status = match state.tui_proxy_base_ws_url.as_deref() {
+    let tui_proxy_status = match state.hcodex_ws_url.as_deref() {
         Some(_) if proxy_running => "running",
         Some(_) => "stale",
         None => "missing",
