@@ -23,7 +23,7 @@
 目前尚未完成：
 
 - 尚未把這些遺留分成「應保留的 local TUI core」與「應被移除或重命名的過渡語義」
-- 尚未把 `shared-runtime` 狀態面、`local-session.json`、以及 public `tui_proxy` naming 收斂成更符合 owner-managed app-server runtime 的模型
+- 尚未完全把 `runtime-observer` 狀態面、`local-tui-session.json`、以及 broader public vocabulary 收斂成更符合 owner-managed app-server runtime 的模型
 - 尚未完成 launch-surface / observer 邊界的 public vocabulary 與 documentation rename 收尾
 
 ## Phase 1 目標終態

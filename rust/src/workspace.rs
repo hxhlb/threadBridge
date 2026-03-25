@@ -497,7 +497,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            fs::try_exists(workspace.join(".threadbridge/state/shared-runtime/current.json"))
+            fs::try_exists(workspace.join(".threadbridge/state/runtime-observer/current.json"))
                 .await
                 .unwrap()
         );

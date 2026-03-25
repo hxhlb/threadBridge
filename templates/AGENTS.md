@@ -19,14 +19,14 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 - threadBridge installs local shell/runtime sync files under:
   - `./.threadbridge/state/workspace-config.json`
   - `./.threadbridge/state/app-server/current.json`
-  - `./.threadbridge/state/shared-runtime/current.json`
-  - `./.threadbridge/state/shared-runtime/events.jsonl`
+  - `./.threadbridge/state/runtime-observer/current.json`
+  - `./.threadbridge/state/runtime-observer/events.jsonl`
 - threadBridge request/result files live under:
   - `./.threadbridge/tool_requests/`
   - `./.threadbridge/tool_results/`
 - Keep these wrapper names and paths stable.
-- `./.threadbridge/state/shared-runtime/*` is a workspace-local observation and activity surface.
-- Treat desktop owner heartbeat and management/runtime protocol views as the canonical runtime-health authority, not `shared-runtime/*` by itself.
+- `./.threadbridge/state/runtime-observer/*` is a workspace-local observation and activity surface.
+- Treat desktop owner heartbeat and management/runtime protocol views as the canonical runtime-health authority, not `runtime-observer/*` by itself.
 
 ### Local Codex TUI
 
@@ -151,10 +151,10 @@ The request file must look like this:
   - `.threadbridge/bin/`
   - `.threadbridge/state/workspace-config.json`
   - `.threadbridge/state/app-server/`
-  - `.threadbridge/state/shared-runtime/`
+  - `.threadbridge/state/runtime-observer/`
   - `.threadbridge/tool_requests/`
   - `.threadbridge/tool_results/`
-- `shared-runtime/` remains a workspace-local observability/activity lane; it is not the machine-level owner authority.
+- `runtime-observer/` remains a workspace-local observability/activity lane; it is not the machine-level owner authority.
 - Workspace/project artifacts produced by the tools:
   - `concept.json`
   - `prompts/*.json`

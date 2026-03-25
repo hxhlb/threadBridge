@@ -12,11 +12,13 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 const STATUS_SCHEMA_VERSION: u32 = 2;
-const STATUS_DIR: &str = ".threadbridge/state/shared-runtime";
+const STATUS_DIR: &str = ".threadbridge/state/runtime-observer";
+const LEGACY_STATUS_DIR: &str = ".threadbridge/state/shared-runtime";
 const CURRENT_FILE: &str = "current.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const SESSIONS_DIR: &str = "sessions";
-const LOCAL_SESSION_FILE: &str = "local-session.json";
+const LOCAL_SESSION_FILE: &str = "local-tui-session.json";
+const LEGACY_LOCAL_SESSION_FILE: &str = "local-session.json";
 const HCODEX_INGRESS_CLIENT: &str = "threadbridge-hcodex-ingress";
 const LEGACY_TUI_PROXY_CLIENT: &str = "threadbridge-tui-proxy";
 
@@ -136,20 +138,40 @@ fn status_dir(workspace_path: &Path) -> PathBuf {
     workspace_path.join(STATUS_DIR)
 }
 
+fn legacy_status_dir(workspace_path: &Path) -> PathBuf {
+    workspace_path.join(LEGACY_STATUS_DIR)
+}
+
 fn sessions_dir(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(SESSIONS_DIR)
+}
+
+fn legacy_sessions_dir(workspace_path: &Path) -> PathBuf {
+    legacy_status_dir(workspace_path).join(SESSIONS_DIR)
 }
 
 pub fn local_session_claim_path(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(LOCAL_SESSION_FILE)
 }
 
+fn legacy_local_session_claim_path(workspace_path: &Path) -> PathBuf {
+    legacy_status_dir(workspace_path).join(LEGACY_LOCAL_SESSION_FILE)
+}
+
 pub fn current_status_path(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(CURRENT_FILE)
 }
 
+fn legacy_current_status_path(workspace_path: &Path) -> PathBuf {
+    legacy_status_dir(workspace_path).join(CURRENT_FILE)
+}
+
 pub fn events_path(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(EVENTS_FILE)
+}
+
+fn legacy_events_path(workspace_path: &Path) -> PathBuf {
+    legacy_status_dir(workspace_path).join(EVENTS_FILE)
 }
 
 fn session_file_name(session_id: &str) -> String {
@@ -174,6 +196,10 @@ fn is_hcodex_ingress_client(client: Option<&str>) -> bool {
 
 pub fn session_status_path(workspace_path: &Path, session_id: &str) -> PathBuf {
     sessions_dir(workspace_path).join(session_file_name(session_id))
+}
+
+fn legacy_session_status_path(workspace_path: &Path, session_id: &str) -> PathBuf {
+    legacy_sessions_dir(workspace_path).join(session_file_name(session_id))
 }
 
 pub fn default_local_session_claim(
@@ -270,12 +296,19 @@ pub async fn write_local_session_claim(
 }
 
 pub async fn remove_local_session_claim(workspace_path: &Path) -> Result<()> {
-    let path = local_session_claim_path(workspace_path);
-    match fs::remove_file(&path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    for path in [
+        local_session_claim_path(workspace_path),
+        legacy_local_session_claim_path(workspace_path),
+    ] {
+        match fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
     }
+    Ok(())
 }
 
 pub async fn append_status_event(
@@ -299,20 +332,69 @@ pub async fn append_status_event(
 }
 
 async fn last_status_event(workspace_path: &Path) -> Result<Option<WorkspaceStatusEventRecord>> {
-    let path = events_path(workspace_path);
-    let contents = match fs::read_to_string(&path).await {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+    for path in [
+        events_path(workspace_path),
+        legacy_events_path(workspace_path),
+    ] {
+        let contents = match fs::read_to_string(&path).await {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
+        };
+        let Some(line) = contents.lines().rev().find(|line| !line.trim().is_empty()) else {
+            continue;
+        };
+        return Ok(Some(serde_json::from_str(line).with_context(|| {
+            format!("failed to parse trailing event from {}", path.display())
+        })?));
+    }
+    Ok(None)
+}
+
+async fn copy_if_missing(src: &Path, dst: &Path) -> Result<()> {
+    if fs::try_exists(dst).await? || !fs::try_exists(src).await? {
+        return Ok(());
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    fs::copy(src, dst).await?;
+    Ok(())
+}
+
+async fn migrate_legacy_status_surface(workspace_path: &Path) -> Result<()> {
+    copy_if_missing(
+        &legacy_current_status_path(workspace_path),
+        &current_status_path(workspace_path),
+    )
+    .await?;
+    copy_if_missing(
+        &legacy_events_path(workspace_path),
+        &events_path(workspace_path),
+    )
+    .await?;
+    copy_if_missing(
+        &legacy_local_session_claim_path(workspace_path),
+        &local_session_claim_path(workspace_path),
+    )
+    .await?;
+
+    let legacy_sessions_dir = legacy_sessions_dir(workspace_path);
+    if !fs::try_exists(&legacy_sessions_dir).await? {
+        return Ok(());
+    }
+    fs::create_dir_all(sessions_dir(workspace_path)).await?;
+    let mut dir = fs::read_dir(&legacy_sessions_dir).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        if !entry.file_type().await?.is_file() {
+            continue;
         }
-    };
-    let Some(line) = contents.lines().rev().find(|line| !line.trim().is_empty()) else {
-        return Ok(None);
-    };
-    Ok(Some(serde_json::from_str(line).with_context(|| {
-        format!("failed to parse trailing event from {}", path.display())
-    })?))
+        let dst = sessions_dir(workspace_path).join(entry.file_name());
+        copy_if_missing(&entry.path(), &dst).await?;
+    }
+    Ok(())
 }
 
 async fn should_skip_duplicate_turn_completed_event(
@@ -339,6 +421,7 @@ pub async fn ensure_workspace_status_surface(workspace_path: &Path) -> Result<()
     let dir = status_dir(workspace_path);
     fs::create_dir_all(&dir).await?;
     fs::create_dir_all(sessions_dir(workspace_path)).await?;
+    migrate_legacy_status_surface(workspace_path).await?;
 
     let current_path = current_status_path(workspace_path);
     if !fs::try_exists(&current_path).await? {
@@ -356,39 +439,62 @@ pub async fn ensure_workspace_status_surface(workspace_path: &Path) -> Result<()
 pub async fn read_workspace_aggregate_status(
     workspace_path: &Path,
 ) -> Result<WorkspaceAggregateStatus> {
-    let path = current_status_path(workspace_path);
-    match fs::read_to_string(&path).await {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(default_workspace_status(workspace_path))
+    for path in [
+        current_status_path(workspace_path),
+        legacy_current_status_path(workspace_path),
+    ] {
+        match fs::read_to_string(&path).await {
+            Ok(content) => return Ok(serde_json::from_str(&content)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
         }
-        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
     }
+    Ok(default_workspace_status(workspace_path))
 }
 
 pub async fn read_session_status(
     workspace_path: &Path,
     session_id: &str,
 ) -> Result<Option<SessionCurrentStatus>> {
-    let path = session_status_path(workspace_path, session_id);
-    match fs::read_to_string(&path).await {
-        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    for path in [
+        session_status_path(workspace_path, session_id),
+        legacy_session_status_path(workspace_path, session_id),
+    ] {
+        match fs::read_to_string(&path).await {
+            Ok(content) => return Ok(Some(serde_json::from_str(&content)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
+        }
     }
+    Ok(None)
 }
 
 pub async fn read_local_session_claim(workspace_path: &Path) -> Result<Option<LocalSessionClaim>> {
-    let path = local_session_claim_path(workspace_path);
-    match fs::read_to_string(&path).await {
-        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    for path in [
+        local_session_claim_path(workspace_path),
+        legacy_local_session_claim_path(workspace_path),
+    ] {
+        match fs::read_to_string(&path).await {
+            Ok(content) => return Ok(Some(serde_json::from_str(&content)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
+        }
     }
+    Ok(None)
 }
 
 async fn list_all_session_statuses(workspace_path: &Path) -> Result<Vec<SessionCurrentStatus>> {
-    let dir_path = sessions_dir(workspace_path);
+    let dir_path = if fs::try_exists(&sessions_dir(workspace_path)).await? {
+        sessions_dir(workspace_path)
+    } else {
+        legacy_sessions_dir(workspace_path)
+    };
     if !fs::try_exists(&dir_path).await? {
         return Ok(Vec::new());
     }
@@ -875,7 +981,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            fs::try_exists(workspace.join(".threadbridge/state/shared-runtime/sessions"))
+            fs::try_exists(workspace.join(".threadbridge/state/runtime-observer/sessions"))
                 .await
                 .unwrap()
         );
