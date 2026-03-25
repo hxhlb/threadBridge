@@ -115,6 +115,7 @@
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
   - `hcodex` launch contract 已開始從 Python resolver + path sideband + ws bridge 收斂到 canonical `hcodex_ws_url + launch_ticket`
   - `resolve_hcodex_launch.py` 與 `hcodex-ws-bridge` 已退出 runtime surface
+  - `workspace_status` 已補上 legacy `shared-runtime/*` / `local-session.json` migrate-read 與 canonical write-path 測試
   - 但 `workspace_status` / public naming / legacy compatibility policy 的 broader 收尾仍未完成
 
 ## 純草稿

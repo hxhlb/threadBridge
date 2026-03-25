@@ -1397,7 +1397,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn launcher_end_clears_owner_and_marks_session_not_live() {
+    async fn launcher_end_clears_local_tui_claim_and_marks_session_not_live() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
         record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
