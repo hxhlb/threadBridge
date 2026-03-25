@@ -165,16 +165,17 @@ fn build_hcodex_launcher_script(
         "  launch_info=\"$(\"$THREADBRIDGE_EXECUTABLE\" resolve-hcodex-launch --data-root \"$THREADBRIDGE_DATA_ROOT\" --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\")\""
             .to_owned(),
         "fi".to_owned(),
-        "daemon_ws_url=\"\"".to_owned(),
+        "launch_ws_url=\"\"".to_owned(),
         "resolved_thread_key=\"\"".to_owned(),
         "current_thread_id=\"\"".to_owned(),
-        "IFS=$'\\t' read -r daemon_ws_url resolved_thread_key current_thread_id <<< \"$launch_info\""
+        "IFS=$'\\t' read -r launch_ws_url resolved_thread_key current_thread_id <<< \"$launch_info\""
             .to_owned(),
-        "remote_ws_url=\"$daemon_ws_url\"".to_owned(),
+        "# resolve-hcodex-launch may return a ticketed ingress URL; run-hcodex-session".to_owned(),
+        "# bridges it to a bare ws://host:port endpoint before spawning codex.".to_owned(),
         "if [ \"${#codex_args[@]}\" -gt 0 ]; then".to_owned(),
-        "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$remote_ws_url\" -- \"${codex_args[@]}\"".to_owned(),
+        "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$launch_ws_url\" -- \"${codex_args[@]}\"".to_owned(),
         "else".to_owned(),
-        "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$remote_ws_url\" --".to_owned(),
+        "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$launch_ws_url\" --".to_owned(),
         "fi".to_owned(),
         "".to_owned(),
     ]);
@@ -518,16 +519,16 @@ mod tests {
         assert!(hcodex_launcher.contains("THREADBRIDGE_CODEX_SOURCE='brew'"));
         assert!(hcodex_launcher.contains("THREADBRIDGE_MANAGED_CODEX"));
         assert!(hcodex_launcher.contains(".threadbridge/bin/codex"));
-        assert!(hcodex_launcher.contains("remote_ws_url=\"$daemon_ws_url\""));
+        assert!(hcodex_launcher.contains("launch_ws_url=\"\""));
         assert!(hcodex_launcher.contains("ensure-hcodex-runtime"));
         assert!(hcodex_launcher.contains("resolve-hcodex-launch"));
         assert!(hcodex_launcher.contains("shared runtime did not become ready"));
+        assert!(hcodex_launcher.contains("ticketed ingress URL"));
         assert!(hcodex_launcher.contains("run-hcodex-session"));
-        assert!(hcodex_launcher.contains("--remote-ws-url \"$remote_ws_url\""));
+        assert!(hcodex_launcher.contains("--remote-ws-url \"$launch_ws_url\""));
         assert!(hcodex_launcher.contains("if [ \"${#codex_args[@]}\" -gt 0 ]; then"));
         assert!(hcodex_launcher.contains("codex_bin=\"$(command -v codex 2>/dev/null || true)\""));
         assert!(!hcodex_launcher.contains("THREADBRIDGE_HCODEX_RESOLVER"));
-        assert!(!hcodex_launcher.contains("hcodex-ws-bridge"));
         assert!(compat_shell.contains("hcodex() {"));
         assert!(compat_shell.contains(".threadbridge/bin/hcodex"));
     }

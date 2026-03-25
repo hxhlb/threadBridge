@@ -7,8 +7,10 @@ use serde_json::Value;
 use tokio::fs;
 use tokio::net::TcpStream;
 use tokio::process::Command;
+use url::Url;
 
 use crate::app_server_runtime::{WorkspaceRuntimeState, issue_hcodex_launch_ticket};
+use crate::hcodex_ws_bridge::prepare_codex_remote_ws_url;
 use crate::repository::ThreadRepository;
 use crate::workspace_status::{record_hcodex_launcher_ended, record_hcodex_launcher_started};
 
@@ -54,7 +56,7 @@ struct RunHcodexSessionCli {
     data_root: PathBuf,
     thread_key: String,
     codex_bin: PathBuf,
-    remote_ws_url: String,
+    launch_ws_url: String,
     codex_args: Vec<OsString>,
 }
 
@@ -119,7 +121,7 @@ impl RunHcodexSessionCli {
         let mut data_root: Option<PathBuf> = None;
         let mut thread_key: Option<String> = None;
         let mut codex_bin: Option<PathBuf> = None;
-        let mut remote_ws_url: Option<String> = None;
+        let mut launch_ws_url: Option<String> = None;
         let mut codex_args = Vec::new();
         let mut iter = args.iter();
         while let Some(flag) = iter.next() {
@@ -153,7 +155,7 @@ impl RunHcodexSessionCli {
                         .context("missing value for --remote-ws-url")?
                         .to_str()
                         .context("--remote-ws-url must be valid utf-8")?;
-                    remote_ws_url = Some(value.to_owned());
+                    launch_ws_url = Some(value.to_owned());
                 }
                 "--" => {
                     codex_args.extend(iter.cloned());
@@ -168,7 +170,7 @@ impl RunHcodexSessionCli {
             data_root: data_root.context("missing required --data-root")?,
             thread_key: thread_key.context("missing required --thread-key")?,
             codex_bin: codex_bin.context("missing required --codex-bin")?,
-            remote_ws_url: remote_ws_url.context("missing required --remote-ws-url")?,
+            launch_ws_url: launch_ws_url.context("missing required --remote-ws-url")?,
             codex_args,
         })
     }
@@ -236,24 +238,38 @@ async fn ensure_hcodex_runtime_inner(
 }
 
 async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
+    // resolve-hcodex-launch returns an ingress launch URL, which may carry
+    // sideband state like launch_ticket in the query string. Upstream Codex
+    // only accepts bare ws://host:port endpoints for --remote, so we bridge
+    // non-canonical launch URLs to a local loopback websocket before spawning.
+    let prepared_remote = prepare_codex_remote_ws_url(&config.launch_ws_url).await?;
+    let codex_remote_ws_url = prepared_remote.codex_remote_ws_url;
+    let bridge_abort_handle = prepared_remote.bridge_abort_handle;
     let mut command = Command::new(&config.codex_bin);
     command
         .current_dir(&config.workspace)
         .arg("--remote")
-        .arg(&config.remote_ws_url)
+        .arg(&codex_remote_ws_url)
         .args(&config.codex_args)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("failed to spawn {}", config.codex_bin.display()))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            if let Some(abort_handle) = bridge_abort_handle.as_ref() {
+                abort_handle.abort();
+            }
+            return Err(error)
+                .with_context(|| format!("failed to spawn {}", config.codex_bin.display()));
+        }
+    };
     let child_pid = child.id().context("spawned codex child is missing pid")?;
     let shell_pid = std::process::id();
     let child_command = format!(
         "{} --remote {}",
         config.codex_bin.display(),
-        config.remote_ws_url
+        codex_remote_ws_url
     );
     record_hcodex_launcher_started(
         &config.workspace,
@@ -264,10 +280,11 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
     )
     .await?;
 
-    let status = child
-        .wait()
-        .await
-        .context("failed waiting for codex child")?;
+    let status = child.wait().await.context("failed waiting for codex child");
+    if let Some(abort_handle) = bridge_abort_handle.as_ref() {
+        abort_handle.abort();
+    }
+    let status = status?;
     record_hcodex_launcher_ended(&config.workspace, &config.thread_key, shell_pid, child_pid)
         .await?;
 
@@ -300,17 +317,27 @@ async fn resolve_hcodex_launch(config: &ResolveHcodexLaunchCli) -> Result<()> {
         .filter(|value| !value.trim().is_empty())
         .context("hcodex: bound Telegram thread is missing current_codex_thread_id")?;
     let ticket = issue_hcodex_launch_ticket(&config.workspace, &selected.thread_key).await?;
-    let separator = if hcodex_ws_url.contains('?') {
-        '&'
-    } else {
-        '?'
-    };
-    let launch_ws_url = format!("{hcodex_ws_url}{separator}launch_ticket={ticket}");
+    // This URL is for the hcodex ingress handshake, not a codex --remote URL.
+    // run-hcodex-session is responsible for bridging it to a bare ws://host:port
+    // endpoint before spawning upstream Codex.
+    let launch_ws_url = build_launch_ws_url(hcodex_ws_url, &ticket)?;
     println!(
         "{}\t{}\t{}",
         launch_ws_url, selected.thread_key, current_thread
     );
     Ok(())
+}
+
+fn build_launch_ws_url(hcodex_ws_url: &str, ticket: &str) -> Result<String> {
+    let mut parsed = Url::parse(hcodex_ws_url)
+        .with_context(|| format!("invalid hcodex websocket url: {hcodex_ws_url}"))?;
+    if parsed.path().is_empty() {
+        parsed.set_path("/");
+    }
+    parsed
+        .query_pairs_mut()
+        .append_pair("launch_ticket", ticket);
+    Ok(parsed.to_string())
 }
 
 async fn write_ready_file(path: Option<&Path>) -> Result<()> {
@@ -435,7 +462,7 @@ fn select_bound_thread(
 
 #[cfg(test)]
 mod tests {
-    use super::maybe_run_from_args;
+    use super::{build_launch_ws_url, maybe_run_from_args};
     use std::ffi::OsString;
 
     #[tokio::test]
@@ -444,5 +471,25 @@ mod tests {
             .await
             .unwrap();
         assert!(!ran);
+    }
+
+    #[test]
+    fn build_launch_ws_url_adds_root_path_before_query() {
+        let launch_ws_url =
+            build_launch_ws_url("ws://127.0.0.1:61399", "test-ticket").expect("launch url");
+        assert_eq!(
+            launch_ws_url,
+            "ws://127.0.0.1:61399/?launch_ticket=test-ticket"
+        );
+    }
+
+    #[test]
+    fn build_launch_ws_url_preserves_existing_query_pairs() {
+        let launch_ws_url = build_launch_ws_url("ws://127.0.0.1:61399/?existing=1", "test-ticket")
+            .expect("launch url");
+        assert_eq!(
+            launch_ws_url,
+            "ws://127.0.0.1:61399/?existing=1&launch_ticket=test-ticket"
+        );
     }
 }

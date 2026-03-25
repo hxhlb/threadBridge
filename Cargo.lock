@@ -3235,6 +3235,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "unicode-width",
+ "url",
  "uuid",
  "walkdir",
 ]
