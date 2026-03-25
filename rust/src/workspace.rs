@@ -170,8 +170,11 @@ fn build_hcodex_launcher_script(
         "current_thread_id=\"\"".to_owned(),
         "IFS=$'\\t' read -r launch_ws_url resolved_thread_key current_thread_id <<< \"$launch_info\""
             .to_owned(),
-        "# resolve-hcodex-launch may return a ticketed ingress URL; run-hcodex-session".to_owned(),
-        "# bridges it to a bare ws://host:port endpoint before spawning codex.".to_owned(),
+        "# resolve-hcodex-launch returns an ingress launch URL, not a Codex-safe".to_owned(),
+        "# --remote endpoint. It may include launch_ticket or future sideband".to_owned(),
+        "# handshake state. run-hcodex-session must stay as the compatibility".to_owned(),
+        "# boundary that bridges launch_ws_url to a bare ws://host:port before".to_owned(),
+        "# spawning upstream codex.".to_owned(),
         "if [ \"${#codex_args[@]}\" -gt 0 ]; then".to_owned(),
         "  \"$THREADBRIDGE_EXECUTABLE\" run-hcodex-session --workspace \"$THREADBRIDGE_WORKSPACE_ROOT\" --data-root \"$THREADBRIDGE_DATA_ROOT\" --thread-key \"$resolved_thread_key\" --codex-bin \"$codex_bin\" --remote-ws-url \"$launch_ws_url\" -- \"${codex_args[@]}\"".to_owned(),
         "else".to_owned(),
@@ -523,7 +526,7 @@ mod tests {
         assert!(hcodex_launcher.contains("ensure-hcodex-runtime"));
         assert!(hcodex_launcher.contains("resolve-hcodex-launch"));
         assert!(hcodex_launcher.contains("shared runtime did not become ready"));
-        assert!(hcodex_launcher.contains("ticketed ingress URL"));
+        assert!(hcodex_launcher.contains("ingress launch URL"));
         assert!(hcodex_launcher.contains("run-hcodex-session"));
         assert!(hcodex_launcher.contains("--remote-ws-url \"$launch_ws_url\""));
         assert!(hcodex_launcher.contains("if [ \"${#codex_args[@]}\" -gt 0 ]; then"));

@@ -15,6 +15,15 @@ pub(crate) struct PreparedCodexRemote {
     pub(crate) bridge_abort_handle: Option<AbortHandle>,
 }
 
+// threadBridge has two distinct websocket contracts:
+// 1. hcodex ingress launch URLs may carry sideband handshake state such as
+//    launch_ticket in the query string.
+// 2. upstream Codex --remote only accepts bare ws://host:port endpoints.
+//
+// This adapter is the compatibility boundary between those contracts. Keep the
+// bridge even if launch URL generation changes elsewhere; otherwise it is easy
+// to reintroduce the regression where a ticketed ingress URL is passed straight
+// into codex --remote and rejected before the handshake starts.
 pub(crate) async fn prepare_codex_remote_ws_url(
     launch_ws_url: &str,
 ) -> Result<PreparedCodexRemote> {
@@ -51,6 +60,9 @@ pub(crate) async fn prepare_codex_remote_ws_url(
 }
 
 fn is_codex_safe_remote_ws_url(remote_ws_url: &str) -> bool {
+    // Mirror upstream Codex's remote-address contract rather than "loosely"
+    // accepting whatever Url::parse can decode. If this diverges, maintainers
+    // may incorrectly conclude that the bridge is dead code and remove it.
     let Ok(parsed) = Url::parse(remote_ws_url) else {
         return false;
     };
@@ -63,6 +75,9 @@ fn is_codex_safe_remote_ws_url(remote_ws_url: &str) -> bool {
 }
 
 async fn run_bridge(listener: TcpListener, upstream_launch_ws_url: &str) -> Result<()> {
+    // The local listener intentionally presents a canonical ws://127.0.0.1:port
+    // endpoint to Codex, while preserving the original ingress launch URL when
+    // dialing upstream so launch_ticket and any future sideband data survive.
     let mut accepted_any_client = false;
     loop {
         let accept_result = if accepted_any_client {

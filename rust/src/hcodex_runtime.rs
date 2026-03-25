@@ -242,6 +242,7 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
     // sideband state like launch_ticket in the query string. Upstream Codex
     // only accepts bare ws://host:port endpoints for --remote, so we bridge
     // non-canonical launch URLs to a local loopback websocket before spawning.
+    // Do not "simplify" this by passing launch_ws_url directly to Codex.
     let prepared_remote = prepare_codex_remote_ws_url(&config.launch_ws_url).await?;
     let codex_remote_ws_url = prepared_remote.codex_remote_ws_url;
     let bridge_abort_handle = prepared_remote.bridge_abort_handle;
@@ -331,6 +332,9 @@ async fn resolve_hcodex_launch(config: &ResolveHcodexLaunchCli) -> Result<()> {
 fn build_launch_ws_url(hcodex_ws_url: &str, ticket: &str) -> Result<String> {
     let mut parsed = Url::parse(hcodex_ws_url)
         .with_context(|| format!("invalid hcodex websocket url: {hcodex_ws_url}"))?;
+    // Always materialize "/" before appending the query. Without an explicit
+    // root path, some websocket clients normalize ws://host:port?query
+    // inconsistently, which can drop launch_ticket before ingress sees it.
     if parsed.path().is_empty() {
         parsed.set_path("/");
     }
