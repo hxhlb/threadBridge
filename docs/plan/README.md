@@ -108,8 +108,12 @@
   - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
   - 已補記一個明確缺口：`codex mirror -> Telegram` 的 draft message 尚未實作 heartbeat，因此長時間 draft 仍會自動消失
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
+- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/owner-runtime-contract.md)
+  - owner/runtime boundary 的總草稿
+  - `desktop runtime owner`、observer、`hcodex`、Telegram / management surface 的責任邊界已開始在代碼中成形
+  - 但 observer vocabulary、`hcodex` 長期 contract、與 transport-neutral protocol 仍未完全收斂
 - [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
-- local/TUI mirror intake 已開始從 `hcodex ingress` 拆到獨立 app-server ws observer
+  - local/TUI mirror intake 已開始從 `hcodex ingress` 拆到獨立 app-server ws observer
   - proxy relay 熱路徑已不再承接 preview / process / final / request lifecycle mirror
   - 但 public vocabulary、transport-neutral observer contract、以及 broader observability 收斂仍未完成
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
@@ -162,6 +166,8 @@
   - 把舊的本地 CLI 狀態接到同一份 busy / title 模型
 - `session-level-mirror-and-readiness`
   - 描述 local/TUI mirror、adoption、與 idle/free readiness 的現行模型
+- `owner-runtime-contract`
+  - 固定 owner authority、observer、`hcodex` 與 adapter 的高層責任邊界
 - `post-cli-runtime-cleanup`
   - 記錄 app-server / desktop owner 主模型成立後，剩餘 vocabulary、status surface 與 `hcodex` launch shim 的收尾工作
 - `working-session-observability`
