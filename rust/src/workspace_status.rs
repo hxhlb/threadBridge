@@ -187,7 +187,7 @@ fn session_file_name(session_id: &str) -> String {
     name
 }
 
-fn is_hcodex_ingress_client(client: Option<&str>) -> bool {
+pub(crate) fn is_hcodex_ingress_client(client: Option<&str>) -> bool {
     matches!(
         client,
         Some(HCODEX_INGRESS_CLIENT) | Some(LEGACY_TUI_PROXY_CLIENT)

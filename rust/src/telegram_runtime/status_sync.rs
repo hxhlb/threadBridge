@@ -19,8 +19,8 @@ use crate::thread_state::{
 };
 use crate::workspace_status::{
     LocalSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
-    WorkspaceStatusEventRecord, events_path, read_local_session_claim, read_session_status,
-    record_bot_status_event,
+    WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client, read_local_session_claim,
+    read_session_status, record_bot_status_event,
 };
 
 const TELEGRAM_TOPIC_TITLE_MAX_CHARS: usize = 128;
@@ -758,11 +758,10 @@ fn initial_workspace_event_offset(lines: &[String], owner_claim: &LocalSessionCl
 }
 
 fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
-    match event.payload.get("client").and_then(Value::as_str) {
-        Some("threadbridge-hcodex-ingress") | Some("threadbridge-tui-proxy") => {
-            TranscriptMirrorOrigin::Tui
-        }
-        _ => TranscriptMirrorOrigin::Local,
+    if is_hcodex_ingress_client(event.payload.get("client").and_then(Value::as_str)) {
+        TranscriptMirrorOrigin::Tui
+    } else {
+        TranscriptMirrorOrigin::Local
     }
 }
 
@@ -865,8 +864,8 @@ mod tests {
     use crate::thread_state::effective_busy_snapshot_for_binding;
     use crate::workspace_status::{
         LocalSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceStatusEventRecord,
-        WorkspaceStatusPhase, ensure_workspace_status_surface, read_session_status,
-        record_bot_status_event, session_status_path,
+        WorkspaceStatusPhase, ensure_workspace_status_surface, is_hcodex_ingress_client,
+        read_session_status, record_bot_status_event, session_status_path,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -927,6 +926,14 @@ mod tests {
                 thread_key: "thread-key".to_owned(),
             },
         }
+    }
+
+    #[test]
+    fn workspace_status_helper_recognizes_hcodex_ingress_client_aliases() {
+        assert!(is_hcodex_ingress_client(Some("threadbridge-hcodex-ingress")));
+        assert!(is_hcodex_ingress_client(Some("threadbridge-tui-proxy")));
+        assert!(!is_hcodex_ingress_client(Some("codex-cli")));
+        assert!(!is_hcodex_ingress_client(None));
     }
 
     #[test]
