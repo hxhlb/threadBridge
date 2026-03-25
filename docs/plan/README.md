@@ -132,6 +132,9 @@
 - [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-lifecycle-supervision.md)
   - 記錄 `hcodex` 作為受管本地入口時，對 local Codex child lifecycle 的正式責任
   - 固定目前已確認的缺口：cleanup 不能只依賴 `run-hcodex-session` 的 happy path
+- [hcodex-responsibility-matrix.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-responsibility-matrix.md)
+  - 將 `hcodex` 的長期責任收斂成 4 個核心詞：`launch / bridge / supervise / reconcile`
+  - 區分哪些責任必須保留在 core、哪些只能暫時保留在周邊、哪些應移出 `hcodex` core
 
 ## 純草稿
 
@@ -188,6 +191,8 @@
   - 記錄 app-server / desktop owner 主模型成立後，剩餘 vocabulary、status surface 與 `hcodex` launch shim 的收尾工作
 - `hcodex-lifecycle-supervision`
   - 記錄 `hcodex` local launcher / child supervision / teardown contract
+- `hcodex-responsibility-matrix`
+  - 記錄 `hcodex` core 的長期責任矩陣與邊界分類
 - `working-session-observability`
   - 描述 working session 的可觀測入口、session timeline 與 artifact 關聯
 - `topic-title-status`
