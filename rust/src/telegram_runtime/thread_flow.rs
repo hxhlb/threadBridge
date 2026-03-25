@@ -7,47 +7,22 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::{error, info};
 
-use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
-use crate::collaboration_mode::CollaborationMode;
-use crate::execution_mode::workspace_execution_mode;
-use crate::local_control::LocalControlHandle;
-use crate::process_transcript::process_entry_from_codex_event;
-
 use super::final_reply::{compose_visible_final_reply, send_final_assistant_reply};
 use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
 use super::status_sync;
 use super::*;
+use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
+use crate::collaboration_mode::CollaborationMode;
+use crate::execution_mode::workspace_execution_mode;
+use crate::local_control::LocalControlHandle;
+use crate::process_transcript::process_entry_from_codex_event;
 
 fn is_nonfatal_collaboration_mode_error(error: &anyhow::Error) -> bool {
     error
         .to_string()
         .starts_with(COLLABORATION_MODE_UNAVAILABLE_PREFIX)
-}
-
-async fn start_fresh_binding(
-    state: &AppState,
-    record: ThreadRecord,
-    workspace_path: PathBuf,
-) -> Result<ThreadRecord> {
-    ensure_workspace_runtime(
-        &state.config.runtime.codex_working_directory,
-        &state.config.runtime.data_root_path,
-        &state.seed_template_path,
-        &workspace_path,
-    )
-    .await?;
-    let codex_workspace = prepare_workspace_runtime_for_control(state, workspace_path).await?;
-    let execution_mode = workspace_execution_mode(&codex_workspace.working_directory).await?;
-    let binding = state
-        .codex
-        .start_thread_with_mode(&codex_workspace, execution_mode)
-        .await?;
-    state
-        .repository
-        .bind_workspace(record, binding.cwd, binding.thread_id, binding.execution)
-        .await
 }
 
 async fn persist_collaboration_mode_change(
@@ -277,7 +252,11 @@ pub(crate) async fn run_command(
             }
             let workspace_path = workspace_path_from_binding(binding)?;
             let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
-            let result = start_fresh_binding(state, record.clone(), workspace_path.clone()).await;
+            let result = state
+                .control
+                .workspace_session_service()
+                .start_fresh_session(record.clone(), workspace_path.clone())
+                .await;
             typing.stop().await;
 
             match result {
@@ -301,8 +280,13 @@ pub(crate) async fn run_command(
                         "Started a fresh Codex session for this workspace.",
                     )
                     .await?;
-                    let _ =
-                        status_sync::refresh_thread_topic_title(bot, state, &record, "new").await;
+                    let _ = status_sync::refresh_thread_topic_title(
+                        bot,
+                        &state.repository,
+                        &record,
+                        "new",
+                    )
+                    .await;
                 }
                 Err(error) => {
                     let _ = state
@@ -348,9 +332,7 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            let Some(existing_thread_id) =
-                usable_bound_session_id(resolved_state, session.as_ref())
-            else {
+            let Some(_) = usable_bound_session_id(resolved_state, session.as_ref()) else {
                 send_scoped_message(
                     bot,
                     msg.chat.id,
@@ -370,24 +352,17 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            let workspace_path =
-                ensure_bound_workspace_runtime(state, session.as_ref().context("missing binding")?)
-                    .await?;
-            let codex_workspace =
-                prepare_workspace_runtime_for_control(state, workspace_path).await?;
             let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
             let reconnect = state
-                .codex
-                .reconnect_session(&codex_workspace, existing_thread_id)
+                .control
+                .workspace_session_service()
+                .repair_session_binding(record, session.as_ref().context("missing binding")?)
                 .await;
             typing.stop().await;
 
             match reconnect {
-                Ok(()) => {
-                    let updated = state
-                        .repository
-                        .mark_session_binding_verified(record)
-                        .await?;
+                Ok(result) if result.verified => {
+                    let updated = result.record;
                     state
                         .repository
                         .append_log(
@@ -406,17 +381,14 @@ pub(crate) async fn run_command(
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
                         bot,
-                        state,
+                        &state.repository,
                         &updated,
                         "reconnect_codex_verified",
                     )
                     .await;
                 }
-                Err(error) => {
-                    let updated = state
-                        .repository
-                        .mark_session_binding_broken(record, error.to_string())
-                        .await?;
+                Ok(result) => {
+                    let updated = result.record;
                     send_scoped_warning_message(
                         bot,
                         msg.chat.id,
@@ -426,12 +398,13 @@ pub(crate) async fn run_command(
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
                         bot,
-                        state,
+                        &state.repository,
                         &updated,
                         "reconnect_codex_broken",
                     )
                     .await;
                 }
+                Err(error) => return Err(error),
             }
         }
         Command::WorkspaceInfo => {
@@ -509,10 +482,16 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
-            let workspace_path =
-                ensure_bound_workspace_runtime(state, session.as_ref().context("missing binding")?)
-                    .await?;
-            let codex_workspace = shared_codex_workspace(state, workspace_path.clone()).await?;
+            let workspace_path = state
+                .control
+                .workspace_runtime_service()
+                .ensure_bound_workspace_runtime(session.as_ref().context("missing binding")?)
+                .await?;
+            let codex_workspace = state
+                .control
+                .workspace_runtime_service()
+                .shared_codex_workspace(workspace_path.clone())
+                .await?;
             record_bot_status_event(
                 &workspace_path,
                 "bot_turn_started",
@@ -552,7 +531,7 @@ pub(crate) async fn run_command(
                     .await?;
                     let _ = status_sync::refresh_thread_topic_title(
                         bot,
-                        state,
+                        &state.repository,
                         &updated,
                         "generate_title_broken",
                     )
@@ -594,8 +573,13 @@ pub(crate) async fn run_command(
                     None,
                 )
                 .await?;
-            let _ = status_sync::refresh_thread_topic_title(bot, state, &updated, "generate_title")
-                .await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                &state.repository,
+                &updated,
+                "generate_title",
+            )
+            .await;
             send_scoped_message(
                 bot,
                 msg.chat.id,
@@ -673,9 +657,13 @@ pub(crate) async fn run_command(
                 format!("Collaboration mode is now `{}`.", mode.as_str()),
             )
             .await?;
-            let _ =
-                status_sync::refresh_thread_topic_title(bot, state, &record, "collaboration_mode")
-                    .await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                &state.repository,
+                &record,
+                "collaboration_mode",
+            )
+            .await;
         }
     }
     Ok(())
@@ -712,8 +700,12 @@ pub(crate) async fn run_text_message(
         return Ok(());
     }
     let session = state.repository.read_session_binding(&record).await?;
-    let (record, session) =
-        maybe_route_telegram_input_to_tui_session(state, record, session).await?;
+    let (record, session) = state
+        .control
+        .session_routing_service()
+        .maybe_route_telegram_input_to_tui_session(record, session)
+        .await?
+        .into_record_session();
     let (resolved_state, blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
@@ -736,8 +728,11 @@ pub(crate) async fn run_text_message(
         .await?;
         return Ok(());
     };
-    let workspace_path =
-        ensure_bound_workspace_runtime(state, session.as_ref().context("missing binding")?).await?;
+    let workspace_path = state
+        .control
+        .workspace_runtime_service()
+        .ensure_bound_workspace_runtime(session.as_ref().context("missing binding")?)
+        .await?;
     if let Some(busy) = blocking_snapshot.as_ref() {
         send_scoped_message(
             bot,
@@ -886,7 +881,11 @@ async fn execute_text_turn(
     collaboration_mode: CollaborationMode,
 ) -> Result<()> {
     let typing = TypingHeartbeat::start(bot.clone(), chat_id, Some(thread_id));
-    let codex_workspace = shared_codex_workspace(state, workspace_path.clone()).await?;
+    let codex_workspace = state
+        .control
+        .workspace_runtime_service()
+        .shared_codex_workspace(workspace_path.clone())
+        .await?;
     let preview = Arc::new(Mutex::new(TurnPreviewController::new(
         bot.clone(),
         chat_id,
@@ -1070,7 +1069,7 @@ async fn execute_text_turn(
             .await?;
             let _ = status_sync::refresh_thread_topic_title(
                 bot,
-                state,
+                &state.repository,
                 &record,
                 "thread_message_codex_failed",
             )
@@ -1094,8 +1093,12 @@ pub(crate) async fn launch_plan_implementation_turn(
         .get_thread(message.chat.id.0, thread_id_to_i32(thread_id))
         .await?;
     let session = state.repository.read_session_binding(&record).await?;
-    let (record, session) =
-        maybe_route_telegram_input_to_tui_session(state, record, session).await?;
+    let (record, session) = state
+        .control
+        .session_routing_service()
+        .maybe_route_telegram_input_to_tui_session(record, session)
+        .await?
+        .into_record_session();
     let (resolved_state, blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
@@ -1107,8 +1110,11 @@ pub(crate) async fn launch_plan_implementation_turn(
     if let Some(busy) = blocking_snapshot.as_ref() {
         anyhow::bail!("{}", status_sync::busy_text_message(busy, false));
     }
-    let workspace_path =
-        ensure_bound_workspace_runtime(state, session.as_ref().context("missing binding")?).await?;
+    let workspace_path = state
+        .control
+        .workspace_runtime_service()
+        .ensure_bound_workspace_runtime(session.as_ref().context("missing binding")?)
+        .await?;
     let record = state
         .repository
         .update_session_collaboration_mode(record, CollaborationMode::Default)
@@ -1167,7 +1173,8 @@ mod tests {
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use crate::hcodex_ingress::HcodexIngressManager;
     use crate::repository::ThreadRepository;
-    use crate::telegram_runtime::{AppState, RuntimeOwnershipMode};
+    use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
+    use crate::telegram_runtime::AppState;
     use crate::workspace_status::WorkspaceStatusCache;
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -1218,12 +1225,24 @@ mod tests {
             },
             repository: repository.clone(),
             codex: crate::codex::CodexRunner::new(None),
-            app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
             hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+            control: RuntimeControlContext {
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                    management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
+                },
+                repository: repository.clone(),
+                codex: crate::codex::CodexRunner::new(None),
+                app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
+                hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+                seed_template_path: root.join("seed.md"),
+                runtime_ownership_mode: RuntimeOwnershipMode::SelfManaged,
+            },
             interactive_requests: crate::interactive::InteractiveRequestRegistry::new(),
-            seed_template_path: root.join("seed.md"),
             workspace_status_cache: WorkspaceStatusCache::new(),
-            runtime_ownership_mode: RuntimeOwnershipMode::SelfManaged,
         };
 
         let record = persist_collaboration_mode_change(&state, record, CollaborationMode::Plan)

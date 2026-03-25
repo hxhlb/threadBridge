@@ -956,16 +956,15 @@ pub async fn busy_selected_session_status(
 mod tests {
     use super::{
         HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, SessionActivitySource,
-        SessionCurrentStatus,
-        WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
+        SessionCurrentStatus, WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
         busy_selected_session_status, current_status_path, default_local_tui_session_claim,
         ensure_workspace_status_surface, events_path, legacy_current_status_path,
         legacy_events_path, legacy_local_tui_session_claim_path, legacy_session_status_path,
         list_live_local_sessions, local_tui_session_claim_path, read_local_tui_session_claim,
         read_session_status, read_workspace_aggregate_status, record_bot_status_event,
         record_hcodex_ingress_completed, record_hcodex_ingress_connected,
-        record_hcodex_ingress_prompt,
-        record_hcodex_launcher_ended, record_hcodex_launcher_started, session_status_path,
+        record_hcodex_ingress_prompt, record_hcodex_launcher_ended, record_hcodex_launcher_started,
+        session_status_path,
     };
     use std::path::PathBuf;
     use tokio::fs;
@@ -998,9 +997,13 @@ mod tests {
     #[tokio::test]
     async fn ensure_surface_migrates_legacy_status_artifacts() {
         let workspace = temp_path();
-        fs::create_dir_all(legacy_session_status_path(&workspace, "thr_legacy").parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_session_status_path(&workspace, "thr_legacy")
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         let legacy_aggregate = WorkspaceAggregateStatus {
             schema_version: 2,
@@ -1011,7 +1014,10 @@ mod tests {
         };
         fs::write(
             legacy_current_status_path(&workspace),
-            format!("{}\n", serde_json::to_string_pretty(&legacy_aggregate).unwrap()),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&legacy_aggregate).unwrap()
+            ),
         )
         .await
         .unwrap();
@@ -1056,7 +1062,11 @@ mod tests {
 
         ensure_workspace_status_surface(&workspace).await.unwrap();
 
-        assert!(fs::try_exists(current_status_path(&workspace)).await.unwrap());
+        assert!(
+            fs::try_exists(current_status_path(&workspace))
+                .await
+                .unwrap()
+        );
         assert!(fs::try_exists(events_path(&workspace)).await.unwrap());
         assert!(
             fs::try_exists(session_status_path(&workspace, "thr_legacy"))
@@ -1074,9 +1084,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
+        let claim = read_local_tui_session_claim(&workspace)
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(aggregate.live_tui_session_ids, vec!["thr_legacy".to_owned()]);
+        assert_eq!(
+            aggregate.live_tui_session_ids,
+            vec!["thr_legacy".to_owned()]
+        );
         assert_eq!(session.session_id, "thr_legacy");
         assert_eq!(claim.thread_key, "thread-key");
     }
@@ -1106,9 +1122,13 @@ mod tests {
     #[tokio::test]
     async fn read_local_tui_session_claim_falls_back_to_legacy_file() {
         let workspace = temp_path();
-        fs::create_dir_all(legacy_local_tui_session_claim_path(&workspace).parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_local_tui_session_claim_path(&workspace)
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         let legacy_claim = default_local_tui_session_claim(&workspace, "thread-key", 42);
         fs::write(
@@ -1118,7 +1138,10 @@ mod tests {
         .await
         .unwrap();
 
-        let claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
+        let claim = read_local_tui_session_claim(&workspace)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(claim.thread_key, "thread-key");
         assert_eq!(claim.shell_pid, 42);
     }
@@ -1127,9 +1150,13 @@ mod tests {
     async fn read_local_tui_session_claim_prefers_canonical_file_over_legacy() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
-        fs::create_dir_all(legacy_local_tui_session_claim_path(&workspace).parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_local_tui_session_claim_path(&workspace)
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         let canonical_claim = default_local_tui_session_claim(&workspace, "canonical", 42);
         super::write_local_tui_session_claim(&workspace, &canonical_claim)
@@ -1144,7 +1171,10 @@ mod tests {
         .await
         .unwrap();
 
-        let claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
+        let claim = read_local_tui_session_claim(&workspace)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(claim.thread_key, "canonical");
         assert_eq!(claim.shell_pid, 42);
     }
@@ -1196,9 +1226,13 @@ mod tests {
     #[tokio::test]
     async fn read_session_status_falls_back_to_legacy_file() {
         let workspace = temp_path();
-        fs::create_dir_all(legacy_session_status_path(&workspace, "thr_legacy").parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_session_status_path(&workspace, "thr_legacy")
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         fs::write(
             legacy_session_status_path(&workspace, "thr_legacy"),
@@ -1238,9 +1272,13 @@ mod tests {
     async fn read_session_status_prefers_canonical_file_over_legacy() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
-        fs::create_dir_all(legacy_session_status_path(&workspace, "thr_same").parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_session_status_path(&workspace, "thr_same")
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         fs::write(
             session_status_path(&workspace, "thr_same"),
@@ -1306,9 +1344,13 @@ mod tests {
     async fn remove_local_tui_session_claim_removes_legacy_and_canonical_files() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
-        fs::create_dir_all(legacy_local_tui_session_claim_path(&workspace).parent().unwrap())
-            .await
-            .unwrap();
+        fs::create_dir_all(
+            legacy_local_tui_session_claim_path(&workspace)
+                .parent()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         let canonical_claim = default_local_tui_session_claim(&workspace, "thread-key", 42);
         super::write_local_tui_session_claim(&workspace, &canonical_claim)
@@ -1650,7 +1692,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let local_tui_claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
+        let local_tui_claim = read_local_tui_session_claim(&workspace)
+            .await
+            .unwrap()
+            .unwrap();
         let aggregate = read_workspace_aggregate_status(&workspace).await.unwrap();
 
         assert!(!old_session.live);

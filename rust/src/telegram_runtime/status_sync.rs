@@ -11,8 +11,8 @@ use tracing::{info, warn};
 use super::preview::TurnPreviewController;
 use super::*;
 use crate::repository::{
-    TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin, TranscriptMirrorPhase,
-    TranscriptMirrorRole,
+    ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
+    TranscriptMirrorPhase, TranscriptMirrorRole,
 };
 use crate::thread_state::{
     BindingStatus, LifecycleStatus, resolve_binding_status, resolve_lifecycle_status,
@@ -142,14 +142,14 @@ pub(crate) fn tui_adoption_prompt_markup(thread_key: &str) -> InlineKeyboardMark
 
 pub(crate) async fn refresh_thread_topic_title(
     bot: &Bot,
-    state: &AppState,
+    repository: &ThreadRepository,
     record: &ThreadRecord,
     source: &'static str,
 ) -> Result<()> {
     let Some(message_thread_id) = record.metadata.message_thread_id else {
         return Ok(());
     };
-    let session = state.repository.read_session_binding(record).await?;
+    let session = repository.read_session_binding(record).await?;
     let workspace_path = session
         .as_ref()
         .and_then(|binding| binding.workspace_cwd.as_deref())
@@ -594,8 +594,7 @@ async fn sync_local_transcript_mirrors_once(
                     let Some(entry) = local_mirror_entry_from_event(
                         &event,
                         local_tui_claim.session_id.as_deref(),
-                    )
-                    else {
+                    ) else {
                         warn!(
                             event = "workspace_mirror.local_user_prompt_missing_text",
                             workspace = %workspace_key,
@@ -936,7 +935,9 @@ mod tests {
 
     #[test]
     fn workspace_status_helper_recognizes_hcodex_ingress_client_aliases() {
-        assert!(is_hcodex_ingress_client(Some("threadbridge-hcodex-ingress")));
+        assert!(is_hcodex_ingress_client(Some(
+            "threadbridge-hcodex-ingress"
+        )));
         assert!(is_hcodex_ingress_client(Some("threadbridge-tui-proxy")));
         assert!(!is_hcodex_ingress_client(Some("codex-cli")));
         assert!(!is_hcodex_ingress_client(None));

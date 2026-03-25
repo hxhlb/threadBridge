@@ -5,11 +5,10 @@ use teloxide::prelude::*;
 use teloxide::requests::Requester;
 use teloxide::types::{BotCommand, CallbackQuery, LinkPreviewOptions, ThreadId};
 use teloxide::utils::command::BotCommands;
-use tokio::net::TcpStream;
 use tracing::{error, info, warn};
 
 use crate::app_server_runtime::WorkspaceRuntimeManager;
-pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent, CodexWorkspace};
+pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent};
 use crate::collaboration_mode::CollaborationMode;
 pub(crate) use crate::config::AppConfig;
 use crate::hcodex_ingress::HcodexIngressManager;
@@ -25,15 +24,15 @@ pub(crate) use crate::repository::{
     AppendPendingImageInput, LogDirection, SessionBinding, ThreadRecord, ThreadRepository,
     TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin, TranscriptMirrorRole,
 };
+use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
 use crate::thread_state::{
     BindingStatus, ResolvedThreadState, cached_effective_busy_snapshot_for_binding,
     resolve_thread_state_with_cache,
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
-pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
+pub(crate) use crate::workspace::validate_seed_template;
 pub(crate) use crate::workspace_status::{
-    SessionCurrentStatus, WorkspaceStatusCache, read_local_tui_session_claim, read_session_status,
-    record_bot_status_event,
+    SessionCurrentStatus, WorkspaceStatusCache, read_session_status, record_bot_status_event,
 };
 
 pub mod final_reply;
@@ -87,18 +86,10 @@ pub struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) repository: ThreadRepository,
     pub(crate) codex: CodexRunner,
-    pub(crate) app_server_runtime: WorkspaceRuntimeManager,
     pub(crate) hcodex_ingress: HcodexIngressManager,
+    pub(crate) control: RuntimeControlContext,
     pub(crate) interactive_requests: InteractiveRequestRegistry,
-    pub(crate) seed_template_path: PathBuf,
     pub(crate) workspace_status_cache: WorkspaceStatusCache,
-    pub(crate) runtime_ownership_mode: RuntimeOwnershipMode,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RuntimeOwnershipMode {
-    SelfManaged,
-    DesktopOwner,
 }
 
 impl AppState {
@@ -146,21 +137,24 @@ impl AppState {
         hcodex_ingress
             .configure_interaction_sender(interaction_sender)
             .await;
+        let control = RuntimeControlContext {
+            runtime: config.runtime.clone(),
+            repository: repository.clone(),
+            codex: CodexRunner::new(config.runtime.codex_model.clone()),
+            app_server_runtime: app_server_runtime.clone(),
+            hcodex_ingress: hcodex_ingress.clone(),
+            seed_template_path: seed_template_path.clone(),
+            runtime_ownership_mode,
+        };
         Ok(Self {
             codex: CodexRunner::new(config.runtime.codex_model.clone()),
-            app_server_runtime,
             hcodex_ingress,
+            control,
             interactive_requests,
             repository,
-            seed_template_path,
             workspace_status_cache: WorkspaceStatusCache::new(),
-            runtime_ownership_mode,
             config,
         })
-    }
-
-    pub(crate) fn runtime_is_owner_managed(&self) -> bool {
-        self.runtime_ownership_mode == RuntimeOwnershipMode::DesktopOwner
     }
 }
 
@@ -489,9 +483,13 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
                 ),
             )
             .await?;
-            let _ =
-                status_sync::refresh_thread_topic_title(bot, state, &updated, "tui_adopt_accept")
-                    .await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                &state.repository,
+                &updated,
+                "tui_adopt_accept",
+            )
+            .await;
             bot.answer_callback_query(query.id.clone()).await?;
         }
         status_sync::CALLBACK_TUI_ADOPT_REJECT => {
@@ -517,9 +515,13 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
                 ),
             )
             .await?;
-            let _ =
-                status_sync::refresh_thread_topic_title(bot, state, &updated, "tui_adopt_reject")
-                    .await;
+            let _ = status_sync::refresh_thread_topic_title(
+                bot,
+                &state.repository,
+                &updated,
+                "tui_adopt_reject",
+            )
+            .await;
             bot.answer_callback_query(query.id.clone()).await?;
         }
         _ => {}
@@ -922,214 +924,12 @@ fn parse_fallback_command_text(text: &str) -> Option<Command> {
     Command::parse(&normalized, "").ok()
 }
 
-pub(crate) async fn ensure_bound_workspace_runtime(
-    state: &AppState,
-    binding: &SessionBinding,
-) -> Result<PathBuf> {
-    let workspace = workspace_path_from_binding(binding)?;
-    ensure_workspace_runtime(
-        &state.config.runtime.codex_working_directory,
-        &state.config.runtime.data_root_path,
-        &state.seed_template_path,
-        &workspace,
-    )
-    .await?;
-    info!(
-        event = "telegram_runtime.workspace.ensure_bound_runtime",
-        workspace = %workspace.display(),
-        owner_managed = state.runtime_is_owner_managed(),
-        "telegram runtime ensured bound workspace surface"
-    );
-    if state.runtime_is_owner_managed() {
-        let _ = read_owner_managed_workspace_runtime(&workspace).await?;
-    } else {
-        let _ = state
-            .app_server_runtime
-            .ensure_workspace_daemon(&workspace)
-            .await?;
-    }
-    Ok(workspace)
-}
-
-pub(crate) async fn prepare_workspace_runtime_for_control(
-    state: &AppState,
-    workspace: PathBuf,
-) -> Result<CodexWorkspace> {
-    info!(
-        event = "telegram_runtime.workspace.prepare_control_runtime",
-        workspace = %workspace.display(),
-        owner_managed = state.runtime_is_owner_managed(),
-        "telegram runtime requested control-path workspace runtime"
-    );
-    let runtime = state
-        .app_server_runtime
-        .ensure_workspace_daemon(&workspace)
-        .await?;
-    let _ = state
-        .hcodex_ingress
-        .ensure_workspace_ingress(&workspace, &runtime.daemon_ws_url)
-        .await?;
-    Ok(CodexWorkspace {
-        working_directory: workspace,
-        app_server_url: Some(runtime.daemon_ws_url),
-    })
-}
-
-async fn should_route_telegram_input_to_live_tui_session(
-    record: &ThreadRecord,
-    binding: &SessionBinding,
-) -> Result<bool> {
-    let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref() else {
-        return Ok(false);
-    };
-    if Some(tui_session_id) == current_bound_session_id(Some(binding)) {
-        return Ok(false);
-    }
-    let workspace_path = workspace_path_from_binding(binding)?;
-    let Some(local_tui_claim) = read_local_tui_session_claim(&workspace_path).await? else {
-        return Ok(false);
-    };
-    if local_tui_claim.thread_key != record.metadata.thread_key
-        || local_tui_claim.session_id.as_deref() != Some(tui_session_id)
-    {
-        return Ok(false);
-    }
-    let snapshot = read_session_status(&workspace_path, tui_session_id).await?;
-    Ok(snapshot.as_ref().is_some_and(|snapshot| {
-        snapshot.activity_source == crate::workspace_status::SessionActivitySource::Tui
-            && snapshot.live
-    }))
-}
-
-pub(crate) async fn maybe_route_telegram_input_to_tui_session(
-    state: &AppState,
-    record: ThreadRecord,
-    session: Option<SessionBinding>,
-) -> Result<(ThreadRecord, Option<SessionBinding>)> {
-    let Some(binding) = session.as_ref() else {
-        return Ok((record, session));
-    };
-    let Some(tui_session_id) = binding.tui_active_codex_thread_id.clone() else {
-        return Ok((record, session));
-    };
-
-    let log_message = if binding.tui_session_adoption_pending {
-        Some(format!(
-            "Auto-adopted pending TUI session `{}` on the next Telegram input.",
-            tui_session_id
-        ))
-    } else if should_route_telegram_input_to_live_tui_session(&record, binding).await? {
-        Some(format!(
-            "Auto-adopted live TUI session `{}` for Telegram input routing.",
-            tui_session_id
-        ))
-    } else {
-        None
-    };
-
-    let Some(log_message) = log_message else {
-        return Ok((record, session));
-    };
-
-    let workspace_path = workspace_path_from_binding(binding)?;
-    let workspace = shared_codex_workspace(state, workspace_path).await?;
-    if let Err(error) = state
-        .codex
-        .reconnect_session(&workspace, &tui_session_id)
-        .await
-    {
-        let reason = format!(
-            "TUI session adoption verification failed for `{}`: {}",
-            tui_session_id, error
-        );
-        let updated = state.repository.clear_tui_adoption_state(record).await?;
-        state
-            .repository
-            .append_log(&updated, LogDirection::System, reason.clone(), None)
-            .await?;
-        let updated = state
-            .repository
-            .mark_session_binding_broken(updated, reason)
-            .await?;
-        let session = state.repository.read_session_binding(&updated).await?;
-        return Ok((updated, session));
-    }
-
-    let updated = state.repository.adopt_tui_active_session(record).await?;
-    let session = state.repository.read_session_binding(&updated).await?;
-    state
-        .repository
-        .append_log(&updated, LogDirection::System, log_message, None)
-        .await?;
-    Ok((updated, session))
-}
-
-pub(crate) async fn shared_codex_workspace(
-    state: &AppState,
-    workspace: PathBuf,
-) -> Result<CodexWorkspace> {
-    info!(
-        event = "telegram_runtime.workspace.shared_runtime",
-        workspace = %workspace.display(),
-        owner_managed = state.runtime_is_owner_managed(),
-        "telegram runtime requested shared workspace runtime"
-    );
-    let runtime = if state.runtime_is_owner_managed() {
-        read_owner_managed_workspace_runtime(&workspace).await?
-    } else {
-        state
-            .app_server_runtime
-            .ensure_workspace_daemon(&workspace)
-            .await?
-    };
-    Ok(CodexWorkspace {
-        working_directory: workspace,
-        app_server_url: Some(runtime.daemon_ws_url),
-    })
-}
-
-async fn read_owner_managed_workspace_runtime(
-    workspace: &std::path::Path,
-) -> Result<crate::app_server_runtime::WorkspaceRuntimeState> {
-    let state_path = workspace
-        .join(".threadbridge")
-        .join("state")
-        .join("app-server")
-        .join("current.json");
-    let contents = tokio::fs::read_to_string(&state_path)
-        .await
-        .with_context(|| {
-            format!(
-                "missing owner-managed runtime state: {}",
-                state_path.display()
-            )
-        })?;
-    let state: crate::app_server_runtime::WorkspaceRuntimeState = serde_json::from_str(&contents)
-        .with_context(|| {
-        format!(
-            "invalid owner-managed runtime state: {}",
-            state_path.display()
-        )
-    })?;
-    let Some(socket_addr) = state.daemon_ws_url.strip_prefix("ws://") else {
-        anyhow::bail!("owner-managed daemon url must start with ws://");
-    };
-    if TcpStream::connect(socket_addr).await.is_err() {
-        anyhow::bail!(
-            "workspace runtime is not ready for {}. Start threadbridge_desktop and repair the workspace runtime first.",
-            workspace.display()
-        );
-    }
-    Ok(state)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, Command, RuntimeOwnershipMode, TelegramSystemIntent, TelegramTextRole,
-        command_list, current_bound_session_id, format_role_text, format_system_text,
-        maybe_route_telegram_input_to_tui_session, normalize_slash_command_text,
-        parse_fallback_command_text, session_binding_hint_for_state,
+        AppState, Command, TelegramSystemIntent, TelegramTextRole, command_list,
+        current_bound_session_id, format_role_text, format_system_text,
+        normalize_slash_command_text, parse_fallback_command_text, session_binding_hint_for_state,
         should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
         usable_bound_session_id,
     };
@@ -1140,6 +940,7 @@ mod tests {
     use crate::hcodex_ingress::HcodexIngressManager;
     use crate::interactive::InteractiveRequestRegistry;
     use crate::repository::{SessionBinding, ThreadRepository};
+    use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
     use crate::thread_state::{BindingStatus, LifecycleStatus, ResolvedThreadState, RunStatus};
     use crate::workspace_status::{
         SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase, read_session_status,
@@ -1478,20 +1279,35 @@ mod tests {
             },
             repository: repository.clone(),
             codex: CodexRunner::new(None),
-            app_server_runtime: WorkspaceRuntimeManager::new(),
             hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+            control: RuntimeControlContext {
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                    management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
+                },
+                repository: repository.clone(),
+                codex: CodexRunner::new(None),
+                app_server_runtime: WorkspaceRuntimeManager::new(),
+                hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+                seed_template_path: root.join("seed.md"),
+                runtime_ownership_mode: RuntimeOwnershipMode::DesktopOwner,
+            },
             interactive_requests: InteractiveRequestRegistry::new(),
-            seed_template_path: root.join("seed.md"),
             workspace_status_cache: WorkspaceStatusCache::new(),
-            runtime_ownership_mode: RuntimeOwnershipMode::DesktopOwner,
         };
 
         let session: Option<SessionBinding> =
             repository.read_session_binding(&record).await.unwrap();
-        let (updated, updated_session) =
-            maybe_route_telegram_input_to_tui_session(&state, record, session)
-                .await
-                .unwrap();
+        let (updated, updated_session) = state
+            .control
+            .session_routing_service()
+            .maybe_route_telegram_input_to_tui_session(record, session)
+            .await
+            .unwrap()
+            .into_record_session();
         let binding = repository
             .read_session_binding(&updated)
             .await

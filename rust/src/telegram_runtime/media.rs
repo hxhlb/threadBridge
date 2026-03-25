@@ -425,25 +425,12 @@ pub(crate) async fn queue_image_for_thread(
         .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
         .await?;
     let session = state.repository.read_session_binding(&record).await?;
-    let (record, session) = if session
-        .as_ref()
-        .is_some_and(|binding| binding.tui_session_adoption_pending)
-    {
-        let updated = state.repository.adopt_tui_active_session(record).await?;
-        state
-            .repository
-            .append_log(
-                &updated,
-                LogDirection::System,
-                "Auto-adopted the pending TUI session on the next Telegram image message.",
-                None,
-            )
-            .await?;
-        let session = state.repository.read_session_binding(&updated).await?;
-        (updated, session)
-    } else {
-        (record, session)
-    };
+    let (record, session) = state
+        .control
+        .session_routing_service()
+        .maybe_route_telegram_input_to_tui_session(record, session)
+        .await?
+        .into_record_session();
     let (resolved_state, blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
@@ -466,9 +453,11 @@ pub(crate) async fn queue_image_for_thread(
         .await?;
         return Ok(());
     }
-    let _workspace_path =
-        ensure_bound_workspace_runtime(state, session.as_ref().context("missing session binding")?)
-            .await?;
+    let _workspace_path = state
+        .control
+        .workspace_runtime_service()
+        .ensure_bound_workspace_runtime(session.as_ref().context("missing session binding")?)
+        .await?;
     let pending = state
         .repository
         .get_or_create_pending_image_batch(&record)
@@ -559,8 +548,12 @@ pub(crate) async fn analyze_pending_image_batch(
         }
         return Ok(());
     }
-    let (record, session) =
-        maybe_route_telegram_input_to_tui_session(state, record, session).await?;
+    let (record, session) = state
+        .control
+        .session_routing_service()
+        .maybe_route_telegram_input_to_tui_session(record, session)
+        .await?
+        .into_record_session();
     let (resolved_state, blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
@@ -575,9 +568,11 @@ pub(crate) async fn analyze_pending_image_batch(
         }
         return Ok(());
     };
-    let workspace_path =
-        ensure_bound_workspace_runtime(state, session.as_ref().context("missing session binding")?)
-            .await?;
+    let workspace_path = state
+        .control
+        .workspace_runtime_service()
+        .ensure_bound_workspace_runtime(session.as_ref().context("missing session binding")?)
+        .await?;
     if let Some(busy) = blocking_snapshot.as_ref() {
         let text = status_sync::busy_text_message(busy, false);
         if let Some(callback_query_id) = callback_query_id {
@@ -677,7 +672,11 @@ async fn execute_image_analysis_turn(
 ) -> Result<()> {
     let chat_id = ChatId(record.metadata.chat_id);
     let typing = TypingHeartbeat::start(bot.clone(), chat_id, Some(thread_id));
-    let codex_workspace = shared_codex_workspace(state, workspace_path.clone()).await?;
+    let codex_workspace = state
+        .control
+        .workspace_runtime_service()
+        .shared_codex_workspace(workspace_path.clone())
+        .await?;
     let prompt = build_image_analysis_prompt(&batch, user_prompt);
     let preview = Arc::new(Mutex::new(TurnPreviewController::new(
         bot.clone(),
@@ -754,7 +753,7 @@ async fn execute_image_analysis_turn(
                 .await?;
             let _ = status_sync::refresh_thread_topic_title(
                 bot,
-                state,
+                &state.repository,
                 &record,
                 "image_analysis_codex_failed",
             )

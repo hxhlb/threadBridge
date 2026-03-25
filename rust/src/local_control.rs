@@ -1,21 +1,17 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use teloxide::prelude::*;
 use teloxide::types::{MessageId, ThreadId};
 
-use crate::execution_mode::workspace_execution_mode;
-use crate::repository::{LogDirection, SessionBinding, ThreadRecord};
-use crate::telegram_runtime::{
-    AppState, ensure_bound_workspace_runtime, prepare_workspace_runtime_for_control,
-    send_scoped_message, status_sync, thread_id_to_i32,
-};
-use crate::workspace::ensure_workspace_runtime;
+use crate::repository::{LogDirection, ThreadRecord};
+use crate::runtime_control::{RuntimeControlContext, WorkspaceAddResolution};
+use crate::telegram_runtime::{AppState, send_scoped_message, status_sync, thread_id_to_i32};
 
 #[derive(Clone)]
 pub struct LocalControlHandle {
     bot: Bot,
-    state: AppState,
+    control: RuntimeControlContext,
 }
 
 #[derive(Debug, Clone)]
@@ -44,12 +40,15 @@ impl AddWorkspaceOutcome {
 
 impl LocalControlHandle {
     pub fn new(bot: Bot, state: AppState) -> Self {
-        Self { bot, state }
+        Self {
+            bot,
+            control: state.control.clone(),
+        }
     }
 
     pub async fn create_thread(&self, title: Option<String>) -> Result<CreatedThread> {
         let main_thread = self
-            .state
+            .control
             .repository
             .find_main_thread()
             .await?
@@ -63,7 +62,7 @@ impl LocalControlHandle {
             .create_forum_topic(ChatId(main_thread.metadata.chat_id), title.clone())
             .await?;
         let record = self
-            .state
+            .control
             .repository
             .create_thread(
                 main_thread.metadata.chat_id,
@@ -71,7 +70,7 @@ impl LocalControlHandle {
                 topic.name.clone(),
             )
             .await?;
-        self.state
+        self.control
             .repository
             .append_log(
                 &record,
@@ -112,27 +111,23 @@ impl LocalControlHandle {
 
     pub async fn add_workspace(&self, workspace_cwd: &str) -> Result<AddWorkspaceOutcome> {
         let workspace_path = resolve_workspace_argument(workspace_cwd).await?;
-        let canonical_workspace = workspace_path.display().to_string();
-        let active_threads = self
-            .state
-            .repository
-            .find_active_threads_by_workspace(&canonical_workspace)
-            .await?;
-        if active_threads.len() > 1 {
-            bail!(
-                "Workspace already has multiple active thread bindings: {}",
-                canonical_workspace
-            );
+        match self
+            .control
+            .workspace_session_service()
+            .resolve_workspace_add(&workspace_path)
+            .await?
+        {
+            WorkspaceAddResolution::Existing(record) => Ok(AddWorkspaceOutcome::Existing(record)),
+            WorkspaceAddResolution::Create {
+                canonical_workspace_cwd,
+                suggested_title,
+            } => {
+                let record = self
+                    .create_thread_and_bind(Some(suggested_title), &canonical_workspace_cwd)
+                    .await?;
+                Ok(AddWorkspaceOutcome::Created(record))
+            }
         }
-        if let Some(record) = active_threads.into_iter().next() {
-            return Ok(AddWorkspaceOutcome::Existing(record));
-        }
-
-        let title = workspace_thread_title(&workspace_path);
-        let record = self
-            .create_thread_and_bind(Some(title), &canonical_workspace)
-            .await?;
-        Ok(AddWorkspaceOutcome::Created(record))
     }
 
     pub async fn bind_workspace(
@@ -141,48 +136,18 @@ impl LocalControlHandle {
         workspace_cwd: &str,
     ) -> Result<ThreadRecord> {
         let record = self
-            .state
+            .control
             .repository
             .find_active_thread_by_key(thread_key)
             .await?
             .context("thread_key is not an active thread")?;
         let workspace_path = resolve_workspace_argument(workspace_cwd).await?;
-        let conflicting_threads = self
-            .state
-            .repository
-            .find_active_threads_by_workspace(&workspace_path.display().to_string())
-            .await?;
-        let has_conflict = conflicting_threads
-            .iter()
-            .any(|candidate| candidate.metadata.thread_key != record.metadata.thread_key);
-        if has_conflict {
-            bail!(
-                "Workspace bind failed: another active thread is already bound to `{}`.",
-                workspace_path.display()
-            );
-        }
-
-        ensure_workspace_runtime(
-            &self.state.config.runtime.codex_working_directory,
-            &self.state.config.runtime.data_root_path,
-            &self.state.seed_template_path,
-            &workspace_path,
-        )
-        .await?;
-        let codex_workspace =
-            prepare_workspace_runtime_for_control(&self.state, workspace_path.clone()).await?;
-        let execution_mode = workspace_execution_mode(&workspace_path).await?;
-        let binding = self
-            .state
-            .codex
-            .start_thread_with_mode(&codex_workspace, execution_mode)
-            .await?;
         let updated = self
-            .state
-            .repository
-            .bind_workspace(record, binding.cwd, binding.thread_id, binding.execution)
+            .control
+            .workspace_session_service()
+            .bind_workspace_record(record, &workspace_path)
             .await?;
-        self.state
+        self.control
             .repository
             .append_log(
                 &updated,
@@ -208,7 +173,7 @@ impl LocalControlHandle {
             .await?;
             let _ = status_sync::refresh_thread_topic_title(
                 &self.bot,
-                &self.state,
+                &self.control.repository,
                 &updated,
                 "local_bind_workspace",
             )
@@ -219,69 +184,47 @@ impl LocalControlHandle {
 
     pub async fn repair_session_binding(&self, thread_key: &str) -> Result<ThreadRecord> {
         let record = self
-            .state
+            .control
             .repository
             .find_active_thread_by_key(thread_key)
             .await?
             .context("thread_key is not an active thread")?;
-        let session = self.state.repository.read_session_binding(&record).await?;
+        let session = self
+            .control
+            .repository
+            .read_session_binding(&record)
+            .await?;
         let Some(binding) = session.as_ref() else {
             bail!("This thread is not bound to a workspace yet.");
         };
-        let existing_thread_id = reconnect_target_thread_id(binding).context(
-            "This workspace is missing a usable Codex session id. Use New Session first.",
-        )?;
-        let workspace_path = ensure_bound_workspace_runtime(&self.state, binding).await?;
-        let codex_workspace =
-            prepare_workspace_runtime_for_control(&self.state, workspace_path).await?;
-        match self
-            .state
-            .codex
-            .reconnect_session(&codex_workspace, existing_thread_id)
-            .await
-        {
-            Ok(()) => {
-                let updated = self
-                    .state
-                    .repository
-                    .mark_session_binding_verified(record)
-                    .await?;
-                self.state
-                    .repository
-                    .append_log(
-                        &updated,
-                        LogDirection::System,
-                        "Codex session revalidated from local management UI.",
-                        None,
-                    )
-                    .await?;
-                Ok(updated)
-            }
-            Err(error) => {
-                let updated = self
-                    .state
-                    .repository
-                    .mark_session_binding_broken(record, error.to_string())
-                    .await?;
-                self.state
-                    .repository
-                    .append_log(
-                        &updated,
-                        LogDirection::System,
-                        format!(
-                            "Codex session revalidation failed from local management UI: {error}"
-                        ),
-                        None,
-                    )
-                    .await?;
-                Err(error)
-            }
+        let result = self
+            .control
+            .workspace_session_service()
+            .repair_session_binding(record, binding)
+            .await?;
+        self.control
+            .repository
+            .append_log(
+                &result.record,
+                LogDirection::System,
+                if result.verified {
+                    "Codex session revalidated from local management UI."
+                } else {
+                    "Codex session revalidation failed from local management UI."
+                },
+                None,
+            )
+            .await?;
+        if result.verified {
+            Ok(result.record)
+        } else {
+            bail!("Codex session repair failed. Use New Session first.")
         }
     }
 
     pub async fn archive_thread(&self, thread_key: &str) -> Result<ThreadRecord> {
         let record = self
-            .state
+            .control
             .repository
             .find_active_thread_by_key(thread_key)
             .await?
@@ -295,8 +238,8 @@ impl LocalControlHandle {
                 )
                 .await;
         }
-        let archived = self.state.repository.archive_thread(record).await?;
-        self.state
+        let archived = self.control.repository.archive_thread(record).await?;
+        self.control
             .repository
             .append_log(
                 &archived,
@@ -310,17 +253,17 @@ impl LocalControlHandle {
 
     pub async fn adopt_tui_session(&self, thread_key: &str) -> Result<ThreadRecord> {
         let record = self
-            .state
+            .control
             .repository
             .find_active_thread_by_key(thread_key)
             .await?
             .context("thread_key is not an active thread")?;
         let updated = self
-            .state
+            .control
             .repository
             .adopt_tui_active_session(record)
             .await?;
-        self.state
+        self.control
             .repository
             .append_log(
                 &updated,
@@ -331,7 +274,7 @@ impl LocalControlHandle {
             .await?;
         let _ = status_sync::refresh_thread_topic_title(
             &self.bot,
-            &self.state,
+            &self.control.repository,
             &updated,
             "local_tui_adopt_accept",
         )
@@ -341,17 +284,17 @@ impl LocalControlHandle {
 
     pub async fn reject_tui_session(&self, thread_key: &str) -> Result<ThreadRecord> {
         let record = self
-            .state
+            .control
             .repository
             .find_active_thread_by_key(thread_key)
             .await?
             .context("thread_key is not an active thread")?;
         let updated = self
-            .state
+            .control
             .repository
             .clear_tui_adoption_state(record)
             .await?;
-        self.state
+        self.control
             .repository
             .append_log(
                 &updated,
@@ -362,7 +305,7 @@ impl LocalControlHandle {
             .await?;
         let _ = status_sync::refresh_thread_topic_title(
             &self.bot,
-            &self.state,
+            &self.control.repository,
             &updated,
             "local_tui_adopt_reject",
         )
@@ -372,7 +315,7 @@ impl LocalControlHandle {
 
     pub async fn restore_thread(&self, thread_key: &str) -> Result<ThreadRecord> {
         let archived = self
-            .state
+            .control
             .repository
             .get_thread_by_key(self.control_chat_id().await?, thread_key)
             .await?
@@ -394,7 +337,7 @@ impl LocalControlHandle {
             )
             .await?;
         let restored = self
-            .state
+            .control
             .repository
             .restore_thread(
                 archived,
@@ -402,7 +345,7 @@ impl LocalControlHandle {
                 topic.name.clone(),
             )
             .await?;
-        self.state
+        self.control
             .repository
             .append_log(
                 &restored,
@@ -431,7 +374,7 @@ impl LocalControlHandle {
         .await?;
         let _ = status_sync::refresh_thread_topic_title(
             &self.bot,
-            &self.state,
+            &self.control.repository,
             &restored,
             "local_restore",
         )
@@ -441,7 +384,7 @@ impl LocalControlHandle {
 
     async fn control_chat_id(&self) -> Result<i64> {
         Ok(self
-            .state
+            .control
             .repository
             .find_main_thread()
             .await?
@@ -474,28 +417,11 @@ fn restored_thread_title(title: Option<&str>, fallback_thread_id: Option<i32>) -
     format!("{base} · 已恢復")
 }
 
-fn workspace_thread_title(workspace_path: &Path) -> String {
-    workspace_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| workspace_path.display().to_string())
-}
-
-fn reconnect_target_thread_id(binding: &SessionBinding) -> Option<&str> {
-    binding
-        .current_codex_thread_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{reconnect_target_thread_id, workspace_thread_title};
-    use crate::repository::SessionBinding;
     use std::path::Path;
+
+    use crate::runtime_control::workspace_thread_title;
 
     #[test]
     fn workspace_thread_title_prefers_folder_name() {
@@ -507,26 +433,5 @@ mod tests {
     fn workspace_thread_title_falls_back_to_full_path() {
         let title = workspace_thread_title(Path::new("/"));
         assert_eq!(title, "/");
-    }
-
-    #[test]
-    fn reconnect_target_thread_id_allows_broken_binding_with_current_id() {
-        let binding: SessionBinding = serde_json::from_value(serde_json::json!({
-            "schema_version": 2,
-            "current_codex_thread_id": "thread-123",
-            "workspace_cwd": "/tmp/workspace",
-            "bound_at": null,
-            "initialized_at": null,
-            "last_verified_at": null,
-            "session_broken": true,
-            "session_broken_at": null,
-            "session_broken_reason": "probe failed",
-            "tui_active_codex_thread_id": null,
-            "tui_session_adoption_pending": false,
-            "tui_session_adoption_prompt_message_id": null,
-            "updated_at": "2026-03-21T00:00:00.000Z"
-        }))
-        .expect("valid session binding fixture");
-        assert_eq!(reconnect_target_thread_id(&binding), Some("thread-123"));
     }
 }

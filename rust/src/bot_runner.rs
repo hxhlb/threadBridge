@@ -9,9 +9,9 @@ use crate::config::{AppConfig, load_app_config, load_optional_telegram_config};
 use crate::hcodex_ingress::HcodexIngressManager;
 use crate::local_control::LocalControlHandle;
 use crate::management_api::{ManagementApiHandle, TelegramPollingState};
+use crate::runtime_control::RuntimeOwnershipMode;
 use crate::telegram_runtime::{
-    AppState, Command, RuntimeOwnershipMode, command_list, handle_callback_query, handle_command,
-    handle_message,
+    AppState, Command, command_list, handle_callback_query, handle_command, handle_message,
     status_sync::{reconcile_stale_bot_busy_sessions, spawn_workspace_status_watcher},
 };
 
