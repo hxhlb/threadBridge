@@ -380,3 +380,17 @@
 3. 先讓 observer 與 proxy 並存，驗證 mirror record 是否能完全對齊。
 4. 將 proxy 中與 mirror intake 直接相關的路徑逐步下沉到 observer。
 5. 等 mirror 收斂後，再重新命名或重述 `TUI proxy` 的責任邊界，避免它繼續被理解成 app-server gateway。
+
+這份 observer 重構在整體 post-CLI 清理中的優先級應固定為：
+
+- 第一優先
+
+原因不是它最容易，而是：
+
+- 只要 mirror 仍主要從 `TUI proxy` / ingress interception 取得，整體 runtime 就仍殘留 CLI 時代的接入點心智
+- 只有先把 shared `app-server ws` 做成主要 mirror event source，後續的 adoption 收斂、launch contract 收斂、以及 adapter/core 邊界整理才有穩定基礎
+
+換句話說：
+
+- 這份文檔不只是眾多 cleanup 子項之一
+- 它實際上是讓 `threadBridge` 真正切齊 app-server ws 主模型的第一步
