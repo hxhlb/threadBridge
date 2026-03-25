@@ -1847,7 +1847,7 @@ fn shell_quote_path(path: &Path) -> String {
     shell_quote(&path.display().to_string())
 }
 
-fn hcodex_launch_command(
+pub(crate) fn hcodex_launch_command(
     hcodex_path: &Path,
     thread_key: &str,
     execution_mode: ExecutionMode,
@@ -1870,7 +1870,7 @@ fn hcodex_launch_command(
     }
 }
 
-async fn launch_hcodex_via_terminal(command: &str) -> Result<()> {
+pub(crate) async fn launch_hcodex_via_terminal(command: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let script = format!(

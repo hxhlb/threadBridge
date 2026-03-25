@@ -62,6 +62,14 @@ pub enum Command {
     RepairSession,
     #[command(description = "Show this workspace's key, path, session, and local session state")]
     WorkspaceInfo,
+    #[command(description = "Launch the managed local hcodex session for this workspace")]
+    Launch,
+    #[command(description = "Show or change this workspace's execution mode")]
+    ExecutionMode,
+    #[command(description = "List recent working sessions for this workspace")]
+    Sessions,
+    #[command(description = "Show recent records for a specific session")]
+    SessionLog,
     #[command(description = "Set this workspace thread to Plan collaboration mode")]
     PlanMode,
     #[command(description = "Set this workspace thread to Default collaboration mode")]
@@ -1124,6 +1132,10 @@ mod tests {
         assert!(commands.iter().any(|command| command == "/new_session"));
         assert!(commands.iter().any(|command| command == "/add_workspace"));
         assert!(commands.iter().any(|command| command == "/workspace_info"));
+        assert!(commands.iter().any(|command| command == "/launch"));
+        assert!(commands.iter().any(|command| command == "/execution_mode"));
+        assert!(commands.iter().any(|command| command == "/sessions"));
+        assert!(commands.iter().any(|command| command == "/session_log"));
         assert!(commands.iter().any(|command| command == "/plan_mode"));
         assert!(commands.iter().any(|command| command == "/default_mode"));
         assert!(
@@ -1359,6 +1371,19 @@ mod tests {
             Command::parse("/repair_session", ""),
             Ok(Command::RepairSession)
         ));
+        assert!(matches!(Command::parse("/launch", ""), Ok(Command::Launch)));
+        assert!(matches!(
+            Command::parse("/execution_mode", ""),
+            Ok(Command::ExecutionMode)
+        ));
+        assert!(matches!(
+            Command::parse("/sessions", ""),
+            Ok(Command::Sessions)
+        ));
+        assert!(matches!(
+            Command::parse("/session_log", ""),
+            Ok(Command::SessionLog)
+        ));
         assert!(matches!(
             Command::parse("/plan_mode", ""),
             Ok(Command::PlanMode)
@@ -1379,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_command_parser_accepts_plain_and_qualified_mode_commands() {
+    fn fallback_command_parser_accepts_plain_and_qualified_workspace_commands() {
         assert!(matches!(
             parse_fallback_command_text("/plan_mode"),
             Some(Command::PlanMode)
@@ -1387,6 +1412,10 @@ mod tests {
         assert!(matches!(
             parse_fallback_command_text("/default_mode@threadbridge_bot"),
             Some(Command::DefaultMode)
+        ));
+        assert!(matches!(
+            parse_fallback_command_text("/launch@threadbridge_bot current"),
+            Some(Command::Launch)
         ));
         assert_eq!(
             normalize_slash_command_text("/add_workspace@threadbridge_bot /tmp/workspace"),

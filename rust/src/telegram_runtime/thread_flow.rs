@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -15,9 +15,27 @@ use super::status_sync;
 use super::*;
 use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
 use crate::collaboration_mode::CollaborationMode;
-use crate::execution_mode::workspace_execution_mode;
+use crate::execution_mode::{ExecutionMode, workspace_execution_mode, write_workspace_execution_config};
 use crate::local_control::LocalControlHandle;
+use crate::management_api::{
+    HcodexLaunchConfigView, WorkspaceExecutionModeView, hcodex_launch_command,
+    launch_hcodex_via_terminal,
+};
 use crate::process_transcript::process_entry_from_codex_event;
+use crate::runtime_protocol::{
+    WorkingSessionRecordKind, WorkingSessionRecordView, WorkingSessionSummaryView,
+    build_working_session_records, build_working_session_summaries,
+};
+
+const TELEGRAM_SESSION_SUMMARY_LIMIT: usize = 5;
+const TELEGRAM_SESSION_RECORD_LIMIT: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LaunchCommandTarget {
+    New,
+    Current,
+    Resume(String),
+}
 
 fn is_nonfatal_collaboration_mode_error(error: &anyhow::Error) -> bool {
     error
@@ -139,6 +157,191 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         gate_phase,
         gate_owner,
     ))
+}
+
+fn parse_launch_command_target(argument: &str) -> Option<LaunchCommandTarget> {
+    let mut parts = argument.split_whitespace();
+    match parts.next()? {
+        "new" => Some(LaunchCommandTarget::New),
+        "current" => Some(LaunchCommandTarget::Current),
+        "resume" => Some(LaunchCommandTarget::Resume(parts.next()?.to_owned())),
+        _ => None,
+    }
+}
+
+fn parse_execution_mode_argument(argument: &str) -> Option<ExecutionMode> {
+    match argument.trim().to_ascii_lowercase().as_str() {
+        "full_auto" | "full-auto" => Some(ExecutionMode::FullAuto),
+        "yolo" => Some(ExecutionMode::Yolo),
+        _ => None,
+    }
+}
+
+async fn workspace_execution_mode_view_for_record(
+    record: &ThreadRecord,
+    binding: &SessionBinding,
+) -> Result<WorkspaceExecutionModeView> {
+    let workspace_cwd = binding
+        .workspace_cwd
+        .clone()
+        .context("managed workspace is missing workspace_cwd")?;
+    let workspace_execution_mode = workspace_execution_mode(Path::new(&workspace_cwd)).await?;
+    Ok(WorkspaceExecutionModeView {
+        thread_key: record.metadata.thread_key.clone(),
+        workspace_cwd,
+        workspace_execution_mode,
+        current_execution_mode: binding.current_execution_mode,
+        current_approval_policy: binding.current_approval_policy.clone(),
+        current_sandbox_policy: binding.current_sandbox_policy.clone(),
+        mode_drift: binding.current_execution_mode != Some(workspace_execution_mode),
+    })
+}
+
+async fn workspace_launch_config_for_record(
+    state: &AppState,
+    record: &ThreadRecord,
+    binding: &SessionBinding,
+) -> Result<HcodexLaunchConfigView> {
+    let view = workspace_execution_mode_view_for_record(record, binding).await?;
+    let hcodex_path = Path::new(&view.workspace_cwd)
+        .join(".threadbridge")
+        .join("bin")
+        .join("hcodex");
+    let recent_codex_sessions = state
+        .repository
+        .read_recent_workspace_sessions(&view.workspace_cwd)
+        .await
+        .unwrap_or_default();
+    Ok(HcodexLaunchConfigView {
+        workspace_cwd: view.workspace_cwd,
+        thread_key: record.metadata.thread_key.clone(),
+        hcodex_path: hcodex_path.display().to_string(),
+        hcodex_available: hcodex_path.exists(),
+        workspace_execution_mode: view.workspace_execution_mode,
+        current_execution_mode: view.current_execution_mode,
+        current_approval_policy: view.current_approval_policy,
+        current_sandbox_policy: view.current_sandbox_policy,
+        mode_drift: view.mode_drift,
+        current_codex_thread_id: binding.current_codex_thread_id.clone(),
+        launch_new_command: hcodex_launch_command(
+            &hcodex_path,
+            &record.metadata.thread_key,
+            view.workspace_execution_mode,
+            None,
+        ),
+        launch_current_command: binding.current_codex_thread_id.as_ref().map(|session_id| {
+            hcodex_launch_command(
+                &hcodex_path,
+                &record.metadata.thread_key,
+                view.workspace_execution_mode,
+                Some(session_id),
+            )
+        }),
+        launch_resume_commands: recent_codex_sessions
+            .iter()
+            .map(|entry| {
+                hcodex_launch_command(
+                    &hcodex_path,
+                    &record.metadata.thread_key,
+                    view.workspace_execution_mode,
+                    Some(&entry.session_id),
+                )
+            })
+            .collect(),
+        recent_codex_sessions,
+    })
+}
+
+fn render_workspace_execution_mode_view(view: &WorkspaceExecutionModeView) -> String {
+    format!(
+        "workspace_execution_mode: `{}`\ncurrent_execution_mode: `{}`\ncurrent_approval_policy: `{}`\ncurrent_sandbox_policy: `{}`\nmode_drift: `{}`\n\nUse `/execution_mode full_auto` or `/execution_mode yolo`.",
+        view.workspace_execution_mode.as_str(),
+        view.current_execution_mode
+            .map(|mode| mode.as_str().to_owned())
+            .unwrap_or_else(|| "none".to_owned()),
+        view.current_approval_policy
+            .clone()
+            .unwrap_or_else(|| "none".to_owned()),
+        view.current_sandbox_policy
+            .clone()
+            .unwrap_or_else(|| "none".to_owned()),
+        if view.mode_drift { "yes" } else { "no" },
+    )
+}
+
+fn render_launch_usage(config: &HcodexLaunchConfigView) -> String {
+    let recent = if config.recent_codex_sessions.is_empty() {
+        "none".to_owned()
+    } else {
+        config
+            .recent_codex_sessions
+            .iter()
+            .map(|entry| entry.session_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "Usage: `/launch new`, `/launch current`, or `/launch resume <session_id>`.\ncurrent_codex_thread_id: `{}`\nrecent_sessions: `{}`",
+        config.current_codex_thread_id
+            .clone()
+            .unwrap_or_else(|| "none".to_owned()),
+        recent,
+    )
+}
+
+fn render_working_sessions(binding: &SessionBinding, summaries: &[WorkingSessionSummaryView]) -> String {
+    if summaries.is_empty() {
+        return "No working sessions recorded yet.".to_owned();
+    }
+    let mut lines = vec!["Recent working sessions:".to_owned()];
+    for summary in summaries.iter().take(TELEGRAM_SESSION_SUMMARY_LIMIT) {
+        let current = if binding.current_codex_thread_id.as_deref() == Some(&summary.session_id) {
+            " current"
+        } else {
+            ""
+        };
+        let origins = if summary.origins_seen.is_empty() {
+            "none".to_owned()
+        } else {
+            summary
+                .origins_seen
+                .iter()
+                .map(|origin| format!("{origin:?}").to_ascii_lowercase())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        lines.push(format!(
+            "- `{}`{} | {} | records={} | tools={} | final={} | origins={}",
+            summary.session_id,
+            current,
+            summary.run_status,
+            summary.record_count,
+            summary.tool_use_count,
+            if summary.has_final_reply { "yes" } else { "no" },
+            origins,
+        ));
+    }
+    lines.push("Use `/session_log <session_id>` for detailed records.".to_owned());
+    lines.join("\n")
+}
+
+fn render_working_session_records(session_id: &str, records: &[WorkingSessionRecordView]) -> String {
+    if records.is_empty() {
+        return format!("No records found for session `{session_id}`.");
+    }
+    let mut lines = vec![format!("Recent records for session `{session_id}`:")];
+    for record in records.iter().rev().take(TELEGRAM_SESSION_RECORD_LIMIT).rev() {
+        let kind = match record.kind {
+            WorkingSessionRecordKind::UserPrompt => "user_prompt",
+            WorkingSessionRecordKind::AssistantFinal => "assistant_final",
+            WorkingSessionRecordKind::ProcessPlan => "process_plan",
+            WorkingSessionRecordKind::ProcessTool => "process_tool",
+            WorkingSessionRecordKind::Error => "error",
+        };
+        let summary = record.summary.replace('`', "'");
+        lines.push(format!("- {} | {} | {}", record.timestamp, kind, summary));
+    }
+    lines.join("\n")
 }
 
 pub(crate) async fn run_command(
@@ -428,6 +631,283 @@ pub(crate) async fn run_command(
                 msg.chat.id,
                 Some(thread_id),
                 render_thread_info(state, &record).await?,
+            )
+            .await?;
+        }
+        Command::Launch => {
+            if is_control_chat(msg) {
+                send_scoped_message(bot, msg.chat.id, None, "Use /launch inside a workspace thread.")
+                    .await?;
+                return Ok(());
+            }
+            let thread_id = msg.thread_id.context("thread message missing thread id")?;
+            let record = state
+                .repository
+                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
+                .await?;
+            let session = state.repository.read_session_binding(&record).await?;
+            let (resolved_state, _) = resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+            if resolved_state.is_archived() {
+                send_scoped_message(bot, msg.chat.id, Some(thread_id), "This workspace is archived.")
+                    .await?;
+                return Ok(());
+            }
+            let Some(binding) = session.as_ref() else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "This workspace thread is not bound yet.",
+                )
+                .await?;
+                return Ok(());
+            };
+            let config = workspace_launch_config_for_record(state, &record, binding).await?;
+            let Some(argument) = command_argument_text(msg, "launch") else {
+                send_scoped_message(bot, msg.chat.id, Some(thread_id), render_launch_usage(&config))
+                    .await?;
+                return Ok(());
+            };
+            let Some(target) = parse_launch_command_target(argument) else {
+                send_scoped_warning_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    render_launch_usage(&config),
+                )
+                .await?;
+                return Ok(());
+            };
+            if !config.hcodex_available {
+                send_scoped_warning_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "Managed hcodex is unavailable for this workspace.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let (command, label) = match target {
+                LaunchCommandTarget::New => (config.launch_new_command.clone(), "new"),
+                LaunchCommandTarget::Current => (
+                    config
+                        .launch_current_command
+                        .clone()
+                        .context("managed workspace is missing a current Telegram session")?,
+                    "current",
+                ),
+                LaunchCommandTarget::Resume(session_id) => (
+                    hcodex_launch_command(
+                        Path::new(&config.hcodex_path),
+                        &record.metadata.thread_key,
+                        config.workspace_execution_mode,
+                        Some(&session_id),
+                    ),
+                    "resume",
+                ),
+            };
+            launch_hcodex_via_terminal(&command).await?;
+            state
+                .repository
+                .append_log(
+                    &record,
+                    LogDirection::System,
+                    format!("Launched local hcodex via `/launch {label}`."),
+                    None,
+                )
+                .await?;
+            send_scoped_message(
+                bot,
+                msg.chat.id,
+                Some(thread_id),
+                format!(
+                    "Launched local hcodex via `{label}` in `{}` mode.",
+                    config.workspace_execution_mode.as_str()
+                ),
+            )
+            .await?;
+        }
+        Command::ExecutionMode => {
+            if is_control_chat(msg) {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Use /execution_mode inside a workspace thread.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let thread_id = msg.thread_id.context("thread message missing thread id")?;
+            let record = state
+                .repository
+                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
+                .await?;
+            let session = state.repository.read_session_binding(&record).await?;
+            let (resolved_state, _) = resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+            if resolved_state.is_archived() {
+                send_scoped_message(bot, msg.chat.id, Some(thread_id), "This workspace is archived.")
+                    .await?;
+                return Ok(());
+            }
+            let Some(binding) = session.as_ref() else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "This workspace thread is not bound yet.",
+                )
+                .await?;
+                return Ok(());
+            };
+            let view = workspace_execution_mode_view_for_record(&record, binding).await?;
+            let Some(argument) = command_argument_text(msg, "execution_mode") else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    render_workspace_execution_mode_view(&view),
+                )
+                .await?;
+                return Ok(());
+            };
+            let Some(mode) = parse_execution_mode_argument(argument) else {
+                send_scoped_warning_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    render_workspace_execution_mode_view(&view),
+                )
+                .await?;
+                return Ok(());
+            };
+            write_workspace_execution_config(Path::new(&view.workspace_cwd), mode).await?;
+            state
+                .repository
+                .append_log(
+                    &record,
+                    LogDirection::System,
+                    format!("Workspace execution mode changed to `{}`.", mode.as_str()),
+                    None,
+                )
+                .await?;
+            let updated_view = workspace_execution_mode_view_for_record(&record, binding).await?;
+            send_scoped_message(
+                bot,
+                msg.chat.id,
+                Some(thread_id),
+                format!(
+                    "Workspace execution mode is now `{}`.\nExisting sessions converge on the next turn or resume.\n\n{}",
+                    updated_view.workspace_execution_mode.as_str(),
+                    render_workspace_execution_mode_view(&updated_view)
+                ),
+            )
+            .await?;
+        }
+        Command::Sessions => {
+            if is_control_chat(msg) {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Use /sessions inside a workspace thread.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let thread_id = msg.thread_id.context("thread message missing thread id")?;
+            let record = state
+                .repository
+                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
+                .await?;
+            let session = state.repository.read_session_binding(&record).await?;
+            let (resolved_state, _) = resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+            if resolved_state.is_archived() {
+                send_scoped_message(bot, msg.chat.id, Some(thread_id), "This workspace is archived.")
+                    .await?;
+                return Ok(());
+            }
+            let Some(binding) = session.as_ref() else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "This workspace thread is not bound yet.",
+                )
+                .await?;
+                return Ok(());
+            };
+            let summaries = build_working_session_summaries(&state.repository, &record, binding).await?;
+            send_scoped_message(
+                bot,
+                msg.chat.id,
+                Some(thread_id),
+                render_working_sessions(binding, &summaries),
+            )
+            .await?;
+        }
+        Command::SessionLog => {
+            if is_control_chat(msg) {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    None,
+                    "Use /session_log inside a workspace thread.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let thread_id = msg.thread_id.context("thread message missing thread id")?;
+            let record = state
+                .repository
+                .get_thread(msg.chat.id.0, thread_id_to_i32(thread_id))
+                .await?;
+            let session = state.repository.read_session_binding(&record).await?;
+            let (resolved_state, _) = resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+            if resolved_state.is_archived() {
+                send_scoped_message(bot, msg.chat.id, Some(thread_id), "This workspace is archived.")
+                    .await?;
+                return Ok(());
+            }
+            let Some(binding) = session.as_ref() else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "This workspace thread is not bound yet.",
+                )
+                .await?;
+                return Ok(());
+            };
+            let Some(session_id) = command_argument_text(msg, "session_log") else {
+                send_scoped_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    "Usage: /session_log <session_id>",
+                )
+                .await?;
+                return Ok(());
+            };
+            let Some(records) =
+                build_working_session_records(&state.repository, &record, binding, session_id)
+                    .await?
+            else {
+                send_scoped_warning_message(
+                    bot,
+                    msg.chat.id,
+                    Some(thread_id),
+                    format!("Session `{session_id}` was not found for this workspace."),
+                )
+                .await?;
+                return Ok(());
+            };
+            send_scoped_message(
+                bot,
+                msg.chat.id,
+                Some(thread_id),
+                render_working_session_records(session_id, &records),
             )
             .await?;
         }
@@ -1167,12 +1647,20 @@ pub(crate) async fn launch_plan_implementation_turn(
 
 #[cfg(test)]
 mod tests {
-    use super::persist_collaboration_mode_change;
+    use super::{
+        LaunchCommandTarget, parse_execution_mode_argument, parse_launch_command_target,
+        persist_collaboration_mode_change, render_working_session_records,
+        render_working_sessions, workspace_launch_config_for_record,
+    };
     use crate::collaboration_mode::CollaborationMode;
     use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use crate::hcodex_ingress::HcodexIngressManager;
-    use crate::repository::ThreadRepository;
+    use crate::repository::{
+        ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorOrigin,
+        TranscriptMirrorPhase, TranscriptMirrorRole,
+    };
+    use crate::runtime_protocol::{WorkingSessionRecordKind, WorkingSessionRecordView};
     use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
     use crate::telegram_runtime::AppState;
     use crate::workspace_status::WorkspaceStatusCache;
@@ -1186,6 +1674,82 @@ mod tests {
 
     #[test]
     fn thread_flow_module_compiles_without_attach_helpers() {}
+
+    #[test]
+    fn launch_command_parser_accepts_new_current_and_resume() {
+        assert_eq!(
+            parse_launch_command_target("new"),
+            Some(LaunchCommandTarget::New)
+        );
+        assert_eq!(
+            parse_launch_command_target("current"),
+            Some(LaunchCommandTarget::Current)
+        );
+        assert_eq!(
+            parse_launch_command_target("resume thr_123"),
+            Some(LaunchCommandTarget::Resume("thr_123".to_owned()))
+        );
+        assert_eq!(parse_launch_command_target("resume"), None);
+        assert_eq!(parse_launch_command_target("unknown"), None);
+    }
+
+    #[test]
+    fn execution_mode_argument_parser_accepts_known_aliases() {
+        assert_eq!(
+            parse_execution_mode_argument("full_auto"),
+            Some(ExecutionMode::FullAuto)
+        );
+        assert_eq!(
+            parse_execution_mode_argument("full-auto"),
+            Some(ExecutionMode::FullAuto)
+        );
+        assert_eq!(parse_execution_mode_argument("yolo"), Some(ExecutionMode::Yolo));
+        assert_eq!(parse_execution_mode_argument("plan"), None);
+    }
+
+    #[test]
+    fn working_session_renderers_show_expected_commands() {
+        let binding = crate::repository::SessionBinding::fresh(
+            Some("/tmp/workspace".to_owned()),
+            Some("thr_current".to_owned()),
+            SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+        );
+        let summaries = vec![crate::runtime_protocol::WorkingSessionSummaryView {
+            session_id: "thr_current".to_owned(),
+            thread_key: "thread-1".to_owned(),
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            started_at: Some("2026-03-25T00:00:00.000Z".to_owned()),
+            updated_at: "2026-03-25T00:01:00.000Z".to_owned(),
+            run_status: "running".to_owned(),
+            origins_seen: vec![TranscriptMirrorOrigin::Telegram, TranscriptMirrorOrigin::Tui],
+            record_count: 3,
+            tool_use_count: 1,
+            has_final_reply: true,
+            last_error: None,
+        }];
+        let rendered_summaries = render_working_sessions(&binding, &summaries);
+        assert!(rendered_summaries.contains("/session_log <session_id>"));
+        assert!(rendered_summaries.contains("thr_current"));
+        assert!(rendered_summaries.contains("current"));
+
+        let rendered_records = render_working_session_records(
+            "thr_current",
+            &[WorkingSessionRecordView {
+                timestamp: "2026-03-25T00:00:00.000Z".to_owned(),
+                session_id: "thr_current".to_owned(),
+                kind: WorkingSessionRecordKind::ProcessTool,
+                origin: Some(TranscriptMirrorOrigin::Telegram),
+                role: Some(TranscriptMirrorRole::Assistant),
+                summary: "Tool call finished".to_owned(),
+                text: "Tool call finished".to_owned(),
+                delivery: Some(TranscriptMirrorDelivery::Process),
+                phase: Some(TranscriptMirrorPhase::Tool),
+                source_ref: "transcript_mirror".to_owned(),
+            }],
+        );
+        assert!(rendered_records.contains("process_tool"));
+        assert!(rendered_records.contains("Tool call finished"));
+    }
 
     #[tokio::test]
     async fn collaboration_mode_change_is_persisted_and_logged() {
@@ -1260,5 +1824,100 @@ mod tests {
 
         let content = tokio::fs::read_to_string(&record.log_path).await.unwrap();
         assert!(content.contains("Collaboration mode changed to `plan`."));
+    }
+
+    #[tokio::test]
+    async fn workspace_launch_config_uses_current_and_recent_sessions() {
+        let root = temp_path();
+        let workspace = root.join("workspace");
+        tokio::fs::create_dir_all(workspace.join(".threadbridge/bin"))
+            .await
+            .unwrap();
+        tokio::fs::write(workspace.join(".threadbridge/bin/hcodex"), "#!/bin/sh\n")
+            .await
+            .unwrap();
+
+        let repository = ThreadRepository::open(&root).await.unwrap();
+        let record = repository
+            .create_thread(1, 7, "Title".to_owned())
+            .await
+            .unwrap();
+        let record = repository
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+                SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+            )
+            .await
+            .unwrap();
+        let _ = repository
+            .set_tui_active_session_for_thread_key(&record.metadata.thread_key, "thr_recent")
+            .await
+            .unwrap();
+        let binding = repository
+            .read_session_binding(&record)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let state = AppState {
+            config: AppConfig {
+                telegram: TelegramConfig {
+                    telegram_token: "test".to_owned(),
+                    authorized_user_ids: HashSet::from([7_i64]),
+                },
+                stream_edit_interval_ms: 10,
+                stream_message_max_chars: 1000,
+                command_output_tail_chars: 1000,
+                workspace_status_poll_interval_ms: 1000,
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                    management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
+                },
+            },
+            repository: repository.clone(),
+            codex: crate::codex::CodexRunner::new(None),
+            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+            control: RuntimeControlContext {
+                runtime: RuntimeConfig {
+                    data_root_path: root.clone(),
+                    codex_working_directory: root.clone(),
+                    codex_model: None,
+                    debug_log_path: root.join("debug.jsonl"),
+                    management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
+                },
+                repository: repository.clone(),
+                codex: crate::codex::CodexRunner::new(None),
+                app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
+                hcodex_ingress: HcodexIngressManager::new(repository.clone()),
+                seed_template_path: root.join("seed.md"),
+                runtime_ownership_mode: RuntimeOwnershipMode::SelfManaged,
+            },
+            interactive_requests: crate::interactive::InteractiveRequestRegistry::new(),
+            workspace_status_cache: WorkspaceStatusCache::new(),
+        };
+
+        let config = workspace_launch_config_for_record(&state, &record, &binding)
+            .await
+            .unwrap();
+
+        assert!(config.hcodex_available);
+        assert!(config.launch_new_command.contains("--thread-key"));
+        assert!(
+            config
+                .launch_current_command
+                .as_deref()
+                .is_some_and(|command| command.contains("resume 'thr_current'"))
+        );
+        assert!(
+            config
+                .launch_resume_commands
+                .iter()
+                .any(|command| command.contains("resume 'thr_recent'"))
+        );
     }
 }
