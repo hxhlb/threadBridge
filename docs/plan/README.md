@@ -140,6 +140,9 @@
   - core runtime / adapter 抽象化草稿
   - owner 收斂與 shared control core 都應視為這條抽象化路線的已落地前置工作
   - 近期應先服務 Telegram 路徑收斂，而不是直接追求多 IM / 多 adapter 產品化
+- [runtime-protocol-convergence.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol-convergence.md)
+  - `runtime-protocol` 的 rollout / convergence 草稿
+  - 描述如何把 route、slash command、shared service、interaction event 收斂到同一份 protocol vocabulary
 - [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
   - Telegram adapter 遷移草稿
   - owner authority 與 shared runtime control 已先從 Telegram 路徑抽離，再做更完整的 adapter migration
@@ -178,6 +181,8 @@
   - 描述 title 應承載哪些狀態
 - `runtime-state-machine`
   - 最終應把上面幾份文件的狀態語義統一
+- `runtime-protocol-convergence`
+  - 描述 `runtime-protocol` 從 read-side / SSE 雛形，收斂到完整 control / interaction contract 的 rollout 順序
 
 ## 備註
 
