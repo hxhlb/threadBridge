@@ -9,6 +9,8 @@
 - workspace status 與 title watcher 已經開始把 Telegram UI 和 runtime 狀態分開
 - final reply renderer 已經有比較清楚的 Telegram 表示層
 - desktop runtime owner / local management API 已開始把 machine-level control 從 Telegram thread 流程抽離
+- shared `runtime_control` 已把 workspace runtime / session control orchestration 從 Telegram helper 與 management transport 中抽出
+- observer 與 Telegram interaction UI 已開始透過 `runtime_interaction` + adapter bridge 分層
 
 但整體上 `threadBridge` 目前仍然是 Telegram-first 結構。
 
@@ -171,8 +173,10 @@ runtime 對 adapter 應該提供穩定語意，而不是平台特定 callback：
   - 偏向 core runtime
 - `rust/src/workspace.rs`
   - 偏向 core runtime
+- `rust/src/runtime_control.rs`
+  - 已是內部 shared control core 的具體雛形
 - `rust/src/telegram_runtime/`
-  - 偏向 adapter，但目前可能仍摻雜一些核心流程假設
+  - 偏向 adapter，但仍有部分 command/control surface 尚未完全 protocol 化
 - `rust/src/bin/threadbridge_desktop.rs`
   - 目前是 desktop host / owner launcher，之後仍應更清楚區分 host 與 adapter 邊界
 - `rust/src/runtime_owner.rs`

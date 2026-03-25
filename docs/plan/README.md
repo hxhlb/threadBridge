@@ -25,7 +25,7 @@
   - 舊 `CLI owner / handoff` 概念已退出現行模型，主語義改為 local/TUI mirror + idle/free readiness
   - process transcript 已正式區分 final / process，並補上 management transcript read API、session summary / records API、web observability pane，以及 Telegram rolling preview 摘要
   - `codex plan` mirror、plan-only final reply fallback、Telegram preview process transcript 已落地
-- Telegram `Questions` / `Implement this plan` 也已開始接到同一條 app-server / hcodex ingress adapter 路徑
+- Telegram `Questions` / `Implement this plan` 已改成 observer / ingress 發出 adapter-neutral interaction event，再由 Telegram interaction bridge 消費
 
 ## 部分落地
 
@@ -52,6 +52,7 @@
   - Telegram thread 內的一般輸入、圖片分析、session-control gate、以及 stale busy reconciliation 已開始直接讀 canonical state
   - `current_codex_thread_id` 的存在已不再被視為等於「目前一定可直接 resume」；usable continuity 仍取決於 canonical `binding_status`
   - canonical continuity mutation 已開始透過 repository 內部的共用 transition path 收斂
+  - workspace runtime ensure、session bind/new/repair、以及 Telegram-to-live-TUI routing 已進一步抽成 shared `runtime_control` service
   - 已新增記錄：Telegram desktop launch command 應作為獨立 control surface，而不是改寫 `/new_session`
   - 剩餘工作主要是兼容層與狀態語義收尾
 - [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
@@ -110,11 +111,11 @@
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
 - [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/owner-runtime-contract.md)
   - owner/runtime boundary 的總草稿
-  - `desktop runtime owner`、observer、`hcodex`、Telegram / management surface 的責任邊界已開始在代碼中成形
-  - 但 observer vocabulary、`hcodex` 長期 contract、與 transport-neutral protocol 仍未完全收斂
+  - `desktop runtime owner`、shared `runtime_control`、observer projection、`hcodex`、Telegram / management surface 的責任邊界已在代碼中成立
+  - 但 `hcodex` 長期 contract、observer attach contract、與 transport-neutral protocol 仍未完全收斂
 - [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
-  - local/TUI mirror intake 已開始從 `hcodex ingress` 拆到獨立 app-server ws observer
-  - proxy relay 熱路徑已不再承接 preview / process / final / request lifecycle mirror
+  - local/TUI mirror intake 已從 `hcodex ingress` 拆到獨立 app-server ws observer
+  - observer 已不再直接做 Telegram interactive glue，而是發出 shared runtime interaction event
   - 但 public vocabulary、transport-neutral observer contract、以及 broader observability 收斂仍未完成
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
   - `hcodex` launch contract 已開始從 Python resolver + path sideband + ws bridge 收斂到 canonical `hcodex_ws_url + launch_ticket`
@@ -136,13 +137,13 @@
   - appendix 注入可選化草稿
 - [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
   - core runtime / adapter 抽象化草稿
-  - owner 收斂應視為這條抽象化路線的高優先級前置工作
+  - owner 收斂與 shared control core 都應視為這條抽象化路線的已落地前置工作
   - 近期應先服務 Telegram 路徑收斂，而不是直接追求多 IM / 多 adapter 產品化
 - [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
   - Telegram adapter 遷移草稿
-  - owner authority 應先從 Telegram 路徑抽離，再做更完整的 adapter migration
+  - owner authority 與 shared runtime control 已先從 Telegram 路徑抽離，再做更完整的 adapter migration
   - 近期優先級應是補齊 Telegram 自身適配，而不是先做第二個 IM adapter 驗證
-  - Telegram collaboration mode slash commands 與最小 `request_user_input` / `Implement this plan` 互動面已先行落地
+  - Telegram collaboration mode slash commands 與最小 `request_user_input` / `Implement this plan` 互動面已先行落地，且互動 UI 已改成 adapter-owned bridge
   - 近期 Telegram v0 剩餘能力面包括 session-first observability、model/mode 設定、desktop launch control、Busy Gate follow-up control surface，以及 `main chat = control 面板` 下的 `forwarded input`
 
 ## 主規格

@@ -7,6 +7,7 @@
 目前已確認的前提：
 
 - `threadBridge` 已新增獨立的 app-server ws observer，mirror intake 不再只掛在 `rust/src/hcodex_ingress.rs`
+- observer 已將 `request_user_input` / resolved-request / plan follow-up 轉成 adapter-neutral runtime interaction event
 - `hcodex` ingress 目前承擔：
   - `hcodex` 連線入口
   - launch ticket 驗證
@@ -162,7 +163,7 @@
 - `hcodex-ws-bridge`
   - 為了把帶 path 的 upstream ws URL 再包成一個乾淨本地 ws URL
   - 讓 `codex --remote` 可以穩定接入
-- proxy 內的 Telegram interactive glue
+- 舊 proxy / observer 內的 Telegram interactive glue
   - `request_user_input` prompt 發送
   - resolved request UI 更新
   - `Implement this plan` follow-up prompt
@@ -172,6 +173,12 @@
 - 不是舊 CLI 模型直接殘留
 - 但也不是 shared runtime 架構的理想最終形狀
 - 它們反映的是 app-server ws 遷移完成後，interface shape 還沒完全收斂
+
+目前這一塊已經有了新的收斂方向：
+
+- observer 改成發出 shared `RuntimeInteractionEvent`
+- Telegram prompt / callback / cleanup UI 由 adapter-owned `interaction_bridge` 消費
+- `hcodex` ingress 只保留 request-response injection 與本地 TUI 路徑相關責任
 
 ### 3. 目前仍可視為合理保留在 ingress 的核心
 
@@ -298,6 +305,7 @@
 - process transcript mirror 的主 intake
 - final assistant visible reply mirror 的主 intake
 - 對 app-server item 流的主要 read-side 解譯責任
+- Telegram-specific prompt / follow-up UI
 
 ### 3. observer 已承接，後續應補完
 
@@ -362,7 +370,6 @@
 
 ## 開放問題
 
-- v1 是否允許 observer 先只承接 transcript / preview mirror，而保留 `request_user_input` 相關橋接在 proxy？
 - observer attach 應直接使用現有 `thread/resume`，還是先在 threadBridge 內明確包出 `observe_thread()` 語義等待未來 upstream 對應？
 - observer 若與 `hcodex` 同時在線，哪些 event 需要 dedupe，哪些應完整保留？
 - 目前 proxy 直接攔截 `turn/start` prompt 的行為，是否真的還有必要保留？
@@ -376,7 +383,7 @@
    - attach 指定 `thread.id`
    - 消費 `turn/*`、`item/*`、`serverRequest/resolved`
    - 寫入現有 transcript / workspace status
-3. 持續驗證 observer 與 ingress 並存時的 mirror record、interactive request、與 dedupe 邊界。
+3. 持續驗證 observer 與 ingress 並存時的 mirror record、interaction event、與 dedupe 邊界。
 4. 將 ingress 中與 mirror intake 直接相關的歷史說明與 terminology 逐步下沉到 observer 文檔。
 5. 等 contract 收斂後，再重新命名或重述 `hcodex` ingress 的責任邊界，避免它繼續被理解成 app-server gateway。
 

@@ -17,10 +17,12 @@ The current codebase has already landed these major pieces:
 - desktop-first runtime ownership and reconcile flow
 - workspace-first binding model: one managed workspace thread per workspace
 - shared workspace app-server daemon plus local `hcodex` ingress
+- shared runtime control services for workspace runtime, session lifecycle, and Telegram-to-TUI routing
 - Telegram text and image turns bound to the saved Codex session
 - Telegram collaboration mode commands plus the current Telegram-side interactive question flow:
   - workspace threads can switch between `default` and `plan`
-  - Telegram can answer `Questions` prompts and the post-plan `Implement this plan?` callback on the same session continuity
+  - app-server observer and `hcodex` ingress now emit adapter-neutral runtime interaction events
+  - Telegram can answer `Questions` prompts and the post-plan `Implement this plan?` callback through the adapter-owned interaction bridge on the same session continuity
 - Telegram preview drafts and final replies now use the current Telegram delivery pipeline:
   - preview drafts go through `sendMessageDraft`, prefer HTML rendering, and fall back to plain text if draft HTML send fails
   - final replies prefer inline Telegram HTML, fall back to plain text on send failure, and switch to a Markdown attachment when the inline reply is too long
@@ -41,12 +43,14 @@ The current runtime is organized like this:
 
 1. `threadbridge_desktop` is the formal runtime owner.
 2. The desktop process hosts the local management API, tray menu, and runtime-owner reconcile loop.
-3. Telegram is an adapter on top of that runtime, not the owner.
-4. Each managed workspace is a real local directory, not a mirrored copy under `data/`.
-5. Each workspace gets a managed `.threadbridge/` surface plus an appended runtime block in `AGENTS.md`.
-6. Codex continuity is stored in bot-local metadata under `data/<thread-key>/session-binding.json`.
+3. Shared runtime control handles workspace runtime ensure, session bind/new/repair, and Telegram-to-live-TUI routing.
+4. App-server observer owns transcript/process projection; Telegram interaction UI is bridged separately from observer read-side logic.
+5. Telegram is an adapter on top of that runtime, not the owner.
+6. Each managed workspace is a real local directory, not a mirrored copy under `data/`.
+7. Each workspace gets a managed `.threadbridge/` surface plus an appended runtime block in `AGENTS.md`.
+8. Codex continuity is stored in bot-local metadata under `data/<thread-key>/session-binding.json`.
 
-The supported startup path is desktop-first. Headless startup is no longer the intended operating model.
+The supported startup path is desktop-first. Headless or self-managed paths still exist as internal fallback/probe surfaces, but they are not the intended operating model.
 
 ## Workspace Execution Modes
 

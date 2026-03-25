@@ -9,14 +9,15 @@
 - final reply renderer 已有較清楚的 Telegram 專用邊界
 - topic title watcher / busy gate 開始把平台表現和狀態來源分開
 - desktop runtime 已成為正式 owner 啟動模型，Telegram 不再是共享 runtime 的正式 owner
+- shared `runtime_control` 已把 workspace runtime ensure、session bind/new/repair、與 Telegram-to-live-TUI routing 從 adapter helper 抽出
 - Telegram collaboration mode command surface 已落地：
   - `/plan_mode`
   - `/default_mode`
   - `current_collaboration_mode` 已開始持久化到 session binding
 - Telegram interactive response 已有最小 v1：
   - direct bot path 可顯示並回覆 `request_user_input`
-  - 本地 / TUI session 產生的 `request_user_input` 可 mirror 回 Telegram
-  - plan-only turn 結束後可送出 `Implement this plan?` prompt
+  - 本地 / TUI session 產生的 `request_user_input` 會透過 shared runtime interaction event mirror 回 Telegram
+  - plan-only turn 結束後可透過同一條 adapter-owned interaction bridge 送出 `Implement this plan?` prompt
   - secret input 仍不支持
 - 本地 session-first observability API 與 workspace-card `Sessions` pane 已落地，但 Telegram 仍未接上這條能力面
 
@@ -72,8 +73,8 @@
 
 原因是：
 
-- 只要 Telegram 路徑仍掌握 shared runtime 的 ensure / repair authority，它就還不是純 adapter
-- adapter migration 若早於 owner 收斂，最後只會把 Telegram-specific code 挪位置，而不是改變核心責任分配
+- 若沒有先把 shared runtime control 從 Telegram helper 抽出，adapter migration 只會是換殼
+- 目前 owner 與 shared control core 都已成立，後續焦點應轉到 Telegram 自身缺的 control / observability / delivery / 設定面
 
 不建議一開始就：
 
@@ -123,9 +124,8 @@
   - plan-only turn 可送出 `Implement this plan?` callback
 - 這代表 Telegram 已不再只承接普通文字 turn、preview、final reply、plan/tool process transcript，也開始具備最小互動式 session adapter 能力
 - 新增確認的一條 Telegram UX 決策是：
-  - `request_user_input` 在完成或收到 upstream `serverRequest/resolved` 時，不應再額外輸出可見的系統訊息
-  - 像 `Questions completed.`、`Info: Questions resolved.` 這類 completion 文案應視為 adapter 內部 UI cleanup 訊號，而不是 user-facing delivery
-  - 也就是說，resolved 後應偏向靜默收斂現有 prompt surface，而不是再送一條新的「已完成」文本
+  - `request_user_input` 在完成或收到 upstream `serverRequest/resolved` 時，不再新增一條獨立 completion message
+  - 目前做法是收斂既有 prompt surface；adapter 仍可對原 prompt 做完成狀態更新
 - 目前仍未完成的部分包括：
   - secret input 仍不支持
   - 更一般的 interrupt / questionnaire surface 仍未 formalize
@@ -245,7 +245,7 @@
 目前這一階段的已知結果應視為：
 
 - desktop runtime 是正式 owner
-- Telegram 只讀 owner state 或送 control action
+- Telegram 透過 shared `runtime_control` 讀 owner state 或送 control action
 - `hcodex` 不再自補 shared runtime
 
 ### Phase 3：定義 Telegram Adapter 邊界
@@ -255,8 +255,8 @@
 Telegram adapter 應只負責：
 
 - 解析 Telegram update
-- 轉成 `InputEvent`
-- 訂閱 `RuntimeEvent`
+- 轉成 shared runtime control / input request
+- 訂閱 `RuntimeEvent` / `RuntimeInteractionEvent`
 - 把事件渲染回 Telegram
 
 core runtime 應負責：
