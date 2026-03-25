@@ -26,8 +26,8 @@ use crate::telegram_runtime::{
     request_user_input_markup, send_plan_implementation_prompt,
 };
 use crate::workspace_status::{
-    record_tui_proxy_completed, record_tui_proxy_preview_text, record_tui_proxy_process_event,
-    record_tui_proxy_prompt,
+    record_hcodex_ingress_completed, record_hcodex_ingress_preview_text,
+    record_hcodex_ingress_process_event, record_hcodex_ingress_prompt,
 };
 
 #[derive(Debug, Clone)]
@@ -225,12 +225,12 @@ async fn handle_observer_event(
     event: CodexThreadEvent,
 ) -> Result<()> {
     if let Some(prompt) = extract_user_prompt_text(&event) {
-        record_tui_proxy_prompt(workspace_path, thread_id, &prompt).await?;
+        record_hcodex_ingress_prompt(workspace_path, thread_id, &prompt).await?;
     }
 
     if let Some(text) = extract_agent_message_text(&event) {
         state.lock().await.latest_assistant_message = text.clone();
-        record_tui_proxy_preview_text(workspace_path, thread_id, &text).await?;
+        record_hcodex_ingress_preview_text(workspace_path, thread_id, &text).await?;
     }
 
     if let Some(plan_text) = extract_completed_plan_text(&event) {
@@ -246,7 +246,8 @@ async fn handle_observer_event(
             None => None,
         };
         if let Some(phase) = phase {
-            record_tui_proxy_process_event(workspace_path, thread_id, phase, &entry.text).await?;
+            record_hcodex_ingress_process_event(workspace_path, thread_id, phase, &entry.text)
+                .await?;
         }
     }
 
@@ -306,7 +307,8 @@ async fn finalize_turn(
         state_guard.latest_completed_plan_text.as_deref(),
     )
     .or_else(|| fallback_error.as_deref().map(str::to_owned));
-    record_tui_proxy_completed(workspace_path, thread_id, turn_id, final_text.as_deref()).await?;
+    record_hcodex_ingress_completed(workspace_path, thread_id, turn_id, final_text.as_deref())
+        .await?;
     let plan_mode = match turn_id {
         Some(turn_id) => turn_modes.lock().await.remove(turn_id),
         None => None,

@@ -1140,7 +1140,7 @@ mod tests {
     use crate::tui_proxy::TuiProxyManager;
     use crate::workspace_status::{
         SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase, read_session_status,
-        record_hcodex_launcher_started, record_tui_proxy_connected,
+        record_hcodex_ingress_connected, record_hcodex_launcher_started,
     };
     use anyhow::Context;
     use serde_json::json;
@@ -1451,7 +1451,7 @@ mod tests {
         )
         .await
         .unwrap();
-        record_tui_proxy_connected(&workspace, &record.metadata.thread_key, "thr_tui")
+        record_hcodex_ingress_connected(&workspace, &record.metadata.thread_key, "thr_tui")
             .await
             .unwrap();
 

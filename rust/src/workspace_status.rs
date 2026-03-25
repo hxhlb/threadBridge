@@ -17,6 +17,8 @@ const CURRENT_FILE: &str = "current.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const SESSIONS_DIR: &str = "sessions";
 const LOCAL_SESSION_FILE: &str = "local-session.json";
+const HCODEX_INGRESS_CLIENT: &str = "threadbridge-hcodex-ingress";
+const LEGACY_TUI_PROXY_CLIENT: &str = "threadbridge-tui-proxy";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionActivitySource {
@@ -161,6 +163,13 @@ fn session_file_name(session_id: &str) -> String {
     }
     name.push_str(".json");
     name
+}
+
+fn is_hcodex_ingress_client(client: Option<&str>) -> bool {
+    matches!(
+        client,
+        Some(HCODEX_INGRESS_CLIENT) | Some(LEGACY_TUI_PROXY_CLIENT)
+    )
 }
 
 pub fn session_status_path(workspace_path: &Path, session_id: &str) -> PathBuf {
@@ -512,7 +521,7 @@ pub async fn record_bot_status_event(
     Ok(next)
 }
 
-pub async fn record_tui_proxy_connected(
+pub async fn record_hcodex_ingress_connected(
     workspace_path: &Path,
     thread_key: &str,
     session_id: &str,
@@ -527,7 +536,7 @@ pub async fn record_tui_proxy_connected(
     owner_claim.updated_at = now_iso();
     write_local_session_claim(workspace_path, &owner_claim).await?;
 
-    deactivate_other_tui_proxy_sessions(workspace_path, session_id).await?;
+    deactivate_other_hcodex_ingress_sessions(workspace_path, session_id).await?;
     let mut current = read_session_status(workspace_path, session_id)
         .await?
         .unwrap_or_else(|| {
@@ -542,7 +551,7 @@ pub async fn record_tui_proxy_connected(
     current.child_pid = owner_claim.child_pid;
     current.child_pgid = owner_claim.child_pgid;
     current.child_command = owner_claim.child_command.clone();
-    current.client = Some("threadbridge-tui-proxy".to_owned());
+    current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.turn_id = None;
     current.updated_at = now_iso();
     write_session_status(workspace_path, &current).await?;
@@ -551,7 +560,7 @@ pub async fn record_tui_proxy_connected(
     Ok(current)
 }
 
-pub async fn record_tui_proxy_prompt(
+pub async fn record_hcodex_ingress_prompt(
     workspace_path: &Path,
     session_id: &str,
     prompt: &str,
@@ -568,7 +577,7 @@ pub async fn record_tui_proxy_prompt(
     current.live = true;
     current.phase = WorkspaceStatusPhase::TurnRunning;
     current.shell_pid = Some(0);
-    current.client = Some("threadbridge-tui-proxy".to_owned());
+    current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.summary = summarize_prompt(prompt);
     current.updated_at = now_iso();
     write_session_status(workspace_path, &current).await?;
@@ -581,7 +590,7 @@ pub async fn record_tui_proxy_prompt(
         payload: json!({
             "session_id": session_id,
             "prompt": prompt,
-            "client": "threadbridge-tui-proxy",
+            "client": HCODEX_INGRESS_CLIENT,
         }),
     };
     append_status_event(workspace_path, &record).await?;
@@ -590,7 +599,7 @@ pub async fn record_tui_proxy_prompt(
     Ok(current)
 }
 
-pub async fn record_tui_proxy_process_event(
+pub async fn record_hcodex_ingress_process_event(
     workspace_path: &Path,
     session_id: &str,
     phase: &str,
@@ -611,14 +620,14 @@ pub async fn record_tui_proxy_process_event(
             "session_id": session_id,
             "phase": phase,
             "text": trimmed,
-            "client": "threadbridge-tui-proxy",
+            "client": HCODEX_INGRESS_CLIENT,
         }),
     };
     append_status_event(workspace_path, &record).await?;
     Ok(())
 }
 
-pub async fn record_tui_proxy_preview_text(
+pub async fn record_hcodex_ingress_preview_text(
     workspace_path: &Path,
     session_id: &str,
     text: &str,
@@ -637,14 +646,14 @@ pub async fn record_tui_proxy_preview_text(
         payload: json!({
             "session_id": session_id,
             "text": trimmed,
-            "client": "threadbridge-tui-proxy",
+            "client": HCODEX_INGRESS_CLIENT,
         }),
     };
     append_status_event(workspace_path, &record).await?;
     Ok(())
 }
 
-pub async fn record_tui_proxy_completed(
+pub async fn record_hcodex_ingress_completed(
     workspace_path: &Path,
     session_id: &str,
     turn_id: Option<&str>,
@@ -662,7 +671,7 @@ pub async fn record_tui_proxy_completed(
     current.live = true;
     current.phase = WorkspaceStatusPhase::Idle;
     current.shell_pid = Some(0);
-    current.client = Some("threadbridge-tui-proxy".to_owned());
+    current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.turn_id = None;
     current.summary = last_assistant_message
         .and_then(summarize_prompt)
@@ -680,7 +689,7 @@ pub async fn record_tui_proxy_completed(
                 "thread-id": session_id,
                 "turn-id": turn_id,
                 "last-assistant-message": last_assistant_message,
-                "client": "threadbridge-tui-proxy",
+                "client": HCODEX_INGRESS_CLIENT,
             }),
         };
         append_status_event(workspace_path, &record).await?;
@@ -690,7 +699,7 @@ pub async fn record_tui_proxy_completed(
     Ok(current)
 }
 
-pub async fn record_tui_proxy_disconnected(
+pub async fn record_hcodex_ingress_disconnected(
     workspace_path: &Path,
     _thread_key: &str,
     session_id: Option<&str>,
@@ -756,13 +765,13 @@ pub async fn record_hcodex_launcher_ended(
     Ok(())
 }
 
-async fn deactivate_other_tui_proxy_sessions(
+async fn deactivate_other_hcodex_ingress_sessions(
     workspace_path: &Path,
     active_session_id: &str,
 ) -> Result<()> {
     for mut session in list_all_session_statuses(workspace_path).await? {
         if session.session_id == active_session_id
-            || session.client.as_deref() != Some("threadbridge-tui-proxy")
+            || !is_hcodex_ingress_client(session.client.as_deref())
             || !session.live
         {
             continue;
@@ -836,13 +845,13 @@ pub async fn busy_selected_session_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
-        WorkspaceStatusCache, WorkspaceStatusPhase, busy_selected_session_status,
-        current_status_path, ensure_workspace_status_surface, events_path,
-        list_live_local_sessions, read_local_session_claim, read_session_status,
-        read_workspace_aggregate_status, record_bot_status_event, record_hcodex_launcher_ended,
-        record_hcodex_launcher_started, record_tui_proxy_completed, record_tui_proxy_connected,
-        session_status_path,
+        HCODEX_INGRESS_CLIENT, SessionActivitySource, SessionCurrentStatus,
+        WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
+        busy_selected_session_status, current_status_path, ensure_workspace_status_surface,
+        events_path, list_live_local_sessions, read_local_session_claim, read_session_status,
+        read_workspace_aggregate_status, record_bot_status_event, record_hcodex_ingress_completed,
+        record_hcodex_ingress_connected, record_hcodex_launcher_ended,
+        record_hcodex_launcher_started, session_status_path,
     };
     use std::path::PathBuf;
     use tokio::fs;
@@ -909,7 +918,7 @@ mod tests {
             child_pid: None,
             child_pgid: None,
             child_command: None,
-            client: Some("threadbridge-tui-proxy".to_owned()),
+            client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
             turn_id: None,
             summary: None,
             updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
@@ -1125,17 +1134,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tui_proxy_connected_deactivates_previous_tui_session() {
+    async fn hcodex_ingress_connected_deactivates_previous_tui_session() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
         record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
             .await
             .unwrap();
 
-        record_tui_proxy_connected(&workspace, "thread-key", "thr_old")
+        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_old")
             .await
             .unwrap();
-        record_tui_proxy_connected(&workspace, "thread-key", "thr_new")
+        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
             .await
             .unwrap();
 
@@ -1165,7 +1174,7 @@ mod tests {
         record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
             .await
             .unwrap();
-        record_tui_proxy_connected(&workspace, "thread-key", "thr_new")
+        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
             .await
             .unwrap();
 
@@ -1185,14 +1194,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tui_proxy_completed_deduplicates_same_turn_id() {
+    async fn hcodex_ingress_completed_deduplicates_same_turn_id() {
         let workspace = temp_path();
         ensure_workspace_status_surface(&workspace).await.unwrap();
 
-        record_tui_proxy_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
+        record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
             .await
             .unwrap();
-        record_tui_proxy_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
+        record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
             .await
             .unwrap();
 

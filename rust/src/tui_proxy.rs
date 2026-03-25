@@ -25,7 +25,9 @@ use crate::interactive::InteractiveRequestRegistry;
 #[cfg(test)]
 use crate::process_transcript::workspace_item_diagnostic;
 use crate::repository::ThreadRepository;
-use crate::workspace_status::{record_tui_proxy_connected, record_tui_proxy_disconnected};
+use crate::workspace_status::{
+    record_hcodex_ingress_connected, record_hcodex_ingress_disconnected,
+};
 
 const PROXY_HEALTH_PATH: &str = "/healthz";
 
@@ -377,7 +379,7 @@ async fn handle_proxy_connection(
     observer_runtime
         .stop_thread_observer(&workspace_path, &thread_key)
         .await;
-    record_tui_proxy_disconnected(&workspace_path, &thread_key, current_session_id.as_deref())
+    record_hcodex_ingress_disconnected(&workspace_path, &thread_key, current_session_id.as_deref())
         .await?;
     debug!(
         event = "tui_proxy.connection.closed",
@@ -499,7 +501,7 @@ async fn maybe_track_server_response(
     observer_runtime
         .ensure_thread_observer(workspace_path, daemon_ws_url, thread_key, thread_id)
         .await?;
-    record_tui_proxy_connected(workspace_path, thread_key, thread_id).await?;
+    record_hcodex_ingress_connected(workspace_path, thread_key, thread_id).await?;
     info!(
         event = "tui_proxy.session_tracked",
         thread_key = %thread_key,

@@ -759,7 +759,9 @@ fn initial_workspace_event_offset(lines: &[String], owner_claim: &LocalSessionCl
 
 fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
     match event.payload.get("client").and_then(Value::as_str) {
-        Some("threadbridge-tui-proxy") => TranscriptMirrorOrigin::Tui,
+        Some("threadbridge-hcodex-ingress") | Some("threadbridge-tui-proxy") => {
+            TranscriptMirrorOrigin::Tui
+        }
         _ => TranscriptMirrorOrigin::Local,
     }
 }
@@ -1004,7 +1006,7 @@ mod tests {
             payload: json!({
                 "session_id": "thr_tui",
                 "prompt": "continue the tui session",
-                "client": "threadbridge-tui-proxy"
+                "client": "threadbridge-hcodex-ingress"
             }),
         };
         let entry = local_mirror_entry_from_event(&event, Some("thr_tui")).expect("tui user entry");
@@ -1264,7 +1266,7 @@ mod tests {
             child_pid: None,
             child_pgid: None,
             child_command: None,
-            client: Some("threadbridge-tui-proxy".to_owned()),
+            client: Some("threadbridge-hcodex-ingress".to_owned()),
             turn_id: Some("turn-1".to_owned()),
             summary: Some("prompt".to_owned()),
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
