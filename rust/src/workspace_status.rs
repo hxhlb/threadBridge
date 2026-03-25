@@ -955,7 +955,8 @@ pub async fn busy_selected_session_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        HCODEX_INGRESS_CLIENT, SessionActivitySource, SessionCurrentStatus,
+        HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, SessionActivitySource,
+        SessionCurrentStatus,
         WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
         busy_selected_session_status, current_status_path, default_local_tui_session_claim,
         ensure_workspace_status_surface, events_path, legacy_current_status_path,
@@ -963,6 +964,7 @@ mod tests {
         list_live_local_sessions, local_tui_session_claim_path, read_local_tui_session_claim,
         read_session_status, read_workspace_aggregate_status, record_bot_status_event,
         record_hcodex_ingress_completed, record_hcodex_ingress_connected,
+        record_hcodex_ingress_prompt,
         record_hcodex_launcher_ended, record_hcodex_launcher_started, session_status_path,
     };
     use std::path::PathBuf;
@@ -1099,6 +1101,33 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn hcodex_ingress_writes_only_canonical_client_tag() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
+            .await
+            .unwrap();
+
+        let session = record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
+            .await
+            .unwrap();
+        record_hcodex_ingress_prompt(&workspace, "thr_new", "continue")
+            .await
+            .unwrap();
+
+        assert_eq!(session.client.as_deref(), Some(HCODEX_INGRESS_CLIENT));
+        let persisted = read_session_status(&workspace, "thr_new")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.client.as_deref(), Some(HCODEX_INGRESS_CLIENT));
+
+        let events = fs::read_to_string(events_path(&workspace)).await.unwrap();
+        assert!(events.contains(HCODEX_INGRESS_CLIENT));
+        assert!(!events.contains(LEGACY_TUI_PROXY_CLIENT));
     }
 
     #[test]

@@ -51,6 +51,7 @@ Phase 1 對 legacy field / artifact 採用保守但有界的策略：
   - 仍接受舊值 `owner=local|bot`
   - 讀取後一律映射到 `activity_source=local_tui|managed_runtime`
   - 新寫入只使用 `activity_source`
+  - 舊 client tag `threadbridge-tui-proxy` 只保留 read compatibility；新寫入固定使用 `threadbridge-hcodex-ingress`
 - `workspace aggregate`
   - 仍接受 `live_local_session_ids`
   - 新寫入只使用 `live_tui_session_ids`
