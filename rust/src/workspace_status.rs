@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -546,6 +547,74 @@ fn summarize_prompt(prompt: &str) -> Option<String> {
         summary.push_str("...");
     }
     Some(summary)
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn local_tui_claim_is_live(claim: &LocalTuiSessionClaim) -> bool {
+    claim.child_pid.is_some_and(process_is_alive) || process_is_alive(claim.shell_pid)
+}
+
+pub async fn stale_tui_busy_session_needs_recovery(
+    workspace_path: &Path,
+    snapshot: &SessionCurrentStatus,
+) -> Result<bool> {
+    if snapshot.activity_source != SessionActivitySource::Tui || !snapshot.phase.is_turn_busy() {
+        return Ok(false);
+    }
+    let Some(claim) = read_local_tui_session_claim(workspace_path).await? else {
+        return Ok(true);
+    };
+    if claim.session_id.as_deref() != Some(snapshot.session_id.as_str()) {
+        return Ok(true);
+    }
+    Ok(!local_tui_claim_is_live(&claim))
+}
+
+pub async fn recover_stale_tui_busy_session(
+    workspace_path: &Path,
+    session_id: &str,
+) -> Result<Option<SessionCurrentStatus>> {
+    ensure_workspace_status_surface(workspace_path).await?;
+    let Some(mut current) = read_session_status(workspace_path, session_id).await? else {
+        return Ok(None);
+    };
+    if current.activity_source != SessionActivitySource::Tui || !current.phase.is_turn_busy() {
+        return Ok(Some(current));
+    }
+
+    let previous_turn_id = current.turn_id.clone();
+    current.live = false;
+    current.phase = WorkspaceStatusPhase::Idle;
+    current.turn_id = None;
+    current.updated_at = now_iso();
+    write_session_status(workspace_path, &current).await?;
+    let record = WorkspaceStatusEventRecord {
+        schema_version: STATUS_SCHEMA_VERSION,
+        event: "tui_turn_recovered".to_owned(),
+        source: SessionActivitySource::Tui,
+        workspace_cwd: canonical_workspace_string(workspace_path),
+        occurred_at: now_iso(),
+        payload: json!({
+            "session_id": session_id,
+            "turn_id": previous_turn_id,
+            "client": current.client,
+        }),
+    };
+    append_status_event(workspace_path, &record).await?;
+    let aggregate = read_workspace_aggregate_status(workspace_path).await?;
+    let _ = refresh_workspace_aggregate_status(workspace_path, aggregate).await?;
+    Ok(Some(current))
 }
 
 pub async fn list_live_local_sessions(workspace_path: &Path) -> Result<Vec<SessionCurrentStatus>> {

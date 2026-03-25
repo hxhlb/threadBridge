@@ -1,13 +1,20 @@
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tokio::fs;
 use tokio::net::TcpStream;
+use tokio::process::Child;
 use tokio::process::Command;
 use url::Url;
+
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
 
 use crate::app_server_runtime::{WorkspaceRuntimeState, issue_hcodex_launch_ticket};
 use crate::hcodex_ws_bridge::is_codex_safe_remote_ws_url;
@@ -323,14 +330,13 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
     )
     .await?;
 
-    let status = child.wait().await.context("failed waiting for codex child");
+    let status = wait_for_codex_child(&mut child, child_pid).await?;
     if let Some(bridge_child) = bridge_child.as_mut() {
         let _ = bridge_child.start_kill();
     }
     if let Some(ready_file) = bridge_ready_file.as_deref() {
         let _ = fs::remove_file(ready_file).await;
     }
-    let status = status?;
     record_hcodex_launcher_ended(&config.workspace, &config.thread_key, shell_pid, child_pid)
         .await?;
 
@@ -339,7 +345,125 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
         .mark_tui_adoption_pending_for_thread_key(&config.thread_key)
         .await?;
 
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(exit_code_from_status(status));
+}
+
+#[cfg(unix)]
+async fn wait_for_codex_child(child: &mut Child, child_pid: u32) -> Result<ExitStatus> {
+    let mut sigint =
+        signal(SignalKind::interrupt()).context("failed to install hcodex SIGINT handler")?;
+    let mut sighup =
+        signal(SignalKind::hangup()).context("failed to install hcodex SIGHUP handler")?;
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("failed to install hcodex SIGTERM handler")?;
+    let mut sigquit =
+        signal(SignalKind::quit()).context("failed to install hcodex SIGQUIT handler")?;
+
+    tokio::select! {
+        status = child.wait() => status.context("failed waiting for codex child"),
+        _ = sigint.recv() => terminate_child_after_signal(child, child_pid, "INT").await,
+        _ = sighup.recv() => terminate_child_after_signal(child, child_pid, "HUP").await,
+        _ = sigterm.recv() => terminate_child_after_signal(child, child_pid, "TERM").await,
+        _ = sigquit.recv() => terminate_child_after_signal(child, child_pid, "QUIT").await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_codex_child(child: &mut Child, _child_pid: u32) -> Result<ExitStatus> {
+    child.wait().await.context("failed waiting for codex child")
+}
+
+#[cfg(unix)]
+async fn terminate_child_after_signal(
+    child: &mut Child,
+    child_pid: u32,
+    signal_name: &str,
+) -> Result<ExitStatus> {
+    hcodex_debug!(
+        "hcodex: launcher received SIG{}, forwarding to child {}",
+        signal_name,
+        child_pid
+    );
+    let _ = send_signal_to_child_process_tree(child_pid, signal_name);
+
+    match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+        Ok(status) => {
+            let status = status.context("failed waiting for codex child after forwarded signal")?;
+            Ok(status)
+        }
+        Err(_) => {
+            hcodex_debug!(
+                "hcodex: child {} ignored SIG{}, forcing kill",
+                child_pid,
+                signal_name
+            );
+            let _ = child.start_kill();
+            match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
+                Ok(status) => status.context("failed waiting for codex child after forced kill"),
+                Err(_) => {
+                    bail!(
+                        "hcodex: child {} did not exit after forwarded signal {}",
+                        child_pid,
+                        signal_name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn send_signal_to_child_process_tree(child_pid: u32, signal_name: &str) -> Result<()> {
+    let target = process_group_id(child_pid)
+        .map(|pgid| format!("-{pgid}"))
+        .unwrap_or_else(|| child_pid.to_string());
+    let status = std::process::Command::new("kill")
+        .arg(format!("-{signal_name}"))
+        .arg(&target)
+        .status()
+        .with_context(|| format!("failed to send SIG{signal_name} to {target}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    let fallback = std::process::Command::new("kill")
+        .arg(format!("-{signal_name}"))
+        .arg(child_pid.to_string())
+        .status()
+        .with_context(|| format!("failed to send SIG{signal_name} to child {child_pid}"))?;
+    if fallback.success() {
+        Ok(())
+    } else {
+        bail!("kill -{signal_name} failed for child {child_pid}");
+    }
+}
+
+#[cfg(unix)]
+fn process_group_id(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .arg("-o")
+        .arg("pgid=")
+        .arg("-p")
+        .arg(pid.to_string())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+fn exit_code_from_status(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    if let Some(signal) = status.signal() {
+        return 128 + signal;
+    }
+    1
 }
 
 fn bridge_ready_file_path() -> PathBuf {

@@ -130,6 +130,8 @@ bridge 的責任有兩個，而且兩個都不能少：
   - 定義 `hcodex` / ingress 在 owner-managed runtime 中的責任邊界
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
   - 記錄 CLI 時代 shim 收尾時，哪些 `hcodex` launch shim 仍應保留，哪些才是可清理的歷史殘留
+- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-lifecycle-supervision.md)
+  - 補充 launch 完成後，`hcodex` 對 local Codex child lifecycle supervision 與 teardown 的責任
 
 ## 建議的下一步
 

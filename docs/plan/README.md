@@ -126,6 +126,9 @@
 - [hcodex-launch-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-launch-contract.md)
   - 記錄 `hcodex` launch URL、local bridge、upstream Codex `--remote` 的實際契約
   - 明確固定兩個已修回歸：`invalid remote address ...?launch_ticket=...` 與 `failed to connect to remote app server`
+- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-lifecycle-supervision.md)
+  - 記錄 `hcodex` 作為受管本地入口時，對 local Codex child lifecycle 的正式責任
+  - 固定目前已確認的缺口：cleanup 不能只依賴 `run-hcodex-session` 的 happy path
 
 ## 純草稿
 
@@ -178,6 +181,8 @@
   - 固定 owner authority、observer、`hcodex` 與 adapter 的高層責任邊界
 - `post-cli-runtime-cleanup`
   - 記錄 app-server / desktop owner 主模型成立後，剩餘 vocabulary、status surface 與 `hcodex` launch shim 的收尾工作
+- `hcodex-lifecycle-supervision`
+  - 記錄 `hcodex` local launcher / child supervision / teardown contract
 - `working-session-observability`
   - 描述 working session 的可觀測入口、session timeline 與 artifact 關聯
 - `topic-title-status`

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::repository::{SessionBinding, ThreadMetadata, ThreadStatus};
 use crate::workspace_status::{
     SessionCurrentStatus, WorkspaceStatusCache, read_session_status,
-    read_workspace_status_with_cache,
+    read_workspace_status_with_cache, recover_stale_tui_busy_session,
+    stale_tui_busy_session_needs_recovery,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,7 +148,11 @@ pub async fn effective_busy_snapshot_for_binding(
     };
 
     let current_snapshot = if let Some(session_id) = current_session_id(binding) {
-        read_session_status(&workspace_path, session_id).await?
+        recover_stale_tui_busy_snapshot_if_needed(
+            &workspace_path,
+            read_session_status(&workspace_path, session_id).await?,
+        )
+        .await?
     } else {
         None
     };
@@ -165,7 +170,11 @@ pub async fn effective_busy_snapshot_for_binding(
         return Ok(current_snapshot);
     }
 
-    let tui_snapshot = read_session_status(&workspace_path, tui_session_id).await?;
+    let tui_snapshot = recover_stale_tui_busy_snapshot_if_needed(
+        &workspace_path,
+        read_session_status(&workspace_path, tui_session_id).await?,
+    )
+    .await?;
     if tui_snapshot
         .as_ref()
         .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
@@ -174,6 +183,19 @@ pub async fn effective_busy_snapshot_for_binding(
     } else {
         Ok(current_snapshot)
     }
+}
+
+async fn recover_stale_tui_busy_snapshot_if_needed(
+    workspace_path: &PathBuf,
+    snapshot: Option<SessionCurrentStatus>,
+) -> Result<Option<SessionCurrentStatus>> {
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+    if !stale_tui_busy_session_needs_recovery(workspace_path, &snapshot).await? {
+        return Ok(Some(snapshot));
+    }
+    recover_stale_tui_busy_session(workspace_path, &snapshot.session_id).await
 }
 
 pub async fn cached_effective_busy_snapshot_for_binding(
@@ -252,7 +274,8 @@ mod tests {
     use crate::repository::{SessionBinding, ThreadMetadata, ThreadScope, ThreadStatus};
     use crate::workspace_status::{
         SessionActivitySource, SessionCurrentStatus, WorkspaceStatusPhase,
-        ensure_workspace_status_surface, session_status_path,
+        default_local_tui_session_claim, ensure_workspace_status_surface, read_session_status,
+        session_status_path, write_local_tui_session_claim,
     };
     use tokio::fs;
     use uuid::Uuid;
@@ -387,6 +410,11 @@ mod tests {
             WorkspaceStatusPhase::TurnRunning,
         )
         .await;
+        let mut claim = default_local_tui_session_claim(&workspace, "thread-1", std::process::id());
+        claim.session_id = Some("thr_tui".to_owned());
+        write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
 
         let snapshot = effective_busy_snapshot_for_binding(Some(&binding(
             &workspace,
@@ -399,6 +427,70 @@ mod tests {
         .unwrap();
 
         assert_eq!(snapshot.session_id, "thr_tui");
+        assert_eq!(snapshot.phase, WorkspaceStatusPhase::TurnRunning);
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn resolve_thread_state_recovers_stale_busy_current_tui_session() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        write_session(
+            &workspace,
+            "thr_current",
+            SessionActivitySource::Tui,
+            WorkspaceStatusPhase::TurnRunning,
+        )
+        .await;
+
+        let state = resolve_thread_state(
+            &metadata(ThreadStatus::Active, false),
+            Some(&binding(&workspace, Some("thr_current"), None, false)),
+        )
+        .await
+        .unwrap();
+
+        let session = read_session_status(&workspace, "thr_current")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.run_status, RunStatus::Idle);
+        assert!(!session.live);
+        assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
+        assert_eq!(session.turn_id, None);
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn effective_busy_snapshot_keeps_live_current_tui_session_busy() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        write_session(
+            &workspace,
+            "thr_current",
+            SessionActivitySource::Tui,
+            WorkspaceStatusPhase::TurnRunning,
+        )
+        .await;
+        let mut claim = default_local_tui_session_claim(&workspace, "thread-1", std::process::id());
+        claim.session_id = Some("thr_current".to_owned());
+        write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
+
+        let snapshot = effective_busy_snapshot_for_binding(Some(&binding(
+            &workspace,
+            Some("thr_current"),
+            None,
+            false,
+        )))
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(snapshot.session_id, "thr_current");
         assert_eq!(snapshot.phase, WorkspaceStatusPhase::TurnRunning);
 
         let _ = fs::remove_dir_all(workspace).await;
