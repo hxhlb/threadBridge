@@ -32,8 +32,8 @@ use crate::thread_state::{
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 pub(crate) use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 pub(crate) use crate::workspace_status::{
-    SessionCurrentStatus, WorkspaceStatusCache, read_local_session_claim, read_session_status,
-    record_bot_status_event,
+    SessionCurrentStatus, WorkspaceStatusCache, read_local_tui_session_claim,
+    read_session_status, record_bot_status_event,
 };
 
 pub mod final_reply;
@@ -983,7 +983,7 @@ async fn should_route_telegram_input_to_live_tui_session(
         return Ok(false);
     }
     let workspace_path = workspace_path_from_binding(binding)?;
-    let Some(owner_claim) = read_local_session_claim(&workspace_path).await? else {
+    let Some(owner_claim) = read_local_tui_session_claim(&workspace_path).await? else {
         return Ok(false);
     };
     if owner_claim.thread_key != record.metadata.thread_key

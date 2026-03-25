@@ -18,9 +18,9 @@ use crate::thread_state::{
     BindingStatus, LifecycleStatus, resolve_binding_status, resolve_lifecycle_status,
 };
 use crate::workspace_status::{
-    LocalSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
-    WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client, read_local_session_claim,
-    read_session_status, record_bot_status_event,
+    LocalTuiSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
+    WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client,
+    read_local_tui_session_claim, read_session_status, record_bot_status_event,
 };
 
 const TELEGRAM_TOPIC_TITLE_MAX_CHARS: usize = 128;
@@ -73,7 +73,7 @@ fn truncate_topic_base(base: &str, suffix: &str) -> String {
 
 fn workspace_local_conflict(
     aggregate: Option<&WorkspaceAggregateStatus>,
-    owner_claim: Option<&LocalSessionClaim>,
+    owner_claim: Option<&LocalTuiSessionClaim>,
 ) -> bool {
     let Some(aggregate) = aggregate else {
         return false;
@@ -516,7 +516,7 @@ async fn sync_local_transcript_mirrors_once(
 
     for (workspace_key, workspace_records) in by_workspace {
         let workspace_path = PathBuf::from(&workspace_key);
-        let Some(owner_claim) = read_local_session_claim(&workspace_path).await? else {
+        let Some(owner_claim) = read_local_tui_session_claim(&workspace_path).await? else {
             pending_local_user_prompts.retain(|key| !key.starts_with(&workspace_key));
             let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
                 continue;
@@ -746,7 +746,7 @@ fn local_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {
     format!("{workspace_key}::{session_id}")
 }
 
-fn initial_workspace_event_offset(lines: &[String], owner_claim: &LocalSessionClaim) -> usize {
+fn initial_workspace_event_offset(lines: &[String], owner_claim: &LocalTuiSessionClaim) -> usize {
     lines
         .iter()
         .position(|line| {
@@ -863,9 +863,10 @@ mod tests {
     };
     use crate::thread_state::effective_busy_snapshot_for_binding;
     use crate::workspace_status::{
-        LocalSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceStatusEventRecord,
-        WorkspaceStatusPhase, ensure_workspace_status_surface, is_hcodex_ingress_client,
-        read_session_status, record_bot_status_event, session_status_path,
+        LocalTuiSessionClaim, SessionActivitySource, SessionCurrentStatus,
+        WorkspaceStatusEventRecord, WorkspaceStatusPhase, ensure_workspace_status_surface,
+        is_hcodex_ingress_client, read_session_status, record_bot_status_event,
+        session_status_path,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1024,7 +1025,7 @@ mod tests {
 
     #[test]
     fn initial_offset_starts_from_owner_claim_started_at() {
-        let owner_claim = LocalSessionClaim {
+        let owner_claim = LocalTuiSessionClaim {
             schema_version: 2,
             workspace_cwd: "/tmp/workspace".to_owned(),
             thread_key: "thread-key".to_owned(),

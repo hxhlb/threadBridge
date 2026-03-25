@@ -95,7 +95,7 @@ pub struct WorkspaceStatusEventRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LocalSessionClaim {
+pub struct LocalTuiSessionClaim {
     pub schema_version: u32,
     pub workspace_cwd: String,
     pub thread_key: String,
@@ -150,11 +150,11 @@ fn legacy_sessions_dir(workspace_path: &Path) -> PathBuf {
     legacy_status_dir(workspace_path).join(SESSIONS_DIR)
 }
 
-pub fn local_session_claim_path(workspace_path: &Path) -> PathBuf {
+pub fn local_tui_session_claim_path(workspace_path: &Path) -> PathBuf {
     status_dir(workspace_path).join(LOCAL_SESSION_FILE)
 }
 
-fn legacy_local_session_claim_path(workspace_path: &Path) -> PathBuf {
+fn legacy_local_tui_session_claim_path(workspace_path: &Path) -> PathBuf {
     legacy_status_dir(workspace_path).join(LEGACY_LOCAL_SESSION_FILE)
 }
 
@@ -202,13 +202,13 @@ fn legacy_session_status_path(workspace_path: &Path, session_id: &str) -> PathBu
     legacy_sessions_dir(workspace_path).join(session_file_name(session_id))
 }
 
-pub fn default_local_session_claim(
+pub fn default_local_tui_session_claim(
     workspace_path: &Path,
     thread_key: impl Into<String>,
     shell_pid: u32,
-) -> LocalSessionClaim {
+) -> LocalTuiSessionClaim {
     let now = now_iso();
-    LocalSessionClaim {
+    LocalTuiSessionClaim {
         schema_version: STATUS_SCHEMA_VERSION,
         workspace_cwd: canonical_workspace_string(workspace_path),
         thread_key: thread_key.into(),
@@ -288,17 +288,17 @@ async fn write_session_status(workspace_path: &Path, status: &SessionCurrentStat
     .await
 }
 
-pub async fn write_local_session_claim(
+pub async fn write_local_tui_session_claim(
     workspace_path: &Path,
-    claim: &LocalSessionClaim,
+    claim: &LocalTuiSessionClaim,
 ) -> Result<()> {
-    atomic_write_json(&local_session_claim_path(workspace_path), claim).await
+    atomic_write_json(&local_tui_session_claim_path(workspace_path), claim).await
 }
 
-pub async fn remove_local_session_claim(workspace_path: &Path) -> Result<()> {
+pub async fn remove_local_tui_session_claim(workspace_path: &Path) -> Result<()> {
     for path in [
-        local_session_claim_path(workspace_path),
-        legacy_local_session_claim_path(workspace_path),
+        local_tui_session_claim_path(workspace_path),
+        legacy_local_tui_session_claim_path(workspace_path),
     ] {
         match fs::remove_file(&path).await {
             Ok(()) => {}
@@ -376,8 +376,8 @@ async fn migrate_legacy_status_surface(workspace_path: &Path) -> Result<()> {
     )
     .await?;
     copy_if_missing(
-        &legacy_local_session_claim_path(workspace_path),
-        &local_session_claim_path(workspace_path),
+        &legacy_local_tui_session_claim_path(workspace_path),
+        &local_tui_session_claim_path(workspace_path),
     )
     .await?;
 
@@ -473,10 +473,12 @@ pub async fn read_session_status(
     Ok(None)
 }
 
-pub async fn read_local_session_claim(workspace_path: &Path) -> Result<Option<LocalSessionClaim>> {
+pub async fn read_local_tui_session_claim(
+    workspace_path: &Path,
+) -> Result<Option<LocalTuiSessionClaim>> {
     for path in [
-        local_session_claim_path(workspace_path),
-        legacy_local_session_claim_path(workspace_path),
+        local_tui_session_claim_path(workspace_path),
+        legacy_local_tui_session_claim_path(workspace_path),
     ] {
         match fs::read_to_string(&path).await {
             Ok(content) => return Ok(Some(serde_json::from_str(&content)?)),
@@ -633,14 +635,16 @@ pub async fn record_hcodex_ingress_connected(
     session_id: &str,
 ) -> Result<SessionCurrentStatus> {
     ensure_workspace_status_surface(workspace_path).await?;
-    let mut owner_claim = read_local_session_claim(workspace_path)
+    let mut owner_claim = read_local_tui_session_claim(workspace_path)
         .await?
         .filter(|claim| claim.thread_key == thread_key)
-        .unwrap_or_else(|| default_local_session_claim(workspace_path, thread_key.to_owned(), 0));
+        .unwrap_or_else(|| {
+            default_local_tui_session_claim(workspace_path, thread_key.to_owned(), 0)
+        });
     owner_claim.thread_key = thread_key.to_owned();
     owner_claim.session_id = Some(session_id.to_owned());
     owner_claim.updated_at = now_iso();
-    write_local_session_claim(workspace_path, &owner_claim).await?;
+    write_local_tui_session_claim(workspace_path, &owner_claim).await?;
 
     deactivate_other_hcodex_ingress_sessions(workspace_path, session_id).await?;
     let mut current = read_session_status(workspace_path, session_id)
@@ -831,11 +835,11 @@ pub async fn record_hcodex_launcher_started(
 ) -> Result<()> {
     ensure_workspace_status_surface(workspace_path).await?;
     let mut owner_claim =
-        default_local_session_claim(workspace_path, thread_key.to_owned(), shell_pid);
+        default_local_tui_session_claim(workspace_path, thread_key.to_owned(), shell_pid);
     owner_claim.child_pid = Some(child_pid);
     owner_claim.child_command = Some(child_command.to_owned());
     owner_claim.updated_at = now_iso();
-    write_local_session_claim(workspace_path, &owner_claim).await?;
+    write_local_tui_session_claim(workspace_path, &owner_claim).await?;
     Ok(())
 }
 
@@ -846,7 +850,7 @@ pub async fn record_hcodex_launcher_ended(
     child_pid: u32,
 ) -> Result<()> {
     ensure_workspace_status_surface(workspace_path).await?;
-    let Some(owner_claim) = read_local_session_claim(workspace_path).await? else {
+    let Some(owner_claim) = read_local_tui_session_claim(workspace_path).await? else {
         return Ok(());
     };
     if owner_claim.thread_key != thread_key
@@ -856,7 +860,7 @@ pub async fn record_hcodex_launcher_ended(
         return Ok(());
     }
 
-    remove_local_session_claim(workspace_path).await?;
+    remove_local_tui_session_claim(workspace_path).await?;
     if let Some(session_id) = owner_claim.session_id.as_deref()
         && let Some(mut current) = read_session_status(workspace_path, session_id).await?
     {
@@ -954,8 +958,9 @@ mod tests {
         HCODEX_INGRESS_CLIENT, SessionActivitySource, SessionCurrentStatus,
         WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
         busy_selected_session_status, current_status_path, ensure_workspace_status_surface,
-        events_path, list_live_local_sessions, read_local_session_claim, read_session_status,
-        read_workspace_aggregate_status, record_bot_status_event, record_hcodex_ingress_completed,
+        events_path, list_live_local_sessions, local_tui_session_claim_path,
+        read_local_tui_session_claim, read_session_status, read_workspace_aggregate_status,
+        record_bot_status_event, record_hcodex_ingress_completed,
         record_hcodex_ingress_connected, record_hcodex_launcher_ended,
         record_hcodex_launcher_started, session_status_path,
     };
@@ -984,6 +989,15 @@ mod tests {
             fs::try_exists(workspace.join(".threadbridge/state/runtime-observer/sessions"))
                 .await
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn local_tui_session_claim_path_uses_canonical_filename() {
+        let workspace = PathBuf::from("/tmp/workspace");
+        assert_eq!(
+            local_tui_session_claim_path(&workspace),
+            workspace.join(".threadbridge/state/runtime-observer/local-tui-session.json")
         );
     }
 
@@ -1262,7 +1276,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let owner_claim = read_local_session_claim(&workspace).await.unwrap().unwrap();
+        let owner_claim = read_local_tui_session_claim(&workspace).await.unwrap().unwrap();
         let aggregate = read_workspace_aggregate_status(&workspace).await.unwrap();
 
         assert!(!old_session.live);
@@ -1288,7 +1302,7 @@ mod tests {
             .await
             .unwrap();
 
-        let owner_claim = read_local_session_claim(&workspace).await.unwrap();
+        let owner_claim = read_local_tui_session_claim(&workspace).await.unwrap();
         let session = read_session_status(&workspace, "thr_new")
             .await
             .unwrap()
