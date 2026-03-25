@@ -18,14 +18,14 @@
   - Bash wrapper、Codex hooks、notify、workspace shared status、topic title watcher、busy gate 都曾落地
   - 現在已退役，只保留作為舊模型參考
 - [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
-  - shared app-server daemon、`./.threadbridge/bin/hcodex`、TUI proxy、mirror、adoption、auto-adopt 已落地
+- shared app-server daemon、`./.threadbridge/bin/hcodex`、hcodex ingress、mirror、adoption、auto-adopt 已落地
   - desktop runtime 已成為正式 owner 啟動模型，headless 啟動路徑已退場
   - `hcodex` self-heal 已移除，缺少 desktop owner 時會明確失敗
   - workspace heartbeat / runtime health 已改成以 desktop owner heartbeat 為主 authority
   - 舊 `CLI owner / handoff` 概念已退出現行模型，主語義改為 local/TUI mirror + idle/free readiness
   - process transcript 已正式區分 final / process，並補上 management transcript read API、session summary / records API、web observability pane，以及 Telegram rolling preview 摘要
   - `codex plan` mirror、plan-only final reply fallback、Telegram preview process transcript 已落地
-  - Telegram `Questions` / `Implement this plan` 也已開始接到同一條 app-server / TUI proxy adapter 路徑
+- Telegram `Questions` / `Implement this plan` 也已開始接到同一條 app-server / hcodex ingress adapter 路徑
 
 ## 部分落地
 
@@ -109,7 +109,7 @@
   - 已補記一個明確缺口：`codex mirror -> Telegram` 的 draft message 尚未實作 heartbeat，因此長時間 draft 仍會自動消失
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
 - [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
-  - local/TUI mirror intake 已開始從 `TUI proxy` 拆到獨立 app-server ws observer
+- local/TUI mirror intake 已開始從 `hcodex ingress` 拆到獨立 app-server ws observer
   - proxy relay 熱路徑已不再承接 preview / process / final / request lifecycle mirror
   - 但 public vocabulary、transport-neutral observer contract、以及 broader observability 收斂仍未完成
 - [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)

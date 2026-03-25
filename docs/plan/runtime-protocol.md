@@ -494,7 +494,7 @@ v1 至少保留：
 - [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
   - 使用這份協議作為本地管理面的正式 view / action 命名來源
 - [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
-  - 提供 shared runtime、`hcodex`、TUI proxy、adoption 的現實模型
+  - 提供 shared runtime、`hcodex`、hcodex ingress、adoption 的現實模型
 - [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
   - session summary / session record / artifact refs 的 observability view 應由這份文檔定義
 - [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)

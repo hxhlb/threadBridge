@@ -7,7 +7,7 @@
 目前代碼裡已經有的前置能力：
 
 - Telegram thread / workspace binding / Codex thread lifecycle 已存在
-- shared websocket app-server、受管 `hcodex`、TUI proxy、adoption 已部分落地
+- shared websocket app-server、受管 `hcodex`、hcodex ingress、adoption 已部分落地
 - `threadBridge` 現在可在缺少 Telegram 憑據時先啟動本地 management API，不再只能以 Telegram bot 形態啟動
 - 已有本地 management API：
   - `GET /api/setup`
@@ -45,7 +45,7 @@
   - 每個 workspace submenu 已收斂成 `New Session` 與 `Continue Telegram Session`
 - `Settings` 會在預設瀏覽器中打開本地 management UI
 - managed Codex health 已開始暴露真實 source / binary path / version，且本地管理面可切換 Codex source preference 並同步已綁定 workspace 的 launcher
-- desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並主動 ensure shared app-server 與 TUI proxy；同時也提供單 workspace 的 `repair runtime` control action
+- desktop runtime owner 已開始在背景定期 reconcile 已管理 workspace，並主動 ensure shared app-server 與 hcodex ingress；同時也提供單 workspace 的 `repair runtime` control action
 - 本地管理面已開始提供 machine-level 的 runtime owner reconcile action，可一次對所有非 conflict workspace 做全域 repair / ensure
 - 本地管理面已開始提供 managed Codex cache refresh，能把目前 `PATH` 上的 `codex` 複製進 repo 管理快取
 - 本地管理面已開始提供 managed Codex source build，可直接從本機 Codex Rust workspace 建出受管 binary 並寫入 build info
@@ -171,9 +171,9 @@ v1 的主模型固定為：
 
 - managed Codex binary path / version / ready
 - app-server status
-- TUI proxy status
-- handoff readiness
-  - `ready`: app-server 與 TUI proxy 都可用，且沒有 pending adoption
+- hcodex ingress status
+- runtime readiness
+  - `ready`: app-server 與 hcodex ingress 都可用，且沒有 pending adoption
   - `pending_adoption`: 底層 runtime 可用，但目前有待 adopt/reject 的 TUI handoff
   - `degraded`: 只有部分 runtime surface 可用
   - `unavailable`: handoff 目前不可用
