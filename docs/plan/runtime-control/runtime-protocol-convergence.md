@@ -323,15 +323,15 @@ v1 至少應固定：
 
 ## 與其他計劃的關係
 
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - 這份文檔是它的 rollout / convergence 草稿，不取代它的主規格地位
-- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
+- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-adapter-migration.md)
   - Telegram 何時才算退回 protocol consumer，會直接依賴這份收斂計畫
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
+- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
   - `start_fresh_session` / `repair_session_binding` / launch surface 的 protocol naming 需要和它對齊
-- [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-busy-input-gate.md)
+- [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/codex-busy-input-gate.md)
   - `/stop` 是否正式收斂成 `interrupt_running_turn`，會影響這份 plan
-- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/owner-runtime-contract.md)
+- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/owner-runtime-contract.md)
   - owner / adapter / shared control 的邊界，會決定哪些 action 應屬於 protocol 主線
 
 ## 開放問題

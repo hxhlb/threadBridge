@@ -252,13 +252,13 @@ threadBridge 應能保存一組與 Codex 分離的 LLM 設定。
 
 ## 與其他計劃的關係
 
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - 之後若這層落地，需要新增 secondary LLM config view、goal view、guidance event 或等價 control action
-- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
+- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/message-queue-and-status-delivery.md)
   - 若 `AI 建議` 要送回 Telegram，應由 delivery 規格決定它屬於 `content`、`status`、`control`，還是另一種 payload
-- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
+- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-transport-abstraction.md)
   - secondary LLM guidance 比較接近 core/runtime-side augmentation，不應一開始就寫死成 Telegram-only feature
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
   - 之後 observability 應能看見 guidance 何時生成、使用了哪些 goal、是否送達用戶
 
 ## 風險

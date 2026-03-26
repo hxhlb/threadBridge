@@ -403,15 +403,15 @@ v1 不需要先把它做成完整框架，但至少應先回答：
 
 ## 與其他計劃的關係
 
-- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
+- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/macos-menubar-thread-manager.md)
   - desktop runtime 已是 machine-local control plane；這份是往 capability host 再推一層
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - capability request / result 之後應掛進正式 view / action / event 模型
-- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
+- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-transport-abstraction.md)
   - 這條線再次強化 Telegram 不是 core；desktop capability 也應屬於 core/runtime-side service
-- [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)
+- [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/optional-agents-injection.md)
   - 若未來有 tools-only / external instruction 模式，也要考慮這種 capability tool 如何被宣告
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
   - capability request / result / artifact 之後應成為可觀測事件
 
 ## 風險

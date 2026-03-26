@@ -214,15 +214,15 @@ web 管理面現在也已提供：
 
 ## 與其他計劃的關係
 
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - execution mode 已開始進入正式 view / action 模型
-- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
+- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/macos-menubar-thread-manager.md)
   - management UI 與 tray 已開始表達 execution mode
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
   - execution mode 已影響 `hcodex` launch / resume 與 session continuity 收斂
-- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
+- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-transport-abstraction.md)
   - execution mode 仍屬於 core runtime 語義，不應回退成 Telegram-only 開關
-- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
+- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-adapter-migration.md)
   - Telegram 已有 mode control surface，但仍不應把 execution mode 退化成 Telegram-only authority
 
 ## 開放問題

@@ -316,13 +316,13 @@
 
 ## 與其他計劃的關係
 
-- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-lifecycle-supervision.md)
+- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-lifecycle-supervision.md)
   - 定義 today 的正式 supervision 約束
-- [hcodex-launch-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-launch-contract.md)
+- [hcodex-launch-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - 定義 today 的 launch / bridge websocket 契約
-- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
+- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/post-cli-runtime-cleanup.md)
   - 處理 CLI 時代命名、狀態面與 compatibility 收尾
-- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/owner-runtime-contract.md)
+- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/owner-runtime-contract.md)
   - 固定 `desktop runtime owner` 與 `hcodex` 的不同 ownership 層次
 
 ## 建議的下一步

@@ -37,7 +37,7 @@ Still in progress at the plan level:
 
 If docs and implementation differ, treat the code as authoritative. Plan maturity is tracked in [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md).
 
-For the maintainer-facing plan registry, grouped by maturity status and annotated with owner-role metadata, see [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md).
+For the maintainer-facing plan registry, grouped by maturity status and organized into owner folders, see [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md).
 
 ## Runtime Model
 
@@ -247,7 +247,7 @@ The local management API and browser UI currently provide:
 - transcript inspection
 - workspace execution mode changes
 
-For the full maintainer-facing design registry, including current ownership, partial specs, and historical architecture, see [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md).
+For the full maintainer-facing design registry, including owner-folder organization, partial specs, and historical architecture, see [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md).
 
 On macOS, the tray menu also exposes:
 
@@ -277,7 +277,7 @@ cargo run --bin threadbridge_desktop
 
 ## Plans And Docs
 
-- plan registry with status groups and owner-role metadata: [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md)
+- plan registry with status groups and owner folders: [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md)
 - maintainer guide: [AGENTS.md](/Volumes/Data/Github/threadBridge/AGENTS.md)
 - workspace runtime appendix source: [templates/AGENTS.md](/Volumes/Data/Github/threadBridge/templates/AGENTS.md)
 

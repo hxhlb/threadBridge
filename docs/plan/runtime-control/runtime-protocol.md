@@ -615,7 +615,7 @@ v1 至少保留：
 目前新增確認的缺口是：
 
 - mirror / observability 已開始承接更完整的 Codex 過程文本，event model 應收斂成等價的 process transcript 事件，而不是各 adapter 自己拼 `plan_text` / `tool_text`
-- `codex plan` 消息流已接入 mirror；目前重點轉為 combined final reply 與 plan snapshot 在 transcript / observability 上的呈現收斂，詳見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-plan-mirror.md)
+- `codex plan` 消息流已接入 mirror；目前重點轉為 combined final reply 與 plan snapshot 在 transcript / observability 上的呈現收斂，詳見 [codex-plan-mirror.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-observer/codex-plan-mirror.md)
 - `managed_codex_changed` 這類更細的 owner / build event 尚未獨立落地
 - event stream 雖然已 typed 化，但目前仍只直接驅動 top-level views；更細的 observability record 仍未走完整增量 payload
 
@@ -661,13 +661,13 @@ v1 至少保留：
 
 ## 與其他計劃的關係
 
-- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/macos-menubar-thread-manager.md)
+- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/macos-menubar-thread-manager.md)
   - 使用這份協議作為本地管理面的正式 view / action 命名來源
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
   - 提供 shared runtime、`hcodex`、hcodex ingress、adoption 的現實模型
-- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md)
   - session summary / session record / artifact refs 的 observability view 應由這份文檔定義
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
   - 可共用部分 event 與 view，但不是這份 protocol 的唯一需求方
 
 ## 開放問題

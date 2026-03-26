@@ -335,7 +335,7 @@ draft 的重點比較像：
 
 但文件上限這一題目前還沒有明確答案，應由 Telegram delivery 規格來接：
 
-- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/message-queue-and-status-delivery.md)
+- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/message-queue-and-status-delivery.md)
 
 ## 建議的下一步
 

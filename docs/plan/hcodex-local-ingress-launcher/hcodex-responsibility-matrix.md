@@ -289,13 +289,13 @@ today 的 `hcodex` core 只應明確保留 4 個核心責任：
 
 ## 與其他計劃的關係
 
-- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-lifecycle-supervision.md)
+- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-lifecycle-supervision.md)
   - 展開 `supervise` 與 `reconcile` 的正式約束
-- [hcodex-launch-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-launch-contract.md)
+- [hcodex-launch-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - 展開 `launch` 與 `bridge` 的 websocket contract
-- [hcodex-pre-refactor-history.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-pre-refactor-history.md)
+- [hcodex-pre-refactor-history.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-pre-refactor-history.md)
   - 提供這份責任矩陣的歷史背景
-- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/owner-runtime-contract.md)
+- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/owner-runtime-contract.md)
   - 固定哪些 ownership 屬於 owner，哪些 ownership 屬於 `hcodex`
 
 ## 開放問題

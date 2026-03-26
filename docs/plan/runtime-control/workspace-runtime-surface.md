@@ -245,18 +245,18 @@ threadBridge 的一個重要特徵是：
 
 ## 與其他計劃的關係
 
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
   - 描述 shared runtime、`hcodex`、mirror、adoption 的現行模型
-- [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/codex-execution-modes.md)
+- [codex-execution-modes.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/codex-execution-modes.md)
   - `workspace-config.json` 已是 surface 的正式一部分
-- [desktop-runtime-tool-bridge.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-tool-bridge.md)
+- [desktop-runtime-tool-bridge.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/desktop-runtime-tool-bridge.md)
   - 描述如何從 workspace tool surface 呼叫 desktop capability host
-- [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/optional-agents-injection.md)
+- [optional-agents-injection.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/optional-agents-injection.md)
   - 描述 appendix 是否必須 inline 注入，但不取代 surface 本身
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - workspace runtime health 的 public surface 已改成 `runtime_readiness`
   - 後續若 surface profile 要對外可見，應掛進正式 view / action 命名
-- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
+- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/post-cli-runtime-cleanup.md)
   - `runtime-observer/*` 已是主寫入 surface，`shared-runtime/*` 只保留 legacy read compatibility
   - `local-tui-session.json` 已是主寫入 surface，legacy `local-session.json` 仍保留 read compatibility
 

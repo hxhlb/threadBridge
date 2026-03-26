@@ -44,7 +44,7 @@
 
 這份文檔是 owner/runtime boundary 的總草稿，採用「描述現在 + 指出未來應如何演化」的寫法。
 
-角色與責任邊界現在以 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md) 為 current architecture 主文檔；本文件保留高層 owner/runtime contract 的背景、方向、與收斂脈絡。
+角色與責任邊界現在以 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 為 current architecture 主文檔；本文件保留高層 owner/runtime contract 的背景、方向、與收斂脈絡。
 
 它處理：
 
@@ -221,17 +221,17 @@ adoption 在 today 的代碼裡已是 runtime state / control 的一部分，而
 
 ## 與其他計劃的關係
 
-- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
+- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-observer/app-server-ws-mirror-observer.md)
   - 處理 observer / mirror intake 的子問題與收尾
-- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/post-cli-runtime-cleanup.md)
+- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/post-cli-runtime-cleanup.md)
   - 處理 `hcodex` launch contract、legacy artifact、與 compatibility 命名收尾
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - 承接 shared event / action / view naming 與 transport-facing contract 細節
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
+- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
   - 承接 thread / workspace / Codex thread continuity 與 adoption lifecycle
-- [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-state-machine.md)
+- [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-state-machine.md)
   - 承接 canonical state axes、`pending_adoption`、與 control-side state semantics
-- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
+- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-transport-abstraction.md)
   - 這份文檔是 transport abstraction 之前的前置邊界收斂
 
 這份文檔不重複定義上述子問題的實作細節，而是固定它們共同依附的 owner/runtime boundary。

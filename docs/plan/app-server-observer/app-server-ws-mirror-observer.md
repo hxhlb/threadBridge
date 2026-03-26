@@ -362,14 +362,14 @@
 
 ## 與其他計劃的關係
 
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
   - 描述現行 mirror / adoption / readiness 模型
   - 這份文檔只處理它內部的 mirror intake 邊界重構
-- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-transport-abstraction.md)
+- [runtime-transport-abstraction.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-transport-abstraction.md)
   - 這份文檔提供一個具體例子，說明哪些 read-side 責任應從 `hcodex` 專屬元件抽回 runtime 側
-- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/working-session-observability.md)
+- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md)
   - observer 若落地，將直接影響 session timeline / records 的資料來源穩定性
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-protocol.md)
+- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
   - observer 化之後，mirror event 與 session observability 更容易收斂成 transport-neutral runtime event
 
 ## 開放問題

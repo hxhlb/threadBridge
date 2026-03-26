@@ -8,7 +8,7 @@
 
 目前已完成的部分：
 
-- 已用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md) 的 canonical role boundary 掃描 active code path
+- 已用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 的 canonical role boundary 掃描 active code path
 - 已確認 4 個 responsibility drift 功能點
 - 其中 3 個已和 `runtime-architecture` 的 temporary exception 對上
 - 其中 1 個屬於目前尚未進入主文檔的新增 drift
@@ -21,7 +21,7 @@
 
 ## 問題
 
-[runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md) 已經把 canonical role 與 temporary exception 定義清楚了，但它仍然是主規格文檔，不是 current-code 掃描報告。
+[runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 已經把 canonical role 與 temporary exception 定義清楚了，但它仍然是主規格文檔，不是 current-code 掃描報告。
 
 實際遇到 bug、兼容回歸、或功能止血時，維護者真正需要的是另一份文檔：
 
@@ -169,18 +169,18 @@
 
 ## 與其他計劃的關係
 
-- [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md)
+- [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md)
   - canonical role boundary 的主文檔
   - 本文不重新定義角色，只驗證 current code 在哪些功能點偏離它
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/session-lifecycle.md)
+- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
   - 若 drift 牽涉 session bind / repair / adoption semantics，回看這份文檔理解正式語義
-- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter-migration.md)
+- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-adapter-migration.md)
   - 若後續要處理 Telegram adapter 的責任退出，可把本文的 confirmed drift 當成 migration input
-- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-ws-mirror-observer.md)
+- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-observer/app-server-ws-mirror-observer.md)
   - observer 相關 drift 的子背景仍以這份文檔為準
 
 ## 開放問題
 
-- 是否要把本文第 1 項 drift 直接升格進 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md) 的 temporary exception？
+- 是否要把本文第 1 項 drift 直接升格進 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 的 temporary exception？
 - 後續若再做第二輪掃描，是否要把 `bot_runner / status_sync` 這類候選耦合納入 confirmed scope？
 - 這份文檔未來若長期存在，是否要再補一個簡短的 priority / risk 欄位，幫助安排重構順序？

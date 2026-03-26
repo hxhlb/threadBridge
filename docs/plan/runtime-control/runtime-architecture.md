@@ -55,7 +55,7 @@
 - transport abstraction 的遠期 target architecture
 - 歷史遷移過程的完整回顧
 
-這個問題現在由 [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md) 承接；它以 `status` 分組，並用 `owner role` / `doc kind` 等條目屬性表達責任與文檔類型。
+這個問題現在由 [docs/plan/README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md) 與 `docs/plan/*/` folder 結構共同承接；README 以 `status` 分組，folder path 表達 owner，`doc kind` 等資訊則保留為條目屬性。
 
 ## Canonical 角色
 

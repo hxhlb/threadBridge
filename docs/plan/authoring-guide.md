@@ -30,7 +30,7 @@
 也就是說，除了寫好單篇 plan，本目錄還需要回答：
 
 - 這份文檔今天屬於哪個成熟度狀態
-- 責任主要歸給哪個 `owner role`
+- 責任主要歸給哪個 owner
 - 它是 `spec`、`plan`，還是 `historical`
 
 因此新文檔不應只寫「想法」，而應該明確說明：
@@ -93,9 +93,11 @@
 
 如果一份文檔同時想回答以上多個問題，通常切分還不夠清楚。
 
-## Plan Registry 與條目屬性
+## Plan Registry 與 Folder 歸屬
 
 [README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md) 現在是這個目錄的 canonical registry。
+
+文檔的 owner 則由它所在的 folder path 表達。
 
 它的唯一分組軸固定是 `status`：
 
@@ -104,9 +106,9 @@
 - `已退役`
 - `純草稿`
 
-其他資訊都只能作為條目屬性，不再和 `status` 平行競爭成第二套分組：
+其他資訊都只能作為 folder 歸屬或條目屬性，不再和 `status` 平行競爭成第二套分組：
 
-- `owner role`
+- owner folder
 - `doc kind`
 - `primary spec`
 - `depends_on`
@@ -115,35 +117,37 @@
 新增或整理文檔時，至少要先決定：
 
 - 它屬於哪個 `status`
-- 它的責任主要歸給誰
+- 它應該進哪個 owner folder
 - 它是 `spec`、`plan`、還是 `historical`
 
 避免：
 
 - 同一份文檔同時被多個分組軸分類
-- 用 `Docs` 之類文件類型詞冒充 `owner role`
+- 用 `Docs` 之類文件類型詞冒充 owner
 - 因為它碰到 Telegram 或 management UI，就把 shared semantics 誤寫成 surface owner
 - 把已退役文檔留在 current registry 裡，只靠內文備註提示
 
-## `owner role` 規則
+## Owner Folder 規則
 
-`owner role` 只回答一件事：這份 plan 的責任主要歸給誰。
+owner folder 只回答一件事：這份 plan 的責任主要歸給誰。
 
-它不是：
+folder 表達的是 owner，不是：
 
 - 文檔類型
 - 影響面清單
 - 第二套瀏覽導航
 
-預設應優先使用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-architecture.md) 裡的 canonical roles。
+預設應優先使用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 裡的 canonical roles。
 
 若一份 shared spec 沒有更明顯的 owner，預設歸 `runtime_control`。
 
-若某份草稿目前真的無法自然落進現有 canonical role，可暫時標：
+若某份草稿目前真的無法安全掛到現有 canonical role，暫時放進：
 
-- `owner role: 未定`
+- `unknown-owner/`
 
-但這應該是少數例外，而不是常態。
+這個 folder 是 quarantine owner，不是新的成熟度分組。
+
+一旦 owner 明確，就應把文檔從 `unknown-owner/` 移到對應 role folder。
 
 ## `doc kind` 規則
 
@@ -472,7 +476,8 @@
 沿用目前目錄的做法：
 
 - 在 `README.md` 登記這份文檔
-- 補上它的 `status`、`owner role`、`doc kind`
+- 把檔案放進正確 owner folder
+- 補上它的 `status`、`doc kind`
 - 若它是主規格，補上 `primary spec: yes`
 - 若有依賴關係，補進該條目的 `depends_on`
 - 若它是已退役文檔，必要時補 `current answer`
@@ -493,8 +498,9 @@
 3. 決定是更新既有 plan，還是新增一份新 plan。
 4. 先寫 `目前進度`，明確區分已落地與未落地部分。
 5. 寫清楚 `問題`、`定位`、主體規格、`與其他計劃的關係`、`開放問題`。
-6. 更新 [README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md)，把它放進正確 `status` 區段，並補齊必要條目屬性。
-7. 如果它是主規格，明確寫出哪些文檔之後應引用它，並在 registry 裡標 `primary spec: yes`。
+6. 把檔案放進正確 owner folder；若暫時無法安全掛靠，先進 `unknown-owner/`。
+7. 更新 [README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md)，把它放進正確 `status` 區段，並補齊必要條目屬性。
+8. 如果它是主規格，明確寫出哪些文檔之後應引用它，並在 registry 裡標 `primary spec: yes`。
 
 ## 建議模板
 
