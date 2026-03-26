@@ -846,7 +846,7 @@ impl CodexRunner {
         })
     }
 
-    fn map_notification(
+    pub(crate) fn map_notification(
         method: &str,
         params: Value,
         latest_agent_message_by_id: &mut HashMap<String, String>,
@@ -1314,7 +1314,10 @@ impl CodexRunner {
         })
     }
 
-    fn map_server_notification(method: &str, params: Value) -> Option<CodexServerNotification> {
+    pub(crate) fn map_server_notification(
+        method: &str,
+        params: Value,
+    ) -> Option<CodexServerNotification> {
         match method {
             "serverRequest/resolved" => serde_json::from_value(params)
                 .ok()

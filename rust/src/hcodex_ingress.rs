@@ -25,7 +25,7 @@ use crate::process_transcript::workspace_item_diagnostic;
 use crate::repository::ThreadRepository;
 use crate::runtime_interaction::RuntimeInteractionSender;
 use crate::workspace_status::{
-    record_hcodex_ingress_connected, record_hcodex_ingress_disconnected,
+    ObserverAttachMode, record_hcodex_ingress_connected, record_hcodex_ingress_disconnected,
     record_hcodex_ingress_turn_started,
 };
 
@@ -333,6 +333,9 @@ async fn handle_ingress_connection(
                 .await? {
                     current_session_id = Some(session_id);
                 }
+                observer_runtime
+                    .observe_forwarded_daemon_message(&workspace_path, &thread_key, &daemon_message)
+                    .await?;
                 if matches!(daemon_message, WsMessage::Close(_)) {
                     let _ = client_ws.send(daemon_message).await;
                     break;
@@ -484,18 +487,33 @@ async fn maybe_track_server_response(
     else {
         return Ok(None);
     };
+    let attach_mode = match method {
+        TrackedRequestMethod::ThreadStart => ObserverAttachMode::LiveForwarded,
+        TrackedRequestMethod::ThreadResume => ObserverAttachMode::ResumeWs,
+        TrackedRequestMethod::TurnStart => return Ok(None),
+    };
     repository
         .set_tui_active_session_for_thread_key(thread_key, thread_id.to_owned())
         .await?;
-    observer_runtime
-        .ensure_thread_observer(workspace_path, daemon_ws_url, thread_key, thread_id)
-        .await?;
-    record_hcodex_ingress_connected(workspace_path, thread_key, thread_id).await?;
+    match attach_mode {
+        ObserverAttachMode::LiveForwarded => {
+            observer_runtime
+                .register_live_forwarded_source(workspace_path, thread_key, thread_id)
+                .await?;
+        }
+        ObserverAttachMode::ResumeWs => {
+            observer_runtime
+                .ensure_thread_observer(workspace_path, daemon_ws_url, thread_key, thread_id)
+                .await?;
+        }
+    }
+    record_hcodex_ingress_connected(workspace_path, thread_key, thread_id, attach_mode).await?;
     info!(
         event = "hcodex_ingress.session_tracked",
         thread_key = %thread_key,
         method = ?method,
         tui_active_codex_thread_id = %thread_id,
+        attach_mode = attach_mode.as_str(),
     );
     Ok(Some(thread_id.to_owned()))
 }

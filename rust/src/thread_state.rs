@@ -347,6 +347,7 @@ mod tests {
             client: Some("threadbridge".to_owned()),
             turn_id: (phase.is_turn_busy()).then_some("turn-1".to_owned()),
             summary: None,
+            observer_attach_mode: None,
             updated_at: "2026-03-22T00:00:00.000Z".to_owned(),
         };
         fs::write(

@@ -34,6 +34,7 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 - `hcodex` resolves the shared workspace daemon from `./.threadbridge/state/app-server/current.json` and launches `codex --remote ...`.
 - `hcodex` also reads `./.threadbridge/state/workspace-config.json` so local launch and resume use the workspace execution mode.
 - With no extra args, `hcodex` starts a fresh local TUI session for this workspace.
+- Fresh `hcodex` sessions project mirror activity from the existing live daemon stream; standalone observer attach is reserved for explicit resume flows.
 - Use `hcodex resume <session-id>` when you explicitly want to continue an existing Codex session.
 
 ### `./.threadbridge/bin/build_prompt_config`

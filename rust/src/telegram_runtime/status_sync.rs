@@ -868,9 +868,9 @@ mod tests {
     use crate::thread_state::effective_busy_snapshot_for_binding;
     use crate::workspace_status::{
         LocalTuiSessionClaim, SessionActivitySource, SessionCurrentStatus,
-        WorkspaceStatusEventRecord, WorkspaceStatusPhase, ensure_workspace_status_surface,
-        is_hcodex_ingress_client, read_session_status, record_bot_status_event,
-        session_status_path,
+        WorkspaceStatusEventRecord, WorkspaceStatusPhase, default_local_tui_session_claim,
+        ensure_workspace_status_surface, is_hcodex_ingress_client, read_session_status,
+        record_bot_status_event, session_status_path, write_local_tui_session_claim,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1155,6 +1155,7 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: Some("turn-1".to_owned()),
             summary: Some("cli run".to_owned()),
+            observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
         fs::write(
@@ -1267,6 +1268,7 @@ mod tests {
             client: Some("threadbridge".to_owned()),
             turn_id: None,
             summary: None,
+            observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
         let tui = SessionCurrentStatus {
@@ -1283,6 +1285,7 @@ mod tests {
             client: Some("threadbridge-hcodex-ingress".to_owned()),
             turn_id: Some("turn-1".to_owned()),
             summary: Some("prompt".to_owned()),
+            observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
         fs::write(
@@ -1297,6 +1300,12 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut claim =
+            default_local_tui_session_claim(&workspace, "thread-key", std::process::id());
+        claim.session_id = Some("thr_tui".to_owned());
+        write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
 
         let binding: SessionBinding = serde_json::from_value(serde_json::json!({
             "schema_version": 3,

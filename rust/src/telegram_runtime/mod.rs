@@ -953,8 +953,8 @@ mod tests {
     use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
     use crate::thread_state::{BindingStatus, LifecycleStatus, ResolvedThreadState, RunStatus};
     use crate::workspace_status::{
-        SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase, read_session_status,
-        record_hcodex_ingress_connected, record_hcodex_launcher_started,
+        ObserverAttachMode, SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase,
+        read_session_status, record_hcodex_ingress_connected, record_hcodex_launcher_started,
     };
     use anyhow::Context;
     use serde_json::json;
@@ -1270,9 +1270,14 @@ mod tests {
         )
         .await
         .unwrap();
-        record_hcodex_ingress_connected(&workspace, &record.metadata.thread_key, "thr_tui")
-            .await
-            .unwrap();
+        record_hcodex_ingress_connected(
+            &workspace,
+            &record.metadata.thread_key,
+            "thr_tui",
+            ObserverAttachMode::LiveForwarded,
+        )
+        .await
+        .unwrap();
 
         let state = AppState {
             config: AppConfig {

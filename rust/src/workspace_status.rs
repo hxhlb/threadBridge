@@ -46,6 +46,22 @@ impl WorkspaceStatusPhase {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserverAttachMode {
+    LiveForwarded,
+    ResumeWs,
+}
+
+impl ObserverAttachMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LiveForwarded => "live_forwarded",
+            Self::ResumeWs => "resume_ws",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCurrentStatus {
     pub schema_version: u32,
@@ -65,6 +81,8 @@ pub struct SessionCurrentStatus {
     pub client: Option<String>,
     pub turn_id: Option<String>,
     pub summary: Option<String>,
+    #[serde(default)]
+    pub observer_attach_mode: Option<ObserverAttachMode>,
     pub updated_at: String,
 }
 
@@ -252,6 +270,7 @@ pub fn default_session_status(
         client: None,
         turn_id: None,
         summary: None,
+        observer_attach_mode: None,
         updated_at: now_iso(),
     }
 }
@@ -717,6 +736,9 @@ pub async fn record_hcodex_ingress_turn_started(
     current.shell_pid = Some(0);
     current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.turn_id = turn_id.map(str::to_owned);
+    current
+        .observer_attach_mode
+        .get_or_insert(ObserverAttachMode::LiveForwarded);
     current.updated_at = now_iso();
     write_session_status(workspace_path, &current).await?;
     let aggregate = read_workspace_aggregate_status(workspace_path).await?;
@@ -728,6 +750,7 @@ pub async fn record_hcodex_ingress_connected(
     workspace_path: &Path,
     thread_key: &str,
     session_id: &str,
+    attach_mode: ObserverAttachMode,
 ) -> Result<SessionCurrentStatus> {
     ensure_workspace_status_surface(workspace_path).await?;
     let mut local_tui_claim = read_local_tui_session_claim(workspace_path)
@@ -758,6 +781,7 @@ pub async fn record_hcodex_ingress_connected(
     current.child_command = local_tui_claim.child_command.clone();
     current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.turn_id = None;
+    current.observer_attach_mode = Some(attach_mode);
     current.updated_at = now_iso();
     write_session_status(workspace_path, &current).await?;
     let aggregate = read_workspace_aggregate_status(workspace_path).await?;
@@ -784,6 +808,9 @@ pub async fn record_hcodex_ingress_prompt(
     current.shell_pid = Some(0);
     current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.summary = summarize_prompt(prompt);
+    current
+        .observer_attach_mode
+        .get_or_insert(ObserverAttachMode::LiveForwarded);
     current.updated_at = now_iso();
     write_session_status(workspace_path, &current).await?;
     let record = WorkspaceStatusEventRecord {
@@ -878,6 +905,9 @@ pub async fn record_hcodex_ingress_completed(
     current.shell_pid = Some(0);
     current.client = Some(HCODEX_INGRESS_CLIENT.to_owned());
     current.turn_id = None;
+    current
+        .observer_attach_mode
+        .get_or_insert(ObserverAttachMode::LiveForwarded);
     current.summary = last_assistant_message
         .and_then(summarize_prompt)
         .or(current.summary);
@@ -1050,7 +1080,7 @@ pub async fn busy_selected_session_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, SessionActivitySource,
+        HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, ObserverAttachMode, SessionActivitySource,
         SessionCurrentStatus, WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
         busy_selected_session_status, current_status_path, default_local_tui_session_claim,
         ensure_workspace_status_surface, events_path, legacy_current_status_path,
@@ -1140,6 +1170,7 @@ mod tests {
                     client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
                 .unwrap()
@@ -1347,6 +1378,7 @@ mod tests {
                     client: Some("legacy-client".to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
                 .unwrap()
@@ -1393,6 +1425,7 @@ mod tests {
                     client: Some("canonical-client".to_owned()),
                     turn_id: None,
                     summary: Some("canonical".to_owned()),
+                    observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
                 .unwrap()
@@ -1419,6 +1452,7 @@ mod tests {
                     client: Some("legacy-client".to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
                 .unwrap()
@@ -1484,9 +1518,14 @@ mod tests {
             .await
             .unwrap();
 
-        let session = record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
-            .await
-            .unwrap();
+        let session = record_hcodex_ingress_connected(
+            &workspace,
+            "thread-key",
+            "thr_new",
+            ObserverAttachMode::LiveForwarded,
+        )
+        .await
+        .unwrap();
         record_hcodex_ingress_prompt(&workspace, "thr_new", "continue")
             .await
             .unwrap();
@@ -1552,6 +1591,7 @@ mod tests {
             client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
             turn_id: None,
             summary: None,
+            observer_attach_mode: None,
             updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
         };
 
@@ -1617,6 +1657,7 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: None,
             summary: Some("startup".to_owned()),
+            observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
         fs::write(
@@ -1770,6 +1811,7 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: None,
             summary: Some("startup".to_owned()),
+            observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
         fs::write(
@@ -1799,12 +1841,22 @@ mod tests {
             .await
             .unwrap();
 
-        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_old")
-            .await
-            .unwrap();
-        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
-            .await
-            .unwrap();
+        record_hcodex_ingress_connected(
+            &workspace,
+            "thread-key",
+            "thr_old",
+            ObserverAttachMode::LiveForwarded,
+        )
+        .await
+        .unwrap();
+        record_hcodex_ingress_connected(
+            &workspace,
+            "thread-key",
+            "thr_new",
+            ObserverAttachMode::LiveForwarded,
+        )
+        .await
+        .unwrap();
 
         let old_session = read_session_status(&workspace, "thr_old")
             .await
@@ -1835,9 +1887,14 @@ mod tests {
         record_hcodex_launcher_started(&workspace, "thread-key", 42, 77, "codex --remote")
             .await
             .unwrap();
-        record_hcodex_ingress_connected(&workspace, "thread-key", "thr_new")
-            .await
-            .unwrap();
+        record_hcodex_ingress_connected(
+            &workspace,
+            "thread-key",
+            "thr_new",
+            ObserverAttachMode::LiveForwarded,
+        )
+        .await
+        .unwrap();
 
         record_hcodex_launcher_ended(&workspace, "thread-key", 42, 77)
             .await
