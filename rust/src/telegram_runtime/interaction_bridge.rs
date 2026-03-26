@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use teloxide::Bot;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::requests::Requester;
@@ -7,6 +8,10 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::collaboration_mode::CollaborationMode;
+use crate::delivery_bus::{
+    ClaimStatus, DeliveryAttempt, DeliveryBusCoordinator, DeliveryChannel, DeliveryClaim,
+    DeliveryKind, provisional_key_for_request, provisional_key_for_text,
+};
 use crate::interactive::InteractiveRequestRegistry;
 use crate::repository::ThreadRepository;
 use crate::runtime_interaction::{
@@ -22,6 +27,7 @@ use super::{
 pub(crate) fn spawn_telegram_interaction_bridge(
     bot_token: String,
     repository: ThreadRepository,
+    delivery_bus: DeliveryBusCoordinator,
     registry: InteractiveRequestRegistry,
 ) -> RuntimeInteractionSender {
     let (sender, mut receiver) = mpsc::unbounded_channel();
@@ -29,7 +35,7 @@ pub(crate) fn spawn_telegram_interaction_bridge(
     tokio::spawn(async move {
         while let Some(event) = receiver.recv().await {
             if let Err(error) =
-                handle_runtime_interaction(&bot, &repository, &registry, event).await
+                handle_runtime_interaction(&bot, &repository, &delivery_bus, &registry, event).await
             {
                 warn!(event = "telegram.interaction_bridge.failed", error = %error);
             }
@@ -41,18 +47,19 @@ pub(crate) fn spawn_telegram_interaction_bridge(
 async fn handle_runtime_interaction(
     bot: &Bot,
     repository: &ThreadRepository,
+    delivery_bus: &DeliveryBusCoordinator,
     registry: &InteractiveRequestRegistry,
     event: RuntimeInteractionEvent,
 ) -> Result<()> {
     match event {
         RuntimeInteractionEvent::RequestUserInput(request) => {
-            handle_request_user_input(bot, repository, registry, request).await
+            handle_request_user_input(bot, repository, delivery_bus, registry, request).await
         }
         RuntimeInteractionEvent::RequestResolved(resolved) => {
             handle_request_resolved(bot, registry, resolved).await
         }
         RuntimeInteractionEvent::TurnCompleted(summary) => {
-            handle_turn_completed(bot, repository, summary).await
+            handle_turn_completed(bot, repository, delivery_bus, summary).await
         }
     }
 }
@@ -60,6 +67,7 @@ async fn handle_runtime_interaction(
 async fn handle_request_user_input(
     bot: &Bot,
     repository: &ThreadRepository,
+    delivery_bus: &DeliveryBusCoordinator,
     registry: &InteractiveRequestRegistry,
     request: RuntimeInteractionRequest,
 ) -> Result<()> {
@@ -80,15 +88,32 @@ async fn handle_request_user_input(
     let Some(telegram_thread_id) = record.metadata.message_thread_id else {
         return Ok(());
     };
+    let thread_key = request.thread_key.clone();
     let snapshot = registry
         .register_tui(
             record.metadata.chat_id,
             telegram_thread_id,
-            request.thread_key,
+            thread_key.clone(),
             request.request_id,
             request.params,
         )
         .await?;
+    let provisional_key =
+        provisional_key_for_request(&snapshot.thread_id, snapshot.request_id, &snapshot.item_id);
+    let claim = delivery_bus
+        .claim_delivery(DeliveryClaim {
+            thread_key: thread_key.clone(),
+            session_id: snapshot.thread_id.clone(),
+            turn_id: Some(snapshot.turn_id.clone()),
+            provisional_key: Some(provisional_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::RequestUserInputPrompt,
+            owner: "interaction_bridge".to_owned(),
+        })
+        .await?;
+    if matches!(claim, ClaimStatus::Existing(_)) {
+        return Ok(());
+    }
     let text = render_request_user_input_prompt(&snapshot);
     let chat_id = ChatId(record.metadata.chat_id);
     let thread_id = ThreadId(MessageId(telegram_thread_id));
@@ -101,6 +126,26 @@ async fn handle_request_user_input(
         };
     registry
         .set_prompt_message_id(record.metadata.chat_id, telegram_thread_id, sent.id.0)
+        .await;
+    let _ = delivery_bus
+        .commit_delivery(DeliveryAttempt {
+            thread_key,
+            session_id: snapshot.thread_id,
+            turn_id: Some(snapshot.turn_id),
+            provisional_key: Some(provisional_key),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::RequestUserInputPrompt,
+            executor: "telegram_interaction_bridge".to_owned(),
+            transport_ref: Some(format!("message:{}", sent.id.0)),
+            report_json: serde_json::json!({
+                "targets": [{
+                    "type": "telegram_message",
+                    "target_ref": format!("chat:{}/thread:{}", record.metadata.chat_id, telegram_thread_id),
+                    "state": "committed",
+                    "transport_ref": format!("message:{}", sent.id.0),
+                }]
+            }),
+        })
         .await;
     Ok(())
 }
@@ -131,9 +176,9 @@ async fn handle_request_resolved(
 async fn handle_turn_completed(
     bot: &Bot,
     repository: &ThreadRepository,
+    delivery_bus: &DeliveryBusCoordinator,
     summary: TurnCompletionSummary,
 ) -> Result<()> {
-    let _ = summary.final_text.as_deref();
     if summary.collaboration_mode != CollaborationMode::Plan || !summary.has_plan {
         return Ok(());
     }
@@ -146,11 +191,62 @@ async fn handle_turn_completed(
     let Some(telegram_thread_id) = record.metadata.message_thread_id else {
         return Ok(());
     };
+    let session_id = repository
+        .read_session_binding(&record)
+        .await?
+        .and_then(|binding| binding.current_codex_thread_id)
+        .unwrap_or_default();
+    if session_id.trim().is_empty() {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let provisional_key = provisional_key_for_text(
+        &session_id,
+        DeliveryKind::SystemNotice,
+        summary
+            .final_text
+            .as_deref()
+            .unwrap_or("plan_implementation_prompt"),
+        &now,
+    );
+    let claim = delivery_bus
+        .claim_delivery(DeliveryClaim {
+            thread_key: summary.thread_key.clone(),
+            session_id: session_id.clone(),
+            turn_id: None,
+            provisional_key: Some(provisional_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::SystemNotice,
+            owner: "interaction_bridge".to_owned(),
+        })
+        .await?;
+    if matches!(claim, ClaimStatus::Existing(_)) {
+        return Ok(());
+    }
     send_plan_implementation_prompt(
         bot,
         ChatId(record.metadata.chat_id),
         ThreadId(MessageId(telegram_thread_id)),
     )
     .await?;
+    let _ = delivery_bus
+        .commit_delivery(DeliveryAttempt {
+            thread_key: summary.thread_key,
+            session_id,
+            turn_id: None,
+            provisional_key: Some(provisional_key),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::SystemNotice,
+            executor: "telegram_interaction_bridge".to_owned(),
+            transport_ref: None,
+            report_json: serde_json::json!({
+                "targets": [{
+                    "type": "telegram_plan_prompt",
+                    "target_ref": format!("chat:{}/thread:{}", record.metadata.chat_id, telegram_thread_id),
+                    "state": "committed",
+                }]
+            }),
+        })
+        .await;
     Ok(())
 }

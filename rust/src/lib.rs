@@ -4,6 +4,7 @@ pub mod bot_runner;
 pub mod codex;
 pub mod collaboration_mode;
 pub mod config;
+pub mod delivery_bus;
 pub mod execution_mode;
 pub mod hcodex_ingress;
 pub mod hcodex_runtime;

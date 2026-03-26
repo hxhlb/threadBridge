@@ -10,6 +10,10 @@ use tracing::{info, warn};
 
 use super::preview::TurnPreviewController;
 use super::*;
+use crate::delivery_bus::{
+    ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
+    provisional_key_for_text,
+};
 use crate::repository::{
     ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
     TranscriptMirrorPhase, TranscriptMirrorRole,
@@ -621,14 +625,60 @@ async fn sync_local_transcript_mirrors_once(
                         && entry.delivery == TranscriptMirrorDelivery::Final
                         && let Some(message_thread_id) = owner_record.metadata.message_thread_id
                     {
-                        send_scoped_role_message(
-                            bot,
-                            ChatId(owner_record.metadata.chat_id),
-                            Some(thread_id_from_i32(message_thread_id)),
-                            TelegramTextRole::User,
+                        let provisional_key = provisional_key_for_text(
+                            &entry.session_id,
+                            DeliveryKind::UserEcho,
                             &entry.text,
-                        )
-                        .await?;
+                            &event.occurred_at,
+                        );
+                        let claim = state
+                            .control
+                            .delivery_bus
+                            .claim_delivery(DeliveryClaim {
+                                thread_key: owner_record.metadata.thread_key.clone(),
+                                session_id: entry.session_id.clone(),
+                                turn_id: None,
+                                provisional_key: Some(provisional_key.clone()),
+                                channel: DeliveryChannel::Telegram,
+                                kind: DeliveryKind::UserEcho,
+                                owner: "status_sync".to_owned(),
+                            })
+                            .await?;
+                        if matches!(claim, ClaimStatus::Claimed(_)) {
+                            send_scoped_role_message(
+                                bot,
+                                ChatId(owner_record.metadata.chat_id),
+                                Some(thread_id_from_i32(message_thread_id)),
+                                TelegramTextRole::User,
+                                &entry.text,
+                            )
+                            .await?;
+                            let _ = state
+                                .control
+                                .delivery_bus
+                                .commit_delivery(DeliveryAttempt {
+                                    thread_key: owner_record.metadata.thread_key.clone(),
+                                    session_id: entry.session_id.clone(),
+                                    turn_id: None,
+                                    provisional_key: Some(provisional_key),
+                                    channel: DeliveryChannel::Telegram,
+                                    kind: DeliveryKind::UserEcho,
+                                    executor: "telegram_status_sync".to_owned(),
+                                    transport_ref: None,
+                                    report_json: serde_json::json!({
+                                        "targets": [{
+                                            "type": "telegram_user_echo",
+                                            "target_ref": format!(
+                                                "chat:{}/thread:{}",
+                                                owner_record.metadata.chat_id,
+                                                message_thread_id
+                                            ),
+                                            "state": "committed",
+                                        }]
+                                    }),
+                                })
+                                .await;
+                        }
                     }
                     continue;
                 }
@@ -697,22 +747,75 @@ async fn sync_local_transcript_mirrors_once(
                     && entry.delivery == TranscriptMirrorDelivery::Final
                     && let Some(message_thread_id) = owner_record.metadata.message_thread_id
                 {
-                    ensure_mirror_preview(
-                        mirror_previews,
-                        bot,
-                        state,
-                        &owner_record,
-                        message_thread_id,
-                    )
-                    .complete(&entry.text)
-                    .await;
-                    super::final_reply::send_final_assistant_reply(
-                        bot,
-                        &owner_record,
-                        Some(thread_id_from_i32(message_thread_id)),
-                        &entry.text,
-                    )
-                    .await?;
+                    let turn_id = event
+                        .payload
+                        .get("turn-id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    let provisional_key = turn_id.as_ref().is_none().then(|| {
+                        provisional_key_for_text(
+                            &entry.session_id,
+                            DeliveryKind::AssistantFinal,
+                            &entry.text,
+                            &event.occurred_at,
+                        )
+                    });
+                    let claim = state
+                        .control
+                        .delivery_bus
+                        .claim_delivery(DeliveryClaim {
+                            thread_key: owner_record.metadata.thread_key.clone(),
+                            session_id: entry.session_id.clone(),
+                            turn_id: turn_id.clone(),
+                            provisional_key: provisional_key.clone(),
+                            channel: DeliveryChannel::Telegram,
+                            kind: DeliveryKind::AssistantFinal,
+                            owner: "status_sync".to_owned(),
+                        })
+                        .await?;
+                    if matches!(claim, ClaimStatus::Claimed(_)) {
+                        ensure_mirror_preview(
+                            mirror_previews,
+                            bot,
+                            state,
+                            &owner_record,
+                            message_thread_id,
+                        )
+                        .complete(&entry.text)
+                        .await;
+                        super::final_reply::send_final_assistant_reply(
+                            bot,
+                            &owner_record,
+                            Some(thread_id_from_i32(message_thread_id)),
+                            &entry.text,
+                        )
+                        .await?;
+                        let _ = state
+                            .control
+                            .delivery_bus
+                            .commit_delivery(DeliveryAttempt {
+                                thread_key: owner_record.metadata.thread_key.clone(),
+                                session_id: entry.session_id.clone(),
+                                turn_id,
+                                provisional_key,
+                                channel: DeliveryChannel::Telegram,
+                                kind: DeliveryKind::AssistantFinal,
+                                executor: "telegram_status_sync".to_owned(),
+                                transport_ref: None,
+                                report_json: serde_json::json!({
+                                    "targets": [{
+                                        "type": "telegram_assistant_final",
+                                        "target_ref": format!(
+                                            "chat:{}/thread:{}",
+                                            owner_record.metadata.chat_id,
+                                            message_thread_id
+                                        ),
+                                        "state": "committed",
+                                    }]
+                                }),
+                            })
+                            .await;
+                    }
                 }
             }
         }

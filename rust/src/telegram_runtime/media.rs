@@ -13,6 +13,10 @@ use super::final_reply::{compose_visible_final_reply, send_final_assistant_reply
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::status_sync;
 use super::*;
+use crate::delivery_bus::{
+    ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
+    provisional_key_for_outbox,
+};
 use crate::execution_mode::workspace_execution_mode;
 use crate::image_artifacts::PendingImageBatch;
 use crate::tool_results::TelegramDeliverySurface;
@@ -336,6 +340,11 @@ pub(crate) async fn dispatch_workspace_telegram_outbox(
     let Some(binding) = session.as_ref() else {
         return Ok(());
     };
+    let session_id = binding
+        .current_codex_thread_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unbound".to_owned());
     let workspace_path = workspace_path_from_binding(binding)?;
     let Some(outbox) = read_telegram_outbox(&workspace_path).await? else {
         return Ok(());
@@ -346,53 +355,167 @@ pub(crate) async fn dispatch_workspace_telegram_outbox(
     }
 
     for item in &outbox.items {
-        match item {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let (kind, descriptor) = match item {
             TelegramOutboxItem::Text { text, surface } => {
-                send_scoped_system_message_with_intent(
-                    bot,
-                    ChatId(record.metadata.chat_id),
-                    Some(thread_id),
-                    match surface {
-                        TelegramDeliverySurface::Status => TelegramSystemIntent::Warning,
-                        _ => TelegramSystemIntent::Info,
-                    },
-                    text.clone(),
-                )
-                .await?;
+                (DeliveryKind::OutboxText, format!("text:{surface:?}:{text}"))
             }
+            TelegramOutboxItem::Photo { path, surface, .. } => (
+                DeliveryKind::OutboxMedia,
+                format!("photo:{surface:?}:{path}"),
+            ),
+            TelegramOutboxItem::Document { path, surface, .. } => (
+                DeliveryKind::OutboxMedia,
+                format!("document:{surface:?}:{path}"),
+            ),
+        };
+        let provisional_key = provisional_key_for_outbox(&session_id, kind, &descriptor, &now);
+        let claim = state
+            .control
+            .delivery_bus
+            .claim_delivery(DeliveryClaim {
+                thread_key: record.metadata.thread_key.clone(),
+                session_id: session_id.clone(),
+                turn_id: None,
+                provisional_key: Some(provisional_key.clone()),
+                channel: DeliveryChannel::Telegram,
+                kind,
+                owner: "telegram_outbox".to_owned(),
+            })
+            .await?;
+        if matches!(claim, ClaimStatus::Existing(_)) {
+            continue;
+        }
+        let result = match item {
+            TelegramOutboxItem::Text { text, surface } => send_scoped_system_message_with_intent(
+                bot,
+                ChatId(record.metadata.chat_id),
+                Some(thread_id),
+                match surface {
+                    TelegramDeliverySurface::Status => TelegramSystemIntent::Warning,
+                    _ => TelegramSystemIntent::Info,
+                },
+                text.clone(),
+            )
+            .await
+            .map(|_| {
+                serde_json::json!({
+                    "targets": [{
+                        "type": "telegram_outbox_text",
+                        "target_ref": format!(
+                            "chat:{}/thread:{}",
+                            record.metadata.chat_id,
+                            thread_id.0.0
+                        ),
+                        "state": "committed",
+                        "surface": format!("{surface:?}"),
+                    }]
+                })
+            })
+            .map_err(anyhow::Error::from),
             TelegramOutboxItem::Photo {
                 path,
                 caption,
                 surface,
-            } => {
-                dispatch_outbox_file_item(
-                    bot,
-                    record,
-                    thread_id,
-                    &workspace_path,
-                    path,
-                    caption.as_ref(),
-                    *surface,
-                    OutboxFileKind::Photo,
-                )
-                .await?;
-            }
+            } => dispatch_outbox_file_item(
+                bot,
+                record,
+                thread_id,
+                &workspace_path,
+                path,
+                caption.as_ref(),
+                *surface,
+                OutboxFileKind::Photo,
+            )
+            .await
+            .map(|_| {
+                serde_json::json!({
+                    "targets": [{
+                        "type": "telegram_outbox_photo",
+                        "target_ref": format!(
+                            "chat:{}/thread:{}",
+                            record.metadata.chat_id,
+                            thread_id.0.0
+                        ),
+                        "state": "committed",
+                        "path": path,
+                    }]
+                })
+            }),
             TelegramOutboxItem::Document {
                 path,
                 caption,
                 surface,
-            } => {
-                dispatch_outbox_file_item(
-                    bot,
-                    record,
-                    thread_id,
-                    &workspace_path,
-                    path,
-                    caption.as_ref(),
-                    *surface,
-                    OutboxFileKind::Document,
-                )
-                .await?;
+            } => dispatch_outbox_file_item(
+                bot,
+                record,
+                thread_id,
+                &workspace_path,
+                path,
+                caption.as_ref(),
+                *surface,
+                OutboxFileKind::Document,
+            )
+            .await
+            .map(|_| {
+                serde_json::json!({
+                    "targets": [{
+                        "type": "telegram_outbox_document",
+                        "target_ref": format!(
+                            "chat:{}/thread:{}",
+                            record.metadata.chat_id,
+                            thread_id.0.0
+                        ),
+                        "state": "committed",
+                        "path": path,
+                    }]
+                })
+            }),
+        };
+        match result {
+            Ok(report_json) => {
+                let _ = state
+                    .control
+                    .delivery_bus
+                    .commit_delivery(DeliveryAttempt {
+                        thread_key: record.metadata.thread_key.clone(),
+                        session_id: session_id.clone(),
+                        turn_id: None,
+                        provisional_key: Some(provisional_key),
+                        channel: DeliveryChannel::Telegram,
+                        kind,
+                        executor: "telegram_outbox".to_owned(),
+                        transport_ref: None,
+                        report_json,
+                    })
+                    .await;
+            }
+            Err(error) => {
+                let _ = state
+                    .control
+                    .delivery_bus
+                    .fail_delivery(
+                        DeliveryAttempt {
+                            thread_key: record.metadata.thread_key.clone(),
+                            session_id: session_id.clone(),
+                            turn_id: None,
+                            provisional_key: Some(provisional_key),
+                            channel: DeliveryChannel::Telegram,
+                            kind,
+                            executor: "telegram_outbox".to_owned(),
+                            transport_ref: None,
+                            report_json: serde_json::json!({
+                                "targets": [{
+                                    "type": "telegram_outbox",
+                                    "state": "failed",
+                                    "descriptor": descriptor,
+                                }]
+                            }),
+                        },
+                        error.to_string(),
+                    )
+                    .await;
+                return Err(error);
             }
         }
     }

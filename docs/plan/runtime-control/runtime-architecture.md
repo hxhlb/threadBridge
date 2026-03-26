@@ -7,10 +7,11 @@
 目前代碼中已成立的部分：
 
 - `desktop runtime owner` 已是 machine-level runtime authority
-- shared `runtime_control` 已承接 workspace runtime、session bind/new/repair、與 Telegram-to-live-TUI routing
+- shared `runtime_control` 已承接 workspace runtime、session bind/new/repair、Telegram-to-live-TUI routing，並新增 shared `DeliveryBusCoordinator` 子域
 - `app-server observer` 已承接 read-side projection 與 adapter-neutral interaction event
 - `hcodex` 已是 owner-managed local entrypoint，而不是獨立 runtime owner
 - Telegram adapter 與本地 management / desktop surface 已形成兩條不同的 adapter / surface 路徑
+- Telegram 離散輸出的 claim / commit / fail 與 duplicate delivery 收斂，已回到 shared delivery registry，而不是由 mirror append 結果決定
 
 目前尚未完成的部分：
 
@@ -87,6 +88,8 @@
 - workspace runtime control-path preparation
 - session bind / verify / new / repair
 - Telegram 對 live TUI session 的 routing
+- shared delivery coordination
+- `DeliveryBusCoordinator` 的 per-turn / per-channel delivery arbitration、durable registry、與 delivery event broadcast
 - 供 Telegram 與 management surface 共用的 workspace/session control semantics
 
 不負責：
@@ -149,12 +152,14 @@
 - Telegram preview / final reply / delivery surface
 - Telegram interaction UI
 - 把 Telegram 輸入與 UI 映射到 shared runtime semantics
+- 在真正 transport 前先向 shared delivery coordination claim，並在送出後回寫 commit / fail
 
 不負責：
 
 - runtime authority
 - 重新定義 session / workspace / state semantics
 - 擁有自己的 canonical control vocabulary
+- 決定 canonical delivery truth
 
 常見誤用：
 
@@ -186,6 +191,10 @@
 
 - `runtime_protocol`
   - 共享語言，不是 actor
+- `DeliveryBusCoordinator` / `delivery` / `delivery attempt`
+  - shared runtime capability 與 artifact，不是新的 canonical actor
+- `delivery_attempt.report_json.targets[]`
+  - sink-specific execution detail，不是 shared delivery identity
 - `repository` / `workspace_status`
   - state surface / persistence lane，不是 actor
 - workspace app-server、`.threadbridge/`、tool executors
@@ -195,13 +204,16 @@
 
 - `desktop runtime owner` 擁有 machine-level runtime health authority；其他 surface 可以觀測它，不應替代它。
 - `runtime_control` 是 shared write-side 邊界；adapter / surface 應優先透過它表達 control semantics，而不是各自直連底層細節。
+- `DeliveryBusCoordinator` 是 shared `runtime_control` 的正式子域；所有對外正式輸出都應先經過 claim，再由 sink transport 後 commit / fail。
 - `app-server observer` 是 shared read-side projection 邊界；它可以發出 adapter-neutral interaction event，但不應承擔平台專屬呈現。
+- `transcript-mirror`、`runtime-observer` 與其他 raw mirror lane 仍是 observation surface，不應承擔 canonical delivery truth。
 - `hcodex` 只擁有 local entrypoint / child lifecycle authority；任何 canonical continuity mutation 仍應回到 shared runtime semantics。
 - Telegram adapter 與 management / desktop surface 都是 consumer / presenter；它們可消費共享 view / event，也可觸發 control action，但不是 capability owner。
 
 ## 禁止事項
 
 - 不把 Telegram renderer、callback handling、delivery policy 拉回 observer 或 control core。
+- 不把 mirror append、observer event、或 sink-specific transport helper 視為 delivery truth。
 - 不把 management API transport helper 或 surface view 型別當成 Telegram adapter 的內部共享模型。
 - 不把 `hcodex` ingress、launch bridge、或 local reconnect path 當成 runtime authority。
 - 不以「先修再說」的理由，把 bug 修在跨層捷徑上，而不先判定 owner role。
@@ -253,6 +265,7 @@
 
 - 不複製 temporary exception
 - 不把 compatibility shim 誤升格成 canonical architecture
+- 不把 durable delivery registry 與 event bus 的邊界混回 raw observation lane
 - 不以歷史上 CLI 模型曾經有效，作為現在 cross-layer fix 的正當性
 
 ## 開放問題

@@ -15,16 +15,20 @@ use super::status_sync;
 use super::*;
 use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
 use crate::collaboration_mode::CollaborationMode;
+use crate::delivery_bus::{
+    ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
+    provisional_key_for_text,
+};
 use crate::execution_mode::{
     ExecutionMode, workspace_execution_mode, write_workspace_execution_config,
 };
 use crate::local_control::{TelegramControlBridgeHandle, resolve_workspace_argument};
+use crate::process_transcript::process_entry_from_codex_event;
 use crate::runtime_control::{
     HcodexLaunchConfigView, WorkspaceExecutionModeView, hcodex_launch_command,
     launch_hcodex_via_terminal, workspace_execution_mode_view_for_record,
     workspace_launch_config_for_record as shared_workspace_launch_config_for_record,
 };
-use crate::process_transcript::process_entry_from_codex_event;
 use crate::runtime_protocol::{
     WorkingSessionRecordKind, WorkingSessionRecordView, WorkingSessionSummaryView,
     build_working_session_records, build_working_session_summaries,
@@ -361,8 +365,9 @@ pub(crate) async fn run_command(
             {
                 Ok(crate::runtime_control::WorkspaceAddResolution::Existing(record)) => {
                     let binding = state.repository.read_session_binding(&record).await?;
-                    if let Some(workspace_cwd) =
-                        binding.as_ref().and_then(|binding| binding.workspace_cwd.as_deref())
+                    if let Some(workspace_cwd) = binding
+                        .as_ref()
+                        .and_then(|binding| binding.workspace_cwd.as_deref())
                     {
                         let _ = bridge
                             .notify_workspace_bound(
@@ -1430,6 +1435,53 @@ pub(crate) async fn run_text_message(
             },
         )
         .await?;
+    let prompt_occurred_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let user_echo_key = provisional_key_for_text(
+        existing_thread_id,
+        DeliveryKind::UserEcho,
+        text,
+        &prompt_occurred_at,
+    );
+    let _ = state
+        .control
+        .delivery_bus
+        .claim_delivery(DeliveryClaim {
+            thread_key: record.metadata.thread_key.clone(),
+            session_id: existing_thread_id.to_owned(),
+            turn_id: None,
+            provisional_key: Some(user_echo_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::UserEcho,
+            owner: "telegram_thread_flow".to_owned(),
+        })
+        .await?;
+    let _ = state
+        .control
+        .delivery_bus
+        .commit_delivery(DeliveryAttempt {
+            thread_key: record.metadata.thread_key.clone(),
+            session_id: existing_thread_id.to_owned(),
+            turn_id: None,
+            provisional_key: Some(user_echo_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::UserEcho,
+            executor: "telegram_inbound".to_owned(),
+            transport_ref: Some(format!("message:{}", msg.id.0)),
+            report_json: serde_json::json!({
+                "targets": [{
+                    "type": "telegram_inbound_message",
+                    "target_ref": format!(
+                        "chat:{}/thread:{}",
+                        record.metadata.chat_id,
+                        thread_id_to_i32(thread_id)
+                    ),
+                    "state": "committed",
+                    "transport_ref": format!("message:{}", msg.id.0),
+                }]
+            }),
+        })
+        .await;
     record_bot_status_event(
         &workspace_path,
         "bot_turn_started",
@@ -1447,6 +1499,7 @@ pub(crate) async fn run_text_message(
         thread_id,
         workspace_path,
         existing_thread_id.to_owned(),
+        user_echo_key,
         text.to_owned(),
         collaboration_mode_for_session(session.as_ref()),
     );
@@ -1462,6 +1515,7 @@ fn spawn_text_turn(
     thread_id: ThreadId,
     workspace_path: PathBuf,
     existing_thread_id: String,
+    user_echo_key: String,
     text: String,
     collaboration_mode: CollaborationMode,
 ) {
@@ -1474,6 +1528,7 @@ fn spawn_text_turn(
             thread_id,
             workspace_path,
             &existing_thread_id,
+            &user_echo_key,
             &text,
             collaboration_mode,
         )
@@ -1505,6 +1560,7 @@ async fn execute_text_turn(
     thread_id: ThreadId,
     workspace_path: PathBuf,
     existing_thread_id: &str,
+    user_echo_key: &str,
     text: &str,
     collaboration_mode: CollaborationMode,
 ) -> Result<()> {
@@ -1528,6 +1584,10 @@ async fn execute_text_turn(
     let mirror_session_id = existing_thread_id.to_owned();
     let turn_workspace_path = workspace_path.clone();
     let turn_session_id = existing_thread_id.to_owned();
+    let user_turn_key = user_echo_key.to_owned();
+    let delivery_bus = state.control.delivery_bus.clone();
+    let turn_id_slot = Arc::new(Mutex::new(None::<String>));
+    let event_turn_id_slot = turn_id_slot.clone();
     let execution_mode = workspace_execution_mode(&workspace_path).await?;
     let interactive_bot = bot.clone();
     let interactive_state = state.clone();
@@ -1548,11 +1608,15 @@ async fn execute_text_turn(
                 let mirror_session_id = mirror_session_id.clone();
                 let turn_workspace_path = turn_workspace_path.clone();
                 let turn_session_id = turn_session_id.clone();
+                let delivery_bus = delivery_bus.clone();
+                let user_turn_key = user_turn_key.clone();
+                let turn_id_slot = event_turn_id_slot.clone();
                 async move {
                     if let CodexThreadEvent::TurnStarted {
                         turn_id: Some(turn_id),
                     } = &event
                     {
+                        *turn_id_slot.lock().await = Some(turn_id.clone());
                         let _ = record_bot_status_event(
                             &turn_workspace_path,
                             "bot_turn_started",
@@ -1561,6 +1625,16 @@ async fn execute_text_turn(
                             None,
                         )
                         .await;
+                        let _ = delivery_bus
+                            .promote_delivery_turn(
+                                &mirror_record.metadata.thread_key,
+                                &turn_session_id,
+                                &user_turn_key,
+                                DeliveryChannel::Telegram,
+                                DeliveryKind::UserEcho,
+                                turn_id,
+                            )
+                            .await;
                     }
                     preview.lock().await.consume(&event).await;
                     if let Some(entry) = process_entry_from_codex_event(
@@ -1640,6 +1714,17 @@ async fn execute_text_turn(
                 .update_session_execution_snapshot(record, &result.execution)
                 .await?;
             if let Some(final_text) = visible_final_text.as_deref() {
+                let final_turn_id = turn_id_slot.lock().await.clone();
+                let final_occurred_at =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let final_provisional_key = final_turn_id.as_ref().is_none().then(|| {
+                    provisional_key_for_text(
+                        existing_thread_id,
+                        DeliveryKind::AssistantFinal,
+                        final_text,
+                        &final_occurred_at,
+                    )
+                });
                 state
                     .repository
                     .append_log(&record, LogDirection::Assistant, final_text, None)
@@ -1660,12 +1745,126 @@ async fn execute_text_turn(
                         },
                     )
                     .await?;
-                if !preview.lock().await.complete(final_text).await {
-                    send_final_assistant_reply(bot, &record, Some(thread_id), final_text).await?;
+                let final_claim = state
+                    .control
+                    .delivery_bus
+                    .claim_delivery(DeliveryClaim {
+                        thread_key: record.metadata.thread_key.clone(),
+                        session_id: existing_thread_id.to_owned(),
+                        turn_id: final_turn_id.clone(),
+                        provisional_key: final_provisional_key.clone(),
+                        channel: DeliveryChannel::Telegram,
+                        kind: DeliveryKind::AssistantFinal,
+                        owner: "telegram_thread_flow".to_owned(),
+                    })
+                    .await?;
+                let preview_completed = preview.lock().await.complete(final_text).await;
+                if matches!(final_claim, ClaimStatus::Claimed(_)) {
+                    if !preview_completed
+                        && let Err(error) =
+                            send_final_assistant_reply(bot, &record, Some(thread_id), final_text)
+                                .await
+                    {
+                        let _ = state
+                            .control
+                            .delivery_bus
+                            .fail_delivery(
+                                DeliveryAttempt {
+                                    thread_key: record.metadata.thread_key.clone(),
+                                    session_id: existing_thread_id.to_owned(),
+                                    turn_id: final_turn_id.clone(),
+                                    provisional_key: final_provisional_key.clone(),
+                                    channel: DeliveryChannel::Telegram,
+                                    kind: DeliveryKind::AssistantFinal,
+                                    executor: "telegram_thread_flow".to_owned(),
+                                    transport_ref: None,
+                                    report_json: serde_json::json!({ "targets": [] }),
+                                },
+                                error.to_string(),
+                            )
+                            .await;
+                        return Err(error.into());
+                    }
+                    let _ = state
+                        .control
+                        .delivery_bus
+                        .commit_delivery(DeliveryAttempt {
+                            thread_key: record.metadata.thread_key.clone(),
+                            session_id: existing_thread_id.to_owned(),
+                            turn_id: final_turn_id.clone(),
+                            provisional_key: final_provisional_key.clone(),
+                            channel: DeliveryChannel::Telegram,
+                            kind: DeliveryKind::AssistantFinal,
+                            executor: "telegram_thread_flow".to_owned(),
+                            transport_ref: None,
+                            report_json: serde_json::json!({
+                                "targets": [{
+                                    "type": "telegram_assistant_final",
+                                    "target_ref": format!(
+                                        "chat:{}/thread:{}",
+                                        record.metadata.chat_id,
+                                        thread_id_to_i32(thread_id)
+                                    ),
+                                    "state": "committed",
+                                    "preview_completed": preview_completed,
+                                }]
+                            }),
+                        })
+                        .await;
                 }
             }
             if collaboration_mode == CollaborationMode::Plan && result.final_plan_text.is_some() {
-                send_plan_implementation_prompt(bot, chat_id, thread_id).await?;
+                let plan_prompt_at =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let plan_key = provisional_key_for_text(
+                    existing_thread_id,
+                    DeliveryKind::SystemNotice,
+                    visible_final_text
+                        .as_deref()
+                        .unwrap_or("plan_implementation_prompt"),
+                    &plan_prompt_at,
+                );
+                let plan_claim = state
+                    .control
+                    .delivery_bus
+                    .claim_delivery(DeliveryClaim {
+                        thread_key: record.metadata.thread_key.clone(),
+                        session_id: existing_thread_id.to_owned(),
+                        turn_id: turn_id_slot.lock().await.clone(),
+                        provisional_key: Some(plan_key.clone()),
+                        channel: DeliveryChannel::Telegram,
+                        kind: DeliveryKind::SystemNotice,
+                        owner: "telegram_thread_flow".to_owned(),
+                    })
+                    .await?;
+                if matches!(plan_claim, ClaimStatus::Claimed(_)) {
+                    send_plan_implementation_prompt(bot, chat_id, thread_id).await?;
+                    let _ = state
+                        .control
+                        .delivery_bus
+                        .commit_delivery(DeliveryAttempt {
+                            thread_key: record.metadata.thread_key.clone(),
+                            session_id: existing_thread_id.to_owned(),
+                            turn_id: turn_id_slot.lock().await.clone(),
+                            provisional_key: Some(plan_key),
+                            channel: DeliveryChannel::Telegram,
+                            kind: DeliveryKind::SystemNotice,
+                            executor: "telegram_thread_flow".to_owned(),
+                            transport_ref: None,
+                            report_json: serde_json::json!({
+                                "targets": [{
+                                    "type": "telegram_plan_prompt",
+                                    "target_ref": format!(
+                                        "chat:{}/thread:{}",
+                                        record.metadata.chat_id,
+                                        thread_id_to_i32(thread_id)
+                                    ),
+                                    "state": "committed",
+                                }]
+                            }),
+                        })
+                        .await;
+                }
             }
             dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
         }
@@ -1788,6 +1987,52 @@ pub(crate) async fn launch_plan_implementation_turn(
             },
         )
         .await?;
+    let prompt_occurred_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let user_echo_key = provisional_key_for_text(
+        existing_thread_id,
+        DeliveryKind::UserEcho,
+        PLAN_IMPLEMENTATION_MESSAGE,
+        &prompt_occurred_at,
+    );
+    let _ = state
+        .control
+        .delivery_bus
+        .claim_delivery(DeliveryClaim {
+            thread_key: record.metadata.thread_key.clone(),
+            session_id: existing_thread_id.to_owned(),
+            turn_id: None,
+            provisional_key: Some(user_echo_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::UserEcho,
+            owner: "telegram_plan_callback".to_owned(),
+        })
+        .await?;
+    let _ = state
+        .control
+        .delivery_bus
+        .commit_delivery(DeliveryAttempt {
+            thread_key: record.metadata.thread_key.clone(),
+            session_id: existing_thread_id.to_owned(),
+            turn_id: None,
+            provisional_key: Some(user_echo_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::UserEcho,
+            executor: "telegram_plan_callback".to_owned(),
+            transport_ref: Some("callback:plan_implement".to_owned()),
+            report_json: serde_json::json!({
+                "targets": [{
+                    "type": "telegram_plan_callback",
+                    "target_ref": format!(
+                        "chat:{}/thread:{}",
+                        record.metadata.chat_id,
+                        thread_id_to_i32(thread_id)
+                    ),
+                    "state": "committed",
+                }]
+            }),
+        })
+        .await;
     record_bot_status_event(
         &workspace_path,
         "bot_turn_started",
@@ -1804,6 +2049,7 @@ pub(crate) async fn launch_plan_implementation_turn(
         thread_id,
         workspace_path,
         existing_thread_id.to_owned(),
+        user_echo_key,
         PLAN_IMPLEMENTATION_MESSAGE.to_owned(),
         CollaborationMode::Default,
     );
@@ -1813,9 +2059,9 @@ pub(crate) async fn launch_plan_implementation_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_workspace_launch_config,
-        LaunchCommandTarget, parse_execution_mode_argument, parse_launch_command_target,
-        persist_collaboration_mode_change, render_working_session_records, render_working_sessions,
+        LaunchCommandTarget, build_workspace_launch_config, parse_execution_mode_argument,
+        parse_launch_command_target, persist_collaboration_mode_change,
+        render_working_session_records, render_working_sessions,
     };
     use crate::collaboration_mode::CollaborationMode;
     use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
@@ -1970,6 +2216,9 @@ mod tests {
                     management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
                 },
                 repository: repository.clone(),
+                delivery_bus: crate::delivery_bus::DeliveryBusCoordinator::new(&root)
+                    .await
+                    .unwrap(),
                 codex: crate::codex::CodexRunner::new(None),
                 app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
                 hcodex_ingress: HcodexIngressManager::new(repository.clone()),
@@ -2062,6 +2311,9 @@ mod tests {
                     management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
                 },
                 repository: repository.clone(),
+                delivery_bus: crate::delivery_bus::DeliveryBusCoordinator::new(&root)
+                    .await
+                    .unwrap(),
                 codex: crate::codex::CodexRunner::new(None),
                 app_server_runtime: crate::app_server_runtime::WorkspaceRuntimeManager::new(),
                 hcodex_ingress: HcodexIngressManager::new(repository.clone()),

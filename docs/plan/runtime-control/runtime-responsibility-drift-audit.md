@@ -11,6 +11,7 @@
 - 已用 [runtime-architecture.md](runtime-architecture.md) 的 canonical role boundary 掃描 active code path
 - 已確認 4 個 responsibility drift 功能點
 - 其中 3 個已在 2026-03-26 進一步收斂回 shared runtime semantics
+- Telegram mirror / status_sync 與 direct path 的 duplicate delivery 已透過 shared `DeliveryBusCoordinator` 收回 shared runtime 子域
 - 目前仍維持 active drift 的，剩 observer final reply composition 這一項
 
 目前尚未完成的部分：
@@ -157,6 +158,7 @@
 - [runtime-architecture.md](runtime-architecture.md)
   - canonical role boundary 的主文檔
   - 本文不重新定義角色，只驗證 current code 在哪些功能點偏離它
+  - shared delivery coordination 現在已固定掛在 `runtime_control` 子域，而不是獨立 actor
 - [session-lifecycle.md](session-lifecycle.md)
   - 若 drift 牽涉 session bind / repair / adoption semantics，回看這份文檔理解正式語義
 - [telegram-adapter-migration.md](../telegram-adapter/telegram-adapter-migration.md)

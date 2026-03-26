@@ -10,6 +10,7 @@ use tracing::info;
 use crate::app_server_runtime::{WorkspaceRuntimeManager, WorkspaceRuntimeState};
 use crate::codex::{CodexRunner, CodexWorkspace};
 use crate::config::RuntimeConfig;
+use crate::delivery_bus::DeliveryBusCoordinator;
 use crate::execution_mode::{ExecutionMode, workspace_execution_mode};
 use crate::hcodex_ingress::HcodexIngressManager;
 use crate::repository::{
@@ -30,6 +31,7 @@ pub enum RuntimeOwnershipMode {
 pub struct RuntimeControlContext {
     pub runtime: RuntimeConfig,
     pub repository: ThreadRepository,
+    pub delivery_bus: DeliveryBusCoordinator,
     pub codex: CodexRunner,
     pub app_server_runtime: WorkspaceRuntimeManager,
     pub hcodex_ingress: HcodexIngressManager,
@@ -52,6 +54,7 @@ impl RuntimeControlContext {
                 .join("AGENTS.md"),
         )?;
         Ok(Self {
+            delivery_bus: DeliveryBusCoordinator::new(&runtime.data_root_path).await?,
             codex: CodexRunner::new(runtime.codex_model.clone()),
             repository,
             app_server_runtime,
@@ -192,11 +195,7 @@ impl SharedControlHandle {
         Ok(updated)
     }
 
-    pub async fn reject_tui_session(
-        &self,
-        thread_key: &str,
-        origin: &str,
-    ) -> Result<ThreadRecord> {
+    pub async fn reject_tui_session(&self, thread_key: &str, origin: &str) -> Result<ThreadRecord> {
         let record = self.active_thread(thread_key).await?;
         let updated = self.ctx.repository.clear_tui_adoption_state(record).await?;
         self.ctx
@@ -299,7 +298,10 @@ impl SharedControlHandle {
         workspace_execution_mode_view_for_repository(&self.ctx.repository, thread_key).await
     }
 
-    pub async fn workspace_launch_config(&self, thread_key: &str) -> Result<HcodexLaunchConfigView> {
+    pub async fn workspace_launch_config(
+        &self,
+        thread_key: &str,
+    ) -> Result<HcodexLaunchConfigView> {
         workspace_launch_config_for_repository(&self.ctx.repository, thread_key).await
     }
 

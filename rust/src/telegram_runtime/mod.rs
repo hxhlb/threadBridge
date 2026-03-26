@@ -11,6 +11,10 @@ use crate::app_server_runtime::WorkspaceRuntimeManager;
 pub(crate) use crate::codex::{CodexInputItem, CodexRunner, CodexThreadEvent};
 use crate::collaboration_mode::CollaborationMode;
 pub(crate) use crate::config::AppConfig;
+use crate::delivery_bus::{
+    ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
+    provisional_key_for_request,
+};
 use crate::hcodex_ingress::HcodexIngressManager;
 pub(crate) use crate::image_artifacts::{
     ImageAnalysisArtifact, ImageAnalysisImage, build_image_analysis_prompt,
@@ -30,7 +34,6 @@ use crate::thread_state::{
     resolve_thread_state_with_cache,
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
-pub(crate) use crate::workspace::validate_seed_template;
 pub(crate) use crate::workspace_status::{
     SessionCurrentStatus, WorkspaceStatusCache, read_session_status, record_bot_status_event,
 };
@@ -130,32 +133,24 @@ impl AppState {
         hcodex_ingress: HcodexIngressManager,
         runtime_ownership_mode: RuntimeOwnershipMode,
     ) -> Result<Self> {
-        let repository = ThreadRepository::open(&config.runtime.data_root_path).await?;
-        let seed_template_path = validate_seed_template(
-            &config
-                .runtime
-                .codex_working_directory
-                .join("templates")
-                .join("AGENTS.md"),
-        )?;
         let interactive_requests = InteractiveRequestRegistry::new();
+        let control = RuntimeControlContext::new(
+            config.runtime.clone(),
+            app_server_runtime,
+            hcodex_ingress.clone(),
+            runtime_ownership_mode,
+        )
+        .await?;
+        let repository = control.repository.clone();
         let interaction_sender = interaction_bridge::spawn_telegram_interaction_bridge(
             config.telegram.telegram_token.clone(),
             repository.clone(),
+            control.delivery_bus.clone(),
             interactive_requests.clone(),
         );
         hcodex_ingress
             .configure_interaction_sender(interaction_sender)
             .await;
-        let control = RuntimeControlContext {
-            runtime: config.runtime.clone(),
-            repository: repository.clone(),
-            codex: CodexRunner::new(config.runtime.codex_model.clone()),
-            app_server_runtime: app_server_runtime.clone(),
-            hcodex_ingress: hcodex_ingress.clone(),
-            seed_template_path: seed_template_path.clone(),
-            runtime_ownership_mode,
-        };
         Ok(Self {
             codex: CodexRunner::new(config.runtime.codex_model.clone()),
             hcodex_ingress,
@@ -708,6 +703,24 @@ pub(crate) async fn upsert_request_user_input_prompt(
         }
         return Ok(());
     }
+    let provisional_key =
+        provisional_key_for_request(&snapshot.thread_id, snapshot.request_id, &snapshot.item_id);
+    let claim = state
+        .control
+        .delivery_bus
+        .claim_delivery(DeliveryClaim {
+            thread_key: snapshot.thread_key.clone(),
+            session_id: snapshot.thread_id.clone(),
+            turn_id: Some(snapshot.turn_id.clone()),
+            provisional_key: Some(provisional_key.clone()),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::RequestUserInputPrompt,
+            owner: "telegram_runtime".to_owned(),
+        })
+        .await?;
+    if matches!(claim, ClaimStatus::Existing(_)) {
+        return Ok(());
+    }
     let request = bot.send_message(chat_id, text).message_thread_id(thread_id);
     let sent = if let Some(markup) = markup {
         request.reply_markup(markup).await?
@@ -717,6 +730,28 @@ pub(crate) async fn upsert_request_user_input_prompt(
     state
         .interactive_requests
         .set_prompt_message_id(chat_id.0, thread_id_to_i32(thread_id), sent.id.0)
+        .await;
+    let _ = state
+        .control
+        .delivery_bus
+        .commit_delivery(DeliveryAttempt {
+            thread_key: snapshot.thread_key.clone(),
+            session_id: snapshot.thread_id.clone(),
+            turn_id: Some(snapshot.turn_id.clone()),
+            provisional_key: Some(provisional_key),
+            channel: DeliveryChannel::Telegram,
+            kind: DeliveryKind::RequestUserInputPrompt,
+            executor: "telegram_runtime".to_owned(),
+            transport_ref: Some(format!("message:{}", sent.id.0)),
+            report_json: serde_json::json!({
+                "targets": [{
+                    "type": "telegram_request_user_input",
+                    "target_ref": format!("chat:{}/thread:{}", chat_id.0, thread_id_to_i32(thread_id)),
+                    "state": "committed",
+                    "transport_ref": format!("message:{}", sent.id.0),
+                }]
+            }),
+        })
         .await;
     Ok(())
 }
@@ -1309,6 +1344,9 @@ mod tests {
                     management_bind_addr: "127.0.0.1:38420".parse().unwrap(),
                 },
                 repository: repository.clone(),
+                delivery_bus: crate::delivery_bus::DeliveryBusCoordinator::new(&root)
+                    .await
+                    .unwrap(),
                 codex: CodexRunner::new(None),
                 app_server_runtime: WorkspaceRuntimeManager::new(),
                 hcodex_ingress: HcodexIngressManager::new(repository.clone()),
