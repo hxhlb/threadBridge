@@ -56,6 +56,11 @@ pub enum CodexThreadEvent {
         turn_id: Option<String>,
         usage: Option<Value>,
     },
+    #[serde(rename = "turn.interrupted")]
+    TurnInterrupted {
+        turn_id: Option<String>,
+        usage: Option<Value>,
+    },
     #[serde(rename = "turn.failed")]
     TurnFailed {
         turn_id: Option<String>,
@@ -75,10 +80,19 @@ pub enum CodexThreadEvent {
 pub struct CodexRunResult {
     pub final_response: String,
     pub final_plan_text: Option<String>,
+    pub turn_outcome: CodexTurnOutcome,
     pub selected_factory: String,
     pub thread_id: String,
     pub thread_id_changed: bool,
     pub execution: SessionExecutionSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexTurnOutcome {
+    Completed,
+    Interrupted,
+    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +114,7 @@ struct AppServerClient {
 struct TurnRunResult {
     final_response: String,
     final_plan_text: Option<String>,
+    outcome: CodexTurnOutcome,
 }
 
 #[derive(Debug)]
@@ -839,6 +854,7 @@ impl CodexRunner {
         Ok(CodexRunResult {
             final_response: turn_result.final_response,
             final_plan_text: turn_result.final_plan_text,
+            turn_outcome: turn_result.outcome,
             selected_factory: selected_factory.to_owned(),
             thread_id_changed: existing_thread_id.is_some_and(|id| id != binding.thread_id),
             thread_id: binding.thread_id,
@@ -872,16 +888,19 @@ impl CodexRunner {
             "turn/completed" => {
                 let turn = params.get("turn").cloned().unwrap_or(Value::Null);
                 let turn_id = turn.get("id").and_then(Value::as_str).map(str::to_owned);
-                if turn.get("status").and_then(Value::as_str) == Some("failed") {
-                    Ok(Some(CodexThreadEvent::TurnFailed {
+                match turn.get("status").and_then(Value::as_str) {
+                    Some("failed") => Ok(Some(CodexThreadEvent::TurnFailed {
                         turn_id,
                         error: turn.get("error").cloned().unwrap_or(Value::Null),
-                    }))
-                } else {
-                    Ok(Some(CodexThreadEvent::TurnCompleted {
+                    })),
+                    Some("interrupted") => Ok(Some(CodexThreadEvent::TurnInterrupted {
                         turn_id,
                         usage: turn.get("usage").cloned(),
-                    }))
+                    })),
+                    _ => Ok(Some(CodexThreadEvent::TurnCompleted {
+                        turn_id,
+                        usage: turn.get("usage").cloned(),
+                    })),
                 }
             }
             "error" => Ok(Some(CodexThreadEvent::Error {
@@ -1194,6 +1213,7 @@ impl CodexRunner {
 
         let mut request_acked = false;
         let mut turn_completed = false;
+        let mut turn_outcome = CodexTurnOutcome::Completed;
         let mut final_response = String::new();
         let mut latest_agent_message_by_id: HashMap<String, String> = HashMap::new();
         let mut latest_plan_by_id: HashMap<String, String> = HashMap::new();
@@ -1268,9 +1288,15 @@ impl CodexRunner {
                             }
                             CodexThreadEvent::TurnCompleted { .. } => {
                                 turn_completed = true;
+                                turn_outcome = CodexTurnOutcome::Completed;
+                            }
+                            CodexThreadEvent::TurnInterrupted { .. } => {
+                                turn_completed = true;
+                                turn_outcome = CodexTurnOutcome::Interrupted;
                             }
                             CodexThreadEvent::TurnFailed { error, .. } => {
                                 turn_completed = true;
+                                turn_outcome = CodexTurnOutcome::Failed;
                                 if !error.is_null() {
                                     final_response = error.to_string();
                                 }
@@ -1311,6 +1337,7 @@ impl CodexRunner {
         Ok(TurnRunResult {
             final_response,
             final_plan_text,
+            outcome: turn_outcome,
         })
     }
 
@@ -1632,6 +1659,32 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_turn_completed_notification_maps_to_interrupted_event() {
+        let event = CodexRunner::map_notification(
+            "turn/completed",
+            json!({
+                "turn": {
+                    "id": "turn_123",
+                    "status": "interrupted",
+                    "usage": {
+                        "totalTokens": 12
+                    }
+                }
+            }),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            event,
+            Some(CodexThreadEvent::TurnInterrupted {
+                turn_id: Some(ref turn_id),
+                ..
+            }) if turn_id == "turn_123"
+        ));
+    }
+
+    #[test]
     fn locked_thread_id_rejects_thread_drift() {
         let runner = CodexRunner::new(None);
         let result = runner.ensure_locked_thread_id(
@@ -1639,6 +1692,7 @@ mod tests {
             super::CodexRunResult {
                 final_response: "ok".to_owned(),
                 final_plan_text: None,
+                turn_outcome: super::CodexTurnOutcome::Completed,
                 selected_factory: "resumeThread".to_owned(),
                 thread_id: "thread-999".to_owned(),
                 thread_id_changed: true,

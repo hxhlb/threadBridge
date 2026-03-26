@@ -240,6 +240,10 @@ impl PreviewRenderer {
                 self.in_progress = false;
                 self.status = preview_status("Finalizing...");
             }
+            CodexThreadEvent::TurnInterrupted { .. } => {
+                self.in_progress = false;
+                self.status = preview_status("Stopped");
+            }
             CodexThreadEvent::TurnFailed { error, .. } => {
                 self.in_progress = false;
                 self.status = format!(

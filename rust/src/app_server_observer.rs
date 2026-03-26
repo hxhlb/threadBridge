@@ -470,6 +470,19 @@ async fn handle_observer_event(
             )
             .await?;
         }
+        CodexThreadEvent::TurnInterrupted { turn_id, .. } => {
+            finalize_turn(
+                workspace_path,
+                thread_key,
+                thread_id,
+                turn_id.as_deref(),
+                turn_modes,
+                interaction_sender,
+                state,
+                None,
+            )
+            .await?;
+        }
         CodexThreadEvent::TurnFailed { turn_id, error } => {
             finalize_turn(
                 workspace_path,

@@ -82,6 +82,10 @@ pub struct SessionCurrentStatus {
     pub turn_id: Option<String>,
     pub summary: Option<String>,
     #[serde(default)]
+    pub pending_interrupt_turn_id: Option<String>,
+    #[serde(default)]
+    pub pending_interrupt_requested_at: Option<String>,
+    #[serde(default)]
     pub observer_attach_mode: Option<ObserverAttachMode>,
     pub updated_at: String,
 }
@@ -270,9 +274,16 @@ pub fn default_session_status(
         client: None,
         turn_id: None,
         summary: None,
+        pending_interrupt_turn_id: None,
+        pending_interrupt_requested_at: None,
         observer_attach_mode: None,
         updated_at: now_iso(),
     }
+}
+
+fn clear_pending_interrupt(current: &mut SessionCurrentStatus) {
+    current.pending_interrupt_turn_id = None;
+    current.pending_interrupt_requested_at = None;
 }
 
 async fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -688,13 +699,24 @@ pub async fn record_bot_status_event(
             current.phase = WorkspaceStatusPhase::TurnRunning;
             current.client = Some("threadbridge".to_owned());
             current.summary = summary.and_then(summarize_prompt).or(current.summary);
+            clear_pending_interrupt(&mut current);
             current
         }
-        "bot_turn_completed" | "bot_turn_failed" | "bot_turn_recovered" => {
+        "bot_turn_interrupt_requested" => {
+            current.client = Some("threadbridge".to_owned());
+            current.pending_interrupt_turn_id = turn_id.map(str::to_owned);
+            current.pending_interrupt_requested_at = Some(now_iso());
+            current
+        }
+        "bot_turn_completed"
+        | "bot_turn_failed"
+        | "bot_turn_interrupted"
+        | "bot_turn_recovered" => {
             current.phase = WorkspaceStatusPhase::Idle;
             current.client = Some("threadbridge".to_owned());
             current.turn_id = None;
             current.summary = summary.and_then(summarize_prompt).or(current.summary);
+            clear_pending_interrupt(&mut current);
             current
         }
         other => {
@@ -715,6 +737,47 @@ pub async fn record_bot_status_event(
     let aggregate = read_workspace_aggregate_status(workspace_path).await?;
     let _ = refresh_workspace_aggregate_status(workspace_path, aggregate).await?;
     Ok(next)
+}
+
+pub async fn record_bot_interrupt_requested(
+    workspace_path: &Path,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<SessionCurrentStatus> {
+    record_bot_status_event(
+        workspace_path,
+        "bot_turn_interrupt_requested",
+        Some(session_id),
+        Some(turn_id),
+        None,
+    )
+    .await
+}
+
+pub async fn finalize_pending_bot_interrupt_if_still_busy(
+    workspace_path: &Path,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<bool> {
+    let Some(snapshot) = read_session_status(workspace_path, session_id).await? else {
+        return Ok(false);
+    };
+    if snapshot.activity_source != SessionActivitySource::ManagedRuntime
+        || !snapshot.phase.is_turn_busy()
+        || snapshot.turn_id.as_deref() != Some(turn_id)
+        || snapshot.pending_interrupt_turn_id.as_deref() != Some(turn_id)
+    {
+        return Ok(false);
+    }
+    record_bot_status_event(
+        workspace_path,
+        "bot_turn_interrupted",
+        Some(session_id),
+        Some(turn_id),
+        None,
+    )
+    .await?;
+    Ok(true)
 }
 
 pub async fn record_hcodex_ingress_turn_started(
@@ -1170,6 +1233,8 @@ mod tests {
                     client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    pending_interrupt_turn_id: None,
+                    pending_interrupt_requested_at: None,
                     observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
@@ -1378,6 +1443,8 @@ mod tests {
                     client: Some("legacy-client".to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    pending_interrupt_turn_id: None,
+                    pending_interrupt_requested_at: None,
                     observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
@@ -1425,6 +1492,8 @@ mod tests {
                     client: Some("canonical-client".to_owned()),
                     turn_id: None,
                     summary: Some("canonical".to_owned()),
+                    pending_interrupt_turn_id: None,
+                    pending_interrupt_requested_at: None,
                     observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
@@ -1452,6 +1521,8 @@ mod tests {
                     client: Some("legacy-client".to_owned()),
                     turn_id: None,
                     summary: Some("legacy".to_owned()),
+                    pending_interrupt_turn_id: None,
+                    pending_interrupt_requested_at: None,
                     observer_attach_mode: None,
                     updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
                 })
@@ -1591,6 +1662,8 @@ mod tests {
             client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
             turn_id: None,
             summary: None,
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
         };
@@ -1657,6 +1730,8 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: None,
             summary: Some("startup".to_owned()),
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
@@ -1722,6 +1797,45 @@ mod tests {
                 .await
                 .unwrap();
         assert!(busy.is_none());
+    }
+
+    #[tokio::test]
+    async fn bot_interrupt_request_persists_marker_until_interrupted() {
+        let workspace = temp_path();
+        record_bot_status_event(
+            &workspace,
+            "bot_turn_started",
+            Some("thr_bot"),
+            Some("turn-1"),
+            Some("prompt summary"),
+        )
+        .await
+        .unwrap();
+
+        let requested = super::record_bot_interrupt_requested(&workspace, "thr_bot", "turn-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            requested.pending_interrupt_turn_id.as_deref(),
+            Some("turn-1")
+        );
+        assert!(requested.pending_interrupt_requested_at.is_some());
+        assert_eq!(requested.phase, WorkspaceStatusPhase::TurnRunning);
+
+        let finalized =
+            super::finalize_pending_bot_interrupt_if_still_busy(&workspace, "thr_bot", "turn-1")
+                .await
+                .unwrap();
+        assert!(finalized);
+
+        let session = read_session_status(&workspace, "thr_bot")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
+        assert_eq!(session.turn_id, None);
+        assert_eq!(session.pending_interrupt_turn_id, None);
+        assert_eq!(session.summary.as_deref(), Some("prompt summary"));
     }
 
     #[tokio::test]
@@ -1811,6 +1925,8 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: None,
             summary: Some("startup".to_owned()),
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };

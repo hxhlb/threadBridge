@@ -1258,6 +1258,8 @@ mod tests {
             client: Some("codex-cli".to_owned()),
             turn_id: Some("turn-1".to_owned()),
             summary: Some("cli run".to_owned()),
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
@@ -1371,6 +1373,8 @@ mod tests {
             client: Some("threadbridge".to_owned()),
             turn_id: None,
             summary: None,
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
@@ -1388,6 +1392,8 @@ mod tests {
             client: Some("threadbridge-hcodex-ingress".to_owned()),
             turn_id: Some("turn-1".to_owned()),
             summary: Some("prompt".to_owned()),
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
             observer_attach_mode: None,
             updated_at: "2026-03-19T00:00:00.000Z".to_owned(),
         };
