@@ -187,13 +187,13 @@ Telegram rolling preview 仍沿用現在的模型：
 
 ## 與其他文檔的關係
 
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](../runtime-control/session-level-mirror-and-readiness.md)
   - 保留高層 mirror 模型
   - 這份文檔則作為 `codex plan` mirror 缺口的子規格
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
+- [runtime-protocol.md](../runtime-control/runtime-protocol.md)
   - 保留 transport-neutral view / event 命名
   - 這份文檔補的是其中一條具體未收斂 event lane
-- [codex-app-server-ws-protocol.md](/Volumes/Data/Github/threadBridge/docs/codex-app-server-ws-protocol.md)
+- [codex-app-server-ws-protocol.md](../../codex-app-server-ws-protocol.md)
   - 保留 upstream wire facts
   - 不在那份文檔裡重複寫設計決策
 

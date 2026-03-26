@@ -313,7 +313,7 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 - `build_info_file_path`
 - `build_info`
 
-這一層應盡量沿用 [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md) 的命名，而不是在 UI 層另造狀態模型。
+這一層應盡量沿用 [runtime-protocol.md](../runtime-control/runtime-protocol.md) 的命名，而不是在 UI 層另造狀態模型。
 
 也就是說，HeroUI 這條線若落地，應被理解為：
 
@@ -432,15 +432,15 @@ v1 明確限制：
 
 ## 與其他計劃的關係
 
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
+- [session-lifecycle.md](../runtime-control/session-lifecycle.md)
   - 定義 thread / workspace / Codex thread 的控制語義
-- [runtime-state-machine.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-state-machine.md)
+- [runtime-state-machine.md](../runtime-control/runtime-state-machine.md)
   - 應提供這個管理面要顯示的 canonical 狀態軸
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
+- [runtime-protocol.md](../runtime-control/runtime-protocol.md)
   - 應提供本地 query / control surface 的 view / action 命名
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](../runtime-control/session-level-mirror-and-readiness.md)
   - 定義 shared daemon、受管 `hcodex`、`hcodex` ingress、adoption 與 owner 現況
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](../telegram-adapter/telegram-webapp-observability.md)
   - observability 可共用同一份 thread state / event model，但不是這份文檔的主責
 
 ## 開放問題
@@ -454,7 +454,7 @@ v1 明確限制：
 ## 建議的下一步
 
 1. 先把已存在的 local query / control API、typed SSE、session observability pane、與 execution mode controls 視為管理面 v1 的既有骨架，不再把它們當成前置待辦。
-2. 讓 [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md) 與這份文檔一起收斂 naming，特別是 workspace/thread/session/control 的 user-facing vocabulary。
+2. 讓 [runtime-protocol.md](../runtime-control/runtime-protocol.md) 與這份文檔一起收斂 naming，特別是 workspace/thread/session/control 的 user-facing vocabulary。
 3. 繼續收斂 tray-icon UI 與 workspace-first 瀏覽器管理頁，特別是 `workspace = thread` 主模型、desktop-only 啟動、以及移除暫不可用 onboarding 後的資訊架構。
 4. 持續把 managed Codex update/install UX 從目前可用骨架收斂成更正式的產品面，而不是只停在 raw build / refresh action。
 5. 若要正式重構 web 管理面，可評估以 HeroUI 作為前端組件庫基礎。

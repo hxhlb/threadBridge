@@ -7,7 +7,7 @@
 目前已實作：
 
 - 最終 assistant 回覆已集中到 Telegram 專用入口
-  - [`rust/src/telegram_runtime/final_reply.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/final_reply.rs)
+  - [`rust/src/telegram_runtime/final_reply.rs`](../../../rust/src/telegram_runtime/final_reply.rs)
 - 內部使用 `pulldown-cmark` 解析 Markdown，並輸出 Telegram `HTML parse mode`
 - HTML 發送失敗時，會自動 fallback 到純文字
 - 超過單則訊息限制時，會改走 notice + `reply.md` attachment
@@ -335,7 +335,7 @@ draft 的重點比較像：
 
 但文件上限這一題目前還沒有明確答案，應由 Telegram delivery 規格來接：
 
-- [message-queue-and-status-delivery.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/message-queue-and-status-delivery.md)
+- [message-queue-and-status-delivery.md](message-queue-and-status-delivery.md)
 
 ## 建議的下一步
 

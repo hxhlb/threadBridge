@@ -45,8 +45,8 @@
 
 目前防線：
 
-- [`hcodex_runtime.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_runtime.rs#L258) 會在 spawn Codex 前先啟動 `hcodex-ws-bridge`
-- [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L90) 的 `is_codex_safe_remote_ws_url` 明確鏡像 upstream Codex 的限制
+- [`hcodex_runtime.rs`](../../../rust/src/hcodex_runtime.rs#L258) 會在 spawn Codex 前先啟動 `hcodex-ws-bridge`
+- [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L90) 的 `is_codex_safe_remote_ws_url` 明確鏡像 upstream Codex 的限制
 - 只有 bare `ws://host:port/` 才能略過 bridge
 
 ### 2. 第二條本地 websocket 觸發 `failed to connect to remote app server`
@@ -64,9 +64,9 @@
 
 目前防線：
 
-- [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L128) 會保留首條 upstream session，而不是重撥 launch URL
-- [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L210) 會對 reconnect startup request replay 已快取的回應
-- [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L198) 會吞掉重複的 `initialized` notification
+- [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L128) 會保留首條 upstream session，而不是重撥 launch URL
+- [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L210) 會對 reconnect startup request replay 已快取的回應
+- [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L198) 會吞掉重複的 `initialized` notification
 
 ## 當前契約
 
@@ -124,19 +124,19 @@ bridge 的責任有兩個，而且兩個都不能少：
 凡是修改這條鏈路，至少要保住下面兩類測試：
 
 - query/path launch URL 不能直接當 `--remote`
-  - 目前由 [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L573) 附近的 URL contract 測試覆蓋
+  - 目前由 [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L573) 附近的 URL contract 測試覆蓋
 - 第二條本地 websocket 不得導致第二次 upstream `initialize`
-  - 目前由 [`hcodex_ws_bridge.rs`](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ws_bridge.rs#L678) 的 reconnect replay 測試覆蓋
+  - 目前由 [`hcodex_ws_bridge.rs`](../../../rust/src/hcodex_ws_bridge.rs#L678) 的 reconnect replay 測試覆蓋
 
 如果未來有重構把這兩類測試刪掉，應視為高風險變更。
 
 ## 與其他計劃的關係
 
-- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/owner-runtime-contract.md)
+- [owner-runtime-contract.md](../desktop-runtime-owner/owner-runtime-contract.md)
   - 定義 `hcodex` / ingress 在 owner-managed runtime 中的責任邊界
-- [post-cli-runtime-cleanup.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/post-cli-runtime-cleanup.md)
+- [post-cli-runtime-cleanup.md](../runtime-control/post-cli-runtime-cleanup.md)
   - 記錄 CLI 時代 shim 收尾時，哪些 `hcodex` launch shim 仍應保留，哪些才是可清理的歷史殘留
-- [hcodex-lifecycle-supervision.md](/Volumes/Data/Github/threadBridge/docs/plan/hcodex-local-ingress-launcher/hcodex-lifecycle-supervision.md)
+- [hcodex-lifecycle-supervision.md](hcodex-lifecycle-supervision.md)
   - 補充 launch 完成後，`hcodex` 對 local Codex child lifecycle supervision 與 teardown 的責任
 
 ## 建議的下一步

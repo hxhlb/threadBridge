@@ -8,7 +8,7 @@
 
 目前已完成的部分：
 
-- 已用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 的 canonical role boundary 掃描 active code path
+- 已用 [runtime-architecture.md](runtime-architecture.md) 的 canonical role boundary 掃描 active code path
 - 已確認 4 個 responsibility drift 功能點
 - 其中 3 個已和 `runtime-architecture` 的 temporary exception 對上
 - 其中 1 個屬於目前尚未進入主文檔的新增 drift
@@ -21,7 +21,7 @@
 
 ## 問題
 
-[runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 已經把 canonical role 與 temporary exception 定義清楚了，但它仍然是主規格文檔，不是 current-code 掃描報告。
+[runtime-architecture.md](runtime-architecture.md) 已經把 canonical role 與 temporary exception 定義清楚了，但它仍然是主規格文檔，不是 current-code 掃描報告。
 
 實際遇到 bug、兼容回歸、或功能止血時，維護者真正需要的是另一份文檔：
 
@@ -64,13 +64,13 @@
   - 而 `LocalControlHandle` 只有在 Telegram bot runtime 啟動後，才會由 bot runner 注入到 management API
   - 這使 management surface 的控制能力，實質上被 Telegram adapter availability 綁住
 - today code anchors：
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L72)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L957)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1405)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1459)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1600)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1609)
-  - [bot_runner.rs](/Volumes/Data/Github/threadBridge/rust/src/bot_runner.rs#L53)
+  - [management_api.rs](../../../rust/src/management_api.rs#L72)
+  - [management_api.rs](../../../rust/src/management_api.rs#L957)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1405)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1459)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1600)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1609)
+  - [bot_runner.rs](../../../rust/src/bot_runner.rs#L53)
 - 預期 owner role：
   - shared `runtime_control` 應擁有 control semantics
   - management / desktop surface 應只是一個 surface consumer
@@ -91,8 +91,8 @@
 - 當前 responsibility drift：
   - observer 在 finalize turn 時直接組出 Telegram-visible final reply text
 - today code anchors：
-  - [app_server_observer.rs](/Volumes/Data/Github/threadBridge/rust/src/app_server_observer.rs#L24)
-  - [app_server_observer.rs](/Volumes/Data/Github/threadBridge/rust/src/app_server_observer.rs#L499)
+  - [app_server_observer.rs](../../../rust/src/app_server_observer.rs#L24)
+  - [app_server_observer.rs](../../../rust/src/app_server_observer.rs#L499)
 - 預期 owner role：
   - `app-server observer` 應只做 read-side projection
   - Telegram final reply composition 應留在 shared projection helper 或 Telegram adapter
@@ -113,15 +113,15 @@
   - Telegram adapter 直接 import management surface 的 view 型別與 desktop launch helper
   - 同時在 Telegram path 重複構造與 management surface 相同的 launch / execution mode model
 - today code anchors：
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L21)
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L182)
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L202)
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L703)
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L813)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L199)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L217)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1850)
-  - [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs#L1873)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L21)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L182)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L202)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L703)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L813)
+  - [management_api.rs](../../../rust/src/management_api.rs#L199)
+  - [management_api.rs](../../../rust/src/management_api.rs#L217)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1850)
+  - [management_api.rs](../../../rust/src/management_api.rs#L1873)
 - 預期 owner role：
   - shared `runtime_control` 或 shared runtime semantics 應提供 launch / mode model
   - Telegram adapter 與 management / desktop surface 都只做 surface mapping
@@ -143,14 +143,14 @@
   - `local_control` 雖位於 adapter 之外，但它直接持有 `Bot`，並依賴 `telegram_runtime::{AppState, send_scoped_message, status_sync, thread_id_to_i32}`
   - 它同時執行 shared control 與 Telegram-facing side effect
 - today code anchors：
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L9)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L12)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L41)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L49)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L133)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L271)
-  - [local_control.rs](/Volumes/Data/Github/threadBridge/rust/src/local_control.rs#L347)
-  - [thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs#L420)
+  - [local_control.rs](../../../rust/src/local_control.rs#L9)
+  - [local_control.rs](../../../rust/src/local_control.rs#L12)
+  - [local_control.rs](../../../rust/src/local_control.rs#L41)
+  - [local_control.rs](../../../rust/src/local_control.rs#L49)
+  - [local_control.rs](../../../rust/src/local_control.rs#L133)
+  - [local_control.rs](../../../rust/src/local_control.rs#L271)
+  - [local_control.rs](../../../rust/src/local_control.rs#L347)
+  - [thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs#L420)
 - 預期 owner role：
   - shared `runtime_control` 負責 workspace / session mutation
   - Telegram adapter 僅負責送訊息、topic title refresh、與 Telegram topic side effect
@@ -169,18 +169,18 @@
 
 ## 與其他計劃的關係
 
-- [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md)
+- [runtime-architecture.md](runtime-architecture.md)
   - canonical role boundary 的主文檔
   - 本文不重新定義角色，只驗證 current code 在哪些功能點偏離它
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
+- [session-lifecycle.md](session-lifecycle.md)
   - 若 drift 牽涉 session bind / repair / adoption semantics，回看這份文檔理解正式語義
-- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-adapter-migration.md)
+- [telegram-adapter-migration.md](../telegram-adapter/telegram-adapter-migration.md)
   - 若後續要處理 Telegram adapter 的責任退出，可把本文的 confirmed drift 當成 migration input
-- [app-server-ws-mirror-observer.md](/Volumes/Data/Github/threadBridge/docs/plan/app-server-observer/app-server-ws-mirror-observer.md)
+- [app-server-ws-mirror-observer.md](../app-server-observer/app-server-ws-mirror-observer.md)
   - observer 相關 drift 的子背景仍以這份文檔為準
 
 ## 開放問題
 
-- 是否要把本文第 1 項 drift 直接升格進 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 的 temporary exception？
+- 是否要把本文第 1 項 drift 直接升格進 [runtime-architecture.md](runtime-architecture.md) 的 temporary exception？
 - 後續若再做第二輪掃描，是否要把 `bot_runner / status_sync` 這類候選耦合納入 confirmed scope？
 - 這份文檔未來若長期存在，是否要再補一個簡短的 priority / risk 欄位，幫助安排重構順序？

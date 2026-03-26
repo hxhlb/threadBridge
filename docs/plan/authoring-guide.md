@@ -95,7 +95,7 @@
 
 ## Plan Registry 與 Folder 歸屬
 
-[README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md) 現在是這個目錄的 canonical registry。
+[README.md](README.md) 現在是這個目錄的 canonical registry。
 
 文檔的 owner 則由它所在的 folder path 表達。
 
@@ -137,7 +137,7 @@ folder 表達的是 owner，不是：
 - 影響面清單
 - 第二套瀏覽導航
 
-預設應優先使用 [runtime-architecture.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-architecture.md) 裡的 canonical roles。
+預設應優先使用 [runtime-architecture.md](runtime-control/runtime-architecture.md) 裡的 canonical roles。
 
 若一份 shared spec 沒有更明顯的 owner，預設歸 `runtime_control`。
 
@@ -298,7 +298,7 @@ folder 表達的是 owner，不是：
 
 ## 成熟度標記規則
 
-目前 [README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md) 使用下面四種成熟度，新增或更新文檔時應繼續沿用：
+目前 [README.md](README.md) 使用下面四種成熟度，新增或更新文檔時應繼續沿用：
 
 - `已落地`
 - `部分落地`
@@ -499,7 +499,7 @@ folder 表達的是 owner，不是：
 4. 先寫 `目前進度`，明確區分已落地與未落地部分。
 5. 寫清楚 `問題`、`定位`、主體規格、`與其他計劃的關係`、`開放問題`。
 6. 把檔案放進正確 owner folder；若暫時無法安全掛靠，先進 `unknown-owner/`。
-7. 更新 [README.md](/Volumes/Data/Github/threadBridge/docs/plan/README.md)，把它放進正確 `status` 區段，並補齊必要條目屬性。
+7. 更新 [README.md](README.md)，把它放進正確 `status` 區段，並補齊必要條目屬性。
 8. 如果它是主規格，明確寫出哪些文檔之後應引用它，並在 registry 裡標 `primary spec: yes`。
 
 ## 建議模板

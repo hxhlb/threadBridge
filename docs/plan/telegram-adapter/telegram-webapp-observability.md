@@ -19,7 +19,7 @@
 目前仍缺：
 
 - Web App UI
-- 以 [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md) 為基礎的 thread / turn / tool timeline 展示
+- 以 [working-session-observability.md](../management-desktop-surface/working-session-observability.md) 為基礎的 thread / turn / tool timeline 展示
 - Telegram Web App 自己的 auth / HTTPS / route shell
 - artifact view 與遠端載體特有的安全邊界
 
@@ -143,7 +143,7 @@ Telegram Web App 的最大產品摩擦不是 UI，而是部署模型。
 
 working session 的資料模型、timeline record、artifact 關聯，之後應引用：
 
-- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md)
+- [working-session-observability.md](../management-desktop-surface/working-session-observability.md)
 
 換句話說，這份文檔不再負責定義本地 session query surface 本身；那部分目前應直接視為既有能力。
 
@@ -415,7 +415,7 @@ Telegram Web App 不應該直接去讀本地檔案系統。
 
 ## 建議的下一步
 
-1. 先把 [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md) 收斂成 session-level observability 的最小資料模型。
+1. 先把 [working-session-observability.md](../management-desktop-surface/working-session-observability.md) 收斂成 session-level observability 的最小資料模型。
 2. 決定是否先做一個本地只讀 API。
 3. 先畫出 Thread 詳情頁和 Turn 時間線頁的最小欄位。
 4. 把 terminal 能力拆成 replay / read-only live / interactive 三層，不要混在一起。

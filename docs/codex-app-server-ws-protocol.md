@@ -7,7 +7,7 @@
 - `/Volumes/Data/Github/codex/codex-rs/app-server-protocol/src/protocol/common.rs`
 - `/Volumes/Data/Github/codex/codex-rs/app-server-protocol/src/protocol/v2.rs`
 - `/Volumes/Data/Github/codex/codex-rs/app-server-protocol/src/protocol/thread_history.rs`
-- `/Volumes/Data/Github/threadBridge/rust/src/codex.rs`
+- `../rust/src/codex.rs`
 
 這不是一份 transport-neutral 的 `threadBridge runtime protocol`。
 它描述的是 `threadBridge` 今天實際連接的上游 `codex app-server` WebSocket / JSON-RPC 協議面。
@@ -106,7 +106,7 @@ server notification 例子：
 
 相關代碼：
 
-- [codex.rs](/Volumes/Data/Github/threadBridge/rust/src/codex.rs)
+- [codex.rs](../rust/src/codex.rs)
 
 ### `thread/start`
 
@@ -372,7 +372,7 @@ assistant 最終輸出不是只在 turn 結束時才出現。
 
 `threadBridge` 內部不直接把 upstream payload 原樣往下傳。
 
-在 [codex.rs](/Volumes/Data/Github/threadBridge/rust/src/codex.rs)：
+在 [codex.rs](../rust/src/codex.rs)：
 
 - `item/started` 會變成 `CodexThreadEvent::ItemStarted`
 - `item/completed` 會變成 `CodexThreadEvent::ItemCompleted`

@@ -321,15 +321,15 @@ core runtime 應負責：
 
 這份遷移草稿和下面幾份直接相關：
 
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
+- [session-lifecycle.md](../runtime-control/session-lifecycle.md)
   - 決定 core runtime 的 thread / binding 模型
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](../runtime-control/session-level-mirror-and-readiness.md)
   - owner 收斂是把 Telegram 去 owner 化、退回 adapter 的前置條件
-- [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/codex-busy-input-gate.md)
+- [codex-busy-input-gate.md](../runtime-control/codex-busy-input-gate.md)
   - busy gate 應該是 core 語意，不是 Telegram-only 行為
-- [telegram-markdown-adaptation.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-markdown-adaptation.md)
+- [telegram-markdown-adaptation.md](telegram-markdown-adaptation.md)
   - 應明確歸屬於 Telegram adapter，而不是 core
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](telegram-webapp-observability.md)
   - 若觀測面最終不只服務 Telegram，它的資料模型也應依附 protocol，而不是 Telegram 型別
 
 ## 建議的程式碼邊界方向

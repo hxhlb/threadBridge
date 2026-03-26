@@ -6,12 +6,12 @@ Date: 2026-03-19
 
 This round focused on Telegram final-reply rendering and message-delivery behavior in `threadBridge`.
 
-The main work happened in [`rust/src/telegram_runtime/final_reply.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/final_reply.rs), with related changes in:
+The main work happened in [`rust/src/telegram_runtime/final_reply.rs`](../rust/src/telegram_runtime/final_reply.rs), with related changes in:
 
-- [`rust/src/telegram_runtime/mod.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/mod.rs)
-- [`rust/src/telegram_runtime/media.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/media.rs)
-- [`rust/src/telegram_runtime/restore.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/restore.rs)
-- [`rust/src/telegram_runtime/thread_flow.rs`](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs)
+- [`rust/src/telegram_runtime/mod.rs`](../rust/src/telegram_runtime/mod.rs)
+- [`rust/src/telegram_runtime/media.rs`](../rust/src/telegram_runtime/media.rs)
+- [`rust/src/telegram_runtime/restore.rs`](../rust/src/telegram_runtime/restore.rs)
+- [`rust/src/telegram_runtime/thread_flow.rs`](../rust/src/telegram_runtime/thread_flow.rs)
 
 ## Changes Completed
 

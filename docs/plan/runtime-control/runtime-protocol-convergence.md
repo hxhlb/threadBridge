@@ -299,17 +299,17 @@ v1 至少應固定：
 
 這個任務主要會碰到：
 
-- [runtime_protocol.rs](/Volumes/Data/Github/threadBridge/rust/src/runtime_protocol.rs)
+- [runtime_protocol.rs](../../../rust/src/runtime_protocol.rs)
   - canonical view / event / action vocabulary
-- [management_api.rs](/Volumes/Data/Github/threadBridge/rust/src/management_api.rs)
+- [management_api.rs](../../../rust/src/management_api.rs)
   - HTTP route -> canonical action mapping
-- [runtime_control.rs](/Volumes/Data/Github/threadBridge/rust/src/runtime_control.rs)
+- [runtime_control.rs](../../../rust/src/runtime_control.rs)
   - shared service / action execution
-- [telegram_runtime/thread_flow.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/thread_flow.rs)
+- [telegram_runtime/thread_flow.rs](../../../rust/src/telegram_runtime/thread_flow.rs)
   - slash command -> canonical action mapping
-- [runtime_interaction.rs](/Volumes/Data/Github/threadBridge/rust/src/runtime_interaction.rs)
+- [runtime_interaction.rs](../../../rust/src/runtime_interaction.rs)
   - interaction vocabulary
-- [app_server_observer.rs](/Volumes/Data/Github/threadBridge/rust/src/app_server_observer.rs)
+- [app_server_observer.rs](../../../rust/src/app_server_observer.rs)
   - observer -> interaction event mapping
 
 ### 5. 驗收標準
@@ -323,15 +323,15 @@ v1 至少應固定：
 
 ## 與其他計劃的關係
 
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
+- [runtime-protocol.md](runtime-protocol.md)
   - 這份文檔是它的 rollout / convergence 草稿，不取代它的主規格地位
-- [telegram-adapter-migration.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-adapter-migration.md)
+- [telegram-adapter-migration.md](../telegram-adapter/telegram-adapter-migration.md)
   - Telegram 何時才算退回 protocol consumer，會直接依賴這份收斂計畫
-- [session-lifecycle.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-lifecycle.md)
+- [session-lifecycle.md](session-lifecycle.md)
   - `start_fresh_session` / `repair_session_binding` / launch surface 的 protocol naming 需要和它對齊
-- [codex-busy-input-gate.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/codex-busy-input-gate.md)
+- [codex-busy-input-gate.md](codex-busy-input-gate.md)
   - `/stop` 是否正式收斂成 `interrupt_running_turn`，會影響這份 plan
-- [owner-runtime-contract.md](/Volumes/Data/Github/threadBridge/docs/plan/desktop-runtime-owner/owner-runtime-contract.md)
+- [owner-runtime-contract.md](../desktop-runtime-owner/owner-runtime-contract.md)
   - owner / adapter / shared control 的邊界，會決定哪些 action 應屬於 protocol 主線
 
 ## 開放問題

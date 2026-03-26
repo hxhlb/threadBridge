@@ -13,11 +13,11 @@
 
 相關實作：
 
-- [rust/src/hcodex_ingress.rs](/Volumes/Data/Github/threadBridge/rust/src/hcodex_ingress.rs)
-- [rust/src/app_server_observer.rs](/Volumes/Data/Github/threadBridge/rust/src/app_server_observer.rs)
-- [rust/src/workspace_status.rs](/Volumes/Data/Github/threadBridge/rust/src/workspace_status.rs)
-- [rust/src/telegram_runtime/status_sync.rs](/Volumes/Data/Github/threadBridge/rust/src/telegram_runtime/status_sync.rs)
-- [docs/codex-app-server-ws-protocol.md](/Volumes/Data/Github/threadBridge/docs/codex-app-server-ws-protocol.md)
+- [rust/src/hcodex_ingress.rs](../rust/src/hcodex_ingress.rs)
+- [rust/src/app_server_observer.rs](../rust/src/app_server_observer.rs)
+- [rust/src/workspace_status.rs](../rust/src/workspace_status.rs)
+- [rust/src/telegram_runtime/status_sync.rs](../rust/src/telegram_runtime/status_sync.rs)
+- [docs/codex-app-server-ws-protocol.md](codex-app-server-ws-protocol.md)
 
 ## 一句話模型
 
@@ -157,7 +157,7 @@ preview / final 重複，或同一 turn 似乎被 mirror 兩次。
 
 若要判斷是不是 upstream 協議限制，對照：
 
-- [docs/codex-app-server-ws-protocol.md](/Volumes/Data/Github/threadBridge/docs/codex-app-server-ws-protocol.md)
+- [docs/codex-app-server-ws-protocol.md](codex-app-server-ws-protocol.md)
 
 ## 未來可以做，但目前不要做的事
 

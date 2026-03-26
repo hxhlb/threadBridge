@@ -95,11 +95,11 @@
 
 也就是說：
 
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
+- [runtime-protocol.md](../runtime-control/runtime-protocol.md)
   - 定義 runtime query / control / event 的主線命名
-- [working-session-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/working-session-observability.md)
+- [working-session-observability.md](working-session-observability.md)
   - 定義 session 級 observability view
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](../telegram-adapter/telegram-webapp-observability.md)
   - 之後若存在 Telegram Web App，應把它當成遠期可選 UI 載體，而不是近期前提
 
 ## Working Session 的語義
@@ -411,14 +411,14 @@ web UI 不應直接讀這些檔案。
 
 ## 與其他計劃的關係
 
-- [session-level-mirror-and-readiness.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/session-level-mirror-and-readiness.md)
+- [session-level-mirror-and-readiness.md](../runtime-control/session-level-mirror-and-readiness.md)
   - 定義 mirror 與 shared runtime 的現行模型
   - 這份文檔消費它輸出的 transcript / mirror，不重複定義 continuity
-- [runtime-protocol.md](/Volumes/Data/Github/threadBridge/docs/plan/runtime-control/runtime-protocol.md)
+- [runtime-protocol.md](../runtime-control/runtime-protocol.md)
   - 應對外暴露 session summary / record 的 query 命名
-- [macos-menubar-thread-manager.md](/Volumes/Data/Github/threadBridge/docs/plan/management-desktop-surface/macos-menubar-thread-manager.md)
+- [macos-menubar-thread-manager.md](macos-menubar-thread-manager.md)
   - web 管理面可把 session observability 作為 workspace detail 的一個 pane / route
-- [telegram-webapp-observability.md](/Volumes/Data/Github/threadBridge/docs/plan/telegram-adapter/telegram-webapp-observability.md)
+- [telegram-webapp-observability.md](../telegram-adapter/telegram-webapp-observability.md)
   - 若未來仍做 Telegram Web App，應直接引用這份 session view model，而不是再自行定義 timeline 結構
 
 ## 開放問題
