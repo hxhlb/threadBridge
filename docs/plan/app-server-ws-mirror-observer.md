@@ -1,5 +1,9 @@
 # App-Server WS Mirror Observer 草稿
 
+補充維護說明：
+
+- [docs/mirror-function-notes.md](/Volumes/Data/Github/threadBridge/docs/mirror-function-notes.md)
+
 ## 目前進度
 
 這份文檔目前已進入「部分落地」。
