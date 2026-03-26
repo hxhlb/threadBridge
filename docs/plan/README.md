@@ -183,8 +183,8 @@
   - 但 `hcodex` 長期 contract、observer attach contract、與 transport-neutral protocol 仍未完全收斂
 - [app-server-ws-backend.md](desktop-runtime-owner/app-server-ws-backend.md)
   - doc kind: `plan`
-  - 描述 `app-server-ws-backend` 作為 `desktop runtime owner` 受管 backend plane 的 today reality
-  - 固定它是 `threadBridge` today runtime 的核心 Codex backend substrate，而不是單純 shared daemon 別名
+  - 描述 `app-server-ws-backend` 作為 `desktop runtime owner` 受管 backend plane 的 today reality 與 target vision
+  - 固定它是 `threadBridge` today runtime 的核心 Codex backend substrate，長期應收斂成 workspace-scoped backend worker
   - 補清它與 owner、shared `runtime_control`、observer、`hcodex ingress`、Telegram / management surface 的邊界
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`

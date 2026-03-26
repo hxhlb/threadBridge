@@ -15,6 +15,7 @@
 目前尚未完成的部分：
 
 - 這個 backend plane 仍未在架構文檔與代碼分層中被完整當成單一子系統承認
+- 它的長期目標形狀雖已固定為 `desktop runtime owner` 監督下的 workspace-scoped child worker，但 today code 尚未真正收斂到這個形狀
 - today code 中與它相關的責任仍散落在 `codex.rs`、`app_server_runtime.rs`、`app_server_observer.rs`、`hcodex_ingress.rs`、`runtime_owner.rs`、`runtime_control.rs`
 - `observer` attach 仍建立在 `thread/resume` attach 語義上，而不是正式 upstream subscribe API
 - backend plane 與 shared runtime semantics 的長期 API 形狀仍未收斂成獨立 contract
@@ -44,13 +45,14 @@
 
 ## 定位
 
-這份文檔是 `desktop runtime owner` 下面的 backend 子系統說明。
+這份文檔是 `desktop runtime owner` 下面的 backend 子系統主草稿，採用「描述今天 + 固定願景」的寫法。
 
 它處理：
 
 - `app-server-ws-backend` 在 today code 中實際承擔哪些 runtime 能力
 - 為什麼它是 `threadBridge` today runtime 的核心 backend plane
 - 為什麼它的 owner 是 `desktop runtime owner`
+- 它的長期目標為什麼是 workspace-scoped child worker，而不是散落在多個 role 下的一組 helper
 - 它與 `runtime_control`、observer、`hcodex ingress`、Telegram / management surface 的邊界
 
 它不處理：
@@ -61,11 +63,31 @@
 - `session-lifecycle`、`runtime-state-machine`、`runtime-protocol` 的完整語義重寫
 - 立即展開 backend process 抽離或跨進程重構步驟
 
-這份文檔新增固定一條收斂方向：
+這份文檔固定兩條收斂方向：
 
 - `app-server-ws-backend` 應擁有 Codex 原生 busy truth
 - `threadBridge` 應只翻譯這個 truth 到自己的產品層 gate
+- `app-server-ws-backend` 應收斂成 `desktop runtime owner` 監督下的 workspace-scoped child worker
 - current code 尚未完全如此，但後續不應再把 derived snapshot 當成 Codex native busy authority
+
+## 目標願景
+
+長期來看，`app-server-ws-backend` 不應只被視為 today code 中散落的 backend reality。
+
+它應被明確收斂成：
+
+- `desktop runtime owner` 監督下的 workspace-scoped child worker
+- 每個活躍 workspace 一個 backend worker
+- worker 內部擁有 upstream `codex app-server`
+- worker 對外提供 thread / turn / busy / observer / interaction 的 backend truth 與 API surface
+
+這個願景的核心不是「只是多一個 child process」，而是：
+
+- `desktop runtime owner` 保留 lifecycle authority
+- backend worker 成為 workspace runtime 的單一 execution substrate
+- `threadBridge` shared runtime semantics 與 adapters 只翻譯、編排、與呈現 backend truth
+
+因此，真正的收斂目標是 authority boundary 單點化，而不是單純把 today helpers 換到另一個 executable。
 
 ## 當前代碼狀態
 
@@ -200,12 +222,13 @@ observer 消費 backend，但不是 backend owner。
 
 ## 責任邊界
 
-### `app-server-ws-backend` today 應被理解成什麼
+### `app-server-ws-backend` today 與 target 應被理解成什麼
 
 - `threadBridge` 當前實際依賴的核心 Codex runtime backend plane
 - 所有 Codex client communication 共同匯入的 backend contract
 - workspace-scoped runtime substrate，而不是單次 turn helper
 - Codex native busy truth 的長期 authority
+- 長期上應收斂成 `desktop runtime owner` 監督下的 workspace-scoped backend worker，而不是繼續以分散 helper 形狀存在
 
 ### `desktop runtime owner` 與它的關係
 
@@ -231,14 +254,29 @@ observer 消費 backend，但不是 backend owner。
 - Telegram / management surface 都只是 consumer / presenter
 - 它們可以觸發 control action、觀測 backend-driven state，但不是 backend owner
 
+### target vision 下應進 backend worker 的能力
+
+- workspace-scoped `codex app-server` lifecycle substrate
+- thread / turn / interrupt 的原生 backend contract
+- thread-scoped busy truth 與相關事件
+- observer attach、event stream intake、interactive replay 這類 backend-adjacent substrate
+- 本地 ingress 作為 backend 接入與 relay path 的部分
+
+### target vision 下不應進 backend worker 的能力
+
+- Telegram busy reject、`/stop` 文案、圖片暫存提示等產品層 UX
+- workspace binding policy 與 shared session control semantics
+- adoption、queue、`STOP 並插入發言`、`序列發言` 等產品層 control policy
+- Telegram / management / TUI 的 surface-specific rendering 與 presenter 邏輯
+
 ## 與其他計劃的關係
 
 - [owner-runtime-contract.md](owner-runtime-contract.md)
   - 提供 owner/runtime boundary 的高層總草稿
-  - 本文承接其中「owner 所管理的 backend plane 究竟是什麼」這個子問題
+  - 本文承接其中「owner 所管理的 backend plane 究竟是什麼，以及它長期應收斂成什麼形狀」這個子問題
 - [runtime-architecture.md](../runtime-control/runtime-architecture.md)
   - 定義 canonical actor boundary
-  - 本文不新增新的平級 actor，只補充 backend plane 的 today reality
+  - 本文不新增新的平級 actor，只補充 backend plane 的 today reality 與 target vision
 - [app-server-ws-mirror-observer.md](../app-server-observer/app-server-ws-mirror-observer.md)
   - 處理 observer / mirror intake 的子問題
   - 本文只界定 observer 與 backend plane 的關係
@@ -251,6 +289,6 @@ observer 消費 backend，但不是 backend owner。
 
 ## 開放問題
 
-- 長期來看，`app-server-ws-backend` 是否應進一步被抽象成更獨立的 backend API plane，而不是仍以 today code 的分散形狀存在？
-- 如果未來要做這種抽象，哪些能力仍應留在 `threadBridge` shared runtime semantics，而不應下沉進 backend plane？
+- 在收斂到 workspace-scoped child worker 的過程中，backend API 與 shared runtime protocol 的接縫應如何分層，才能避免雙重 authority 長期並存？
+- observer / ingress 中哪些 backend-adjacent 能力應先下沉到 worker，哪些仍應暫留在 `threadBridge` shared runtime semantics？
 - `thread/resume` attach 語義在 observer 路徑上的長期 contract，是否應等 upstream subscribe API 更明確後再收斂？
