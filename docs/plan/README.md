@@ -148,7 +148,8 @@
 - [topic-title-status.md](telegram-adapter/topic-title-status.md)
   - doc kind: `plan`
   - 已落地 `workspace/title + broken suffix`
-  - 已落地新產生的 topic rename service message best-effort cleanup
+  - 已有獨立的 conversation-based title generation flow，且新產生的 topic rename service message 會 best-effort cleanup
+  - 尚未把 `自動生成` / `使用資料夾名稱` 收斂成正式的 Telegram inline title-source control surface
   - context ratio 仍未實作
 - [message-queue-and-status-delivery.md](telegram-adapter/message-queue-and-status-delivery.md)
   - doc kind: `spec`
