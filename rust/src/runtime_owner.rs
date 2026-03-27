@@ -9,7 +9,8 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 use crate::app_server_runtime::{
-    WorkspaceRuntimeManager, daemon_endpoint_is_live, worker_endpoint_is_live,
+    WorkspaceRuntimeManager, WorkspaceRuntimeState, daemon_endpoint_is_live,
+    read_workspace_runtime_state_file, worker_endpoint_is_live,
 };
 use crate::config::RuntimeConfig;
 use crate::hcodex_ingress::{HcodexIngressManager, hcodex_ingress_endpoint_is_live};
@@ -165,51 +166,45 @@ impl DesktopRuntimeOwner {
                     worker_ws_url = %runtime.worker_ws_url.as_deref().unwrap_or(""),
                     "desktop runtime owner ensured workspace app-server"
                 );
-                let _ = self
-                    .hcodex_ingress_runtime
-                    .ensure_workspace_ingress(
-                        workspace_path,
-                        runtime.client_ws_url(),
-                        runtime.client_ws_url(),
-                    )
+                let ensured_ingress = self
+                    .ensure_workspace_ingress_if_needed(workspace_path, &runtime)
                     .await?;
-                info!(
-                    event = "runtime_owner.workspace.proxy_ready",
-                    workspace = %workspace_path.display(),
-                    daemon_ws_url = %runtime.daemon_ws_url,
-                    "desktop runtime owner ensured workspace hcodex ingress"
-                );
-                Ok::<(), anyhow::Error>(())
+                Ok::<bool, anyhow::Error>(ensured_ingress)
             }
             .await;
-            if let Err(error) = step {
-                self.record_workspace_heartbeat(
-                    workspace_path,
-                    WorkspaceRuntimeHeartbeat {
-                        workspace_cwd: workspace.clone(),
-                        app_server_status: "unavailable",
-                        hcodex_ingress_status: "unavailable",
-                        runtime_readiness: "unavailable",
-                        last_checked_at: now_iso(),
-                        last_error: Some(error.to_string()),
-                    },
-                )
-                .await;
-                let finished_at = now_iso();
-                let mut status = self.status.write().await;
-                status.state = "error";
-                status.last_reconcile_finished_at = Some(finished_at);
-                status.last_error = Some(error.to_string());
-                status.last_report = report.clone();
-                return Err(error);
-            }
+            let ensured_ingress = match step {
+                Ok(ensured_ingress) => ensured_ingress,
+                Err(error) => {
+                    self.record_workspace_heartbeat(
+                        workspace_path,
+                        WorkspaceRuntimeHeartbeat {
+                            workspace_cwd: workspace.clone(),
+                            app_server_status: "unavailable",
+                            hcodex_ingress_status: "unavailable",
+                            runtime_readiness: "unavailable",
+                            last_checked_at: now_iso(),
+                            last_error: Some(error.to_string()),
+                        },
+                    )
+                    .await;
+                    let finished_at = now_iso();
+                    let mut status = self.status.write().await;
+                    status.state = "error";
+                    status.last_reconcile_finished_at = Some(finished_at);
+                    status.last_error = Some(error.to_string());
+                    status.last_report = report.clone();
+                    return Err(error);
+                }
+            };
             self.record_workspace_heartbeat(
                 workspace_path,
                 heartbeat_for_workspace(workspace_path).await,
             )
             .await;
             report.ensured_workspaces += 1;
-            report.ensured_ingresses += 1;
+            if ensured_ingress {
+                report.ensured_ingresses += 1;
+            }
         }
         self.prune_workspace_heartbeats(&unique_workspaces).await;
         let finished_at = now_iso();
@@ -240,6 +235,52 @@ impl DesktopRuntimeOwner {
             .await
             .retain(|workspace, _| workspaces.contains(workspace));
     }
+
+    async fn ensure_workspace_ingress_if_needed(
+        &self,
+        workspace_path: &Path,
+        runtime_state: &WorkspaceRuntimeState,
+    ) -> Result<bool> {
+        let existing_runtime_state = read_workspace_runtime_state_file(workspace_path).await?;
+        let existing_ingress_running = match existing_runtime_state
+            .as_ref()
+            .and_then(|state| state.hcodex_ws_url.as_deref())
+        {
+            Some(url) => hcodex_ingress_endpoint_is_live(url).await,
+            None => false,
+        };
+        if !workspace_needs_owner_managed_ingress(
+            existing_runtime_state.as_ref(),
+            existing_ingress_running,
+        ) {
+            info!(
+                event = "runtime_owner.workspace.proxy_reused",
+                workspace = %workspace_path.display(),
+                hcodex_ws_url = %existing_runtime_state
+                    .as_ref()
+                    .and_then(|state| state.hcodex_ws_url.as_deref())
+                    .unwrap_or(""),
+                "desktop runtime owner reused existing workspace hcodex ingress"
+            );
+            return Ok(false);
+        }
+
+        let _ = self
+            .hcodex_ingress_runtime
+            .ensure_workspace_ingress(
+                workspace_path,
+                runtime_state.client_ws_url(),
+                runtime_state.client_ws_url(),
+            )
+            .await?;
+        info!(
+            event = "runtime_owner.workspace.proxy_ready",
+            workspace = %workspace_path.display(),
+            daemon_ws_url = %runtime_state.daemon_ws_url,
+            "desktop runtime owner ensured workspace hcodex ingress"
+        );
+        Ok(true)
+    }
 }
 
 fn canonical_workspace_string(workspace_path: &Path) -> String {
@@ -252,6 +293,19 @@ fn canonical_workspace_string(workspace_path: &Path) -> String {
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn workspace_needs_owner_managed_ingress(
+    runtime_state: Option<&WorkspaceRuntimeState>,
+    ingress_running: bool,
+) -> bool {
+    let Some(runtime_state) = runtime_state else {
+        return true;
+    };
+    let Some(hcodex_ws_url) = runtime_state.hcodex_ws_url.as_deref() else {
+        return true;
+    };
+    hcodex_ws_url.trim().is_empty() || !ingress_running
 }
 
 async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeartbeat {
@@ -328,5 +382,44 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
         } else {
             Some("workspace app-server worker is unavailable".to_owned())
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkspaceRuntimeState, workspace_needs_owner_managed_ingress};
+
+    #[test]
+    fn owner_reconcile_skips_live_existing_ingress() {
+        let state = WorkspaceRuntimeState {
+            schema_version: 3,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            daemon_ws_url: "ws://127.0.0.1:4100".to_owned(),
+            worker_ws_url: Some("ws://127.0.0.1:4101".to_owned()),
+            worker_pid: Some(42),
+            hcodex_ws_url: Some("ws://127.0.0.1:4102".to_owned()),
+        };
+
+        assert!(!workspace_needs_owner_managed_ingress(Some(&state), true));
+    }
+
+    #[test]
+    fn owner_reconcile_repairs_missing_or_stale_ingress() {
+        let missing = WorkspaceRuntimeState {
+            schema_version: 3,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            daemon_ws_url: "ws://127.0.0.1:4100".to_owned(),
+            worker_ws_url: Some("ws://127.0.0.1:4101".to_owned()),
+            worker_pid: Some(42),
+            hcodex_ws_url: None,
+        };
+        let stale = WorkspaceRuntimeState {
+            hcodex_ws_url: Some("ws://127.0.0.1:4102".to_owned()),
+            ..missing.clone()
+        };
+
+        assert!(workspace_needs_owner_managed_ingress(None, false));
+        assert!(workspace_needs_owner_managed_ingress(Some(&missing), false));
+        assert!(workspace_needs_owner_managed_ingress(Some(&stale), false));
     }
 }
