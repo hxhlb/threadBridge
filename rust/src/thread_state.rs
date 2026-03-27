@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::app_server_runtime::read_workspace_runtime_state_file;
+use crate::codex::{CodexRunner, CodexWorkspace};
 use crate::repository::{SessionBinding, ThreadMetadata, ThreadStatus};
 use crate::workspace_status::{
-    SessionCurrentStatus, WorkspaceStatusCache, read_session_status,
+    SessionActivitySource, SessionCurrentStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
+    read_session_status,
     read_workspace_status_with_cache, recover_stale_tui_busy_session,
     stale_tui_busy_session_needs_recovery,
 };
@@ -164,10 +168,10 @@ pub async fn effective_busy_snapshot_for_binding(
     }
 
     let Some(tui_session_id) = tui_session_id(binding) else {
-        return Ok(current_snapshot);
+        return Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot));
     };
     if Some(tui_session_id) == current_session_id(binding) {
-        return Ok(current_snapshot);
+        return Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot));
     }
 
     let tui_snapshot = recover_stale_tui_busy_snapshot_if_needed(
@@ -181,7 +185,7 @@ pub async fn effective_busy_snapshot_for_binding(
     {
         Ok(tui_snapshot)
     } else {
-        Ok(current_snapshot)
+        Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot))
     }
 }
 
@@ -196,6 +200,59 @@ async fn recover_stale_tui_busy_snapshot_if_needed(
         return Ok(Some(snapshot));
     }
     recover_stale_tui_busy_session(workspace_path, &snapshot.session_id).await
+}
+
+async fn worker_busy_snapshot_for_binding(
+    binding: &SessionBinding,
+) -> Result<Option<SessionCurrentStatus>> {
+    let Some(workspace_path) = binding_workspace_path(Some(binding)) else {
+        return Ok(None);
+    };
+    let Some(runtime_state) = read_workspace_runtime_state_file(&workspace_path).await? else {
+        return Ok(None);
+    };
+    let Some(worker_ws_url) = runtime_state.worker_ws_url.as_deref() else {
+        return Ok(None);
+    };
+
+    for session_id in [current_session_id(binding), tui_session_id(binding)]
+        .into_iter()
+        .flatten()
+    {
+        let workspace = CodexWorkspace {
+            working_directory: workspace_path.clone(),
+            app_server_url: Some(worker_ws_url.to_owned()),
+        };
+        let runner = CodexRunner::new(None);
+        let run_state = match runner.read_thread_run_state(&workspace, session_id).await {
+            Ok(run_state) => run_state,
+            Err(_) => continue,
+        };
+        if !run_state.is_busy {
+            continue;
+        }
+        return Ok(Some(SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: workspace_path.display().to_string(),
+            session_id: session_id.to_owned(),
+            activity_source: SessionActivitySource::ManagedRuntime,
+            live: true,
+            phase: WorkspaceStatusPhase::TurnRunning,
+            shell_pid: None,
+            child_pid: None,
+            child_pgid: None,
+            child_command: Some("app_server_ws_worker".to_owned()),
+            client: Some("threadbridge-app-server-worker".to_owned()),
+            turn_id: run_state.active_turn_id,
+            summary: None,
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
+            observer_attach_mode: None,
+            updated_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        }));
+    }
+
+    Ok(None)
 }
 
 pub async fn cached_effective_busy_snapshot_for_binding(
@@ -271,13 +328,19 @@ mod tests {
         BindingStatus, LifecycleStatus, ResolvedThreadState, RunStatus,
         effective_busy_snapshot_for_binding, resolve_thread_state,
     };
+    use crate::app_server_runtime::WorkspaceRuntimeState;
+    use crate::codex::{BackendThreadRunState, CodexRunner, CodexWorkspace};
     use crate::repository::{SessionBinding, ThreadMetadata, ThreadScope, ThreadStatus};
     use crate::workspace_status::{
         SessionActivitySource, SessionCurrentStatus, WorkspaceStatusPhase,
         default_local_tui_session_claim, ensure_workspace_status_surface, read_session_status,
         session_status_path, write_local_tui_session_claim,
     };
+    use futures_util::{SinkExt, StreamExt};
     use tokio::fs;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
     use uuid::Uuid;
 
     fn temp_path() -> PathBuf {
@@ -358,6 +421,87 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    async fn write_runtime_state(workspace_path: &Path, worker_ws_url: &str) {
+        let state_dir = workspace_path.join(".threadbridge/state/app-server");
+        fs::create_dir_all(&state_dir).await.unwrap();
+        let state = WorkspaceRuntimeState {
+            schema_version: 3,
+            workspace_cwd: workspace_path.display().to_string(),
+            daemon_ws_url: "ws://127.0.0.1:1".to_owned(),
+            worker_ws_url: Some(worker_ws_url.to_owned()),
+            worker_pid: None,
+            hcodex_ws_url: None,
+        };
+        fs::write(
+            state_dir.join("current.json"),
+            format!("{}\n", serde_json::to_string_pretty(&state).unwrap()),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn start_mock_worker_for_busy_query() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut ws = accept_async(stream).await.unwrap();
+                    while let Some(message) = ws.next().await {
+                        let Ok(message) = message else {
+                            break;
+                        };
+                        let text = match message {
+                            WsMessage::Text(text) => text.to_string(),
+                            _ => continue,
+                        };
+                        let payload: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        let method = payload.get("method").and_then(|value| value.as_str());
+                        let id = payload.get("id").and_then(|value| value.as_i64());
+                        match method {
+                            Some("initialize") => {
+                                ws.send(WsMessage::Text(
+                                    serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id.unwrap(),
+                                        "result": {}
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .unwrap();
+                            }
+                            Some("initialized") => {}
+                            Some("threadbridge/getThreadRunState") => {
+                                ws.send(WsMessage::Text(
+                                    serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id.unwrap(),
+                                        "result": {
+                                            "threadId": "thr_current",
+                                            "isBusy": true,
+                                            "activeTurnId": "turn_worker",
+                                            "interruptible": true,
+                                            "phase": "turn_running"
+                                        }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .unwrap();
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+        format!("ws://127.0.0.1:{}", addr.port())
     }
 
     #[tokio::test]
@@ -494,6 +638,47 @@ mod tests {
         .unwrap();
 
         assert_eq!(snapshot.session_id, "thr_current");
+        assert_eq!(snapshot.phase, WorkspaceStatusPhase::TurnRunning);
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn effective_busy_snapshot_falls_back_to_worker_state() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let worker_ws_url = start_mock_worker_for_busy_query().await;
+        write_runtime_state(&workspace, &worker_ws_url).await;
+        let direct = CodexRunner::new(None)
+            .read_thread_run_state(
+                &CodexWorkspace {
+                    working_directory: workspace.clone(),
+                    app_server_url: Some(worker_ws_url.clone()),
+                },
+                "thr_current",
+            )
+            .await;
+        assert!(matches!(
+            direct,
+            Ok(BackendThreadRunState {
+                is_busy: true,
+                active_turn_id: Some(ref turn_id),
+                ..
+            }) if turn_id == "turn_worker"
+        ));
+
+        let snapshot = effective_busy_snapshot_for_binding(Some(&binding(
+            &workspace,
+            Some("thr_current"),
+            None,
+            false,
+        )))
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(snapshot.session_id, "thr_current");
+        assert_eq!(snapshot.turn_id.as_deref(), Some("turn_worker"));
         assert_eq!(snapshot.phase, WorkspaceStatusPhase::TurnRunning);
 
         let _ = fs::remove_dir_all(workspace).await;
