@@ -99,7 +99,6 @@ pub struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) repository: ThreadRepository,
     pub(crate) codex: CodexRunner,
-    pub(crate) hcodex_ingress: HcodexIngressManager,
     pub(crate) control: RuntimeControlContext,
     pub(crate) interactive_requests: InteractiveRequestRegistry,
     pub(crate) workspace_status_cache: WorkspaceStatusCache,
@@ -153,7 +152,6 @@ impl AppState {
             .await;
         Ok(Self {
             codex: CodexRunner::new(config.runtime.codex_model.clone()),
-            hcodex_ingress,
             control,
             interactive_requests,
             repository,
@@ -1365,7 +1363,6 @@ mod tests {
             },
             repository: repository.clone(),
             codex: CodexRunner::new(None),
-            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
             control: RuntimeControlContext {
                 runtime: RuntimeConfig {
                     data_root_path: root.clone(),

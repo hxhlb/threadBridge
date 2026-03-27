@@ -2363,7 +2363,6 @@ mod tests {
             },
             repository: repository.clone(),
             codex: crate::codex::CodexRunner::new(None),
-            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
             control: RuntimeControlContext {
                 runtime: RuntimeConfig {
                     data_root_path: root.clone(),
@@ -2458,7 +2457,6 @@ mod tests {
             },
             repository: repository.clone(),
             codex: crate::codex::CodexRunner::new(None),
-            hcodex_ingress: HcodexIngressManager::new(repository.clone()),
             control: RuntimeControlContext {
                 runtime: RuntimeConfig {
                     data_root_path: root.clone(),
