@@ -17,7 +17,8 @@ use tracing::{debug, info, warn};
 
 use crate::app_server_observer::AppServerMirrorObserverManager;
 use crate::app_server_runtime::{
-    WorkspaceRuntimeState, consume_hcodex_launch_ticket, write_workspace_runtime_state_file,
+    WorkspaceRuntimeState, consume_hcodex_launch_ticket, read_workspace_runtime_state_file,
+    write_workspace_runtime_state_file,
 };
 use crate::collaboration_mode::CollaborationMode;
 #[cfg(test)]
@@ -50,6 +51,7 @@ pub struct HcodexIngressManager {
 struct WorkspaceHcodexIngress {
     workspace_path: PathBuf,
     daemon_ws_url: String,
+    observer_ws_url: String,
     proxy_base_ws_url: String,
     abort_handle: AbortHandle,
 }
@@ -98,6 +100,7 @@ impl HcodexIngressManager {
         &self,
         workspace_path: &Path,
         daemon_ws_url: &str,
+        observer_ws_url: &str,
     ) -> Result<WorkspaceRuntimeState> {
         let key = canonical_workspace_key(workspace_path)?;
         let mut inner = self.inner.lock().await;
@@ -105,18 +108,29 @@ impl HcodexIngressManager {
             if should_reuse_existing_ingress(
                 &existing.daemon_ws_url,
                 daemon_ws_url,
+                &existing.observer_ws_url,
+                observer_ws_url,
                 hcodex_ingress_endpoint_is_live(&existing.proxy_base_ws_url).await,
             ) {
+                let existing_runtime_state = read_workspace_runtime_state_file(&existing.workspace_path)
+                    .await
+                    .ok()
+                    .flatten();
                 let state = WorkspaceRuntimeState {
-                    schema_version: 2,
+                    schema_version: 3,
                     workspace_cwd: existing.workspace_path.display().to_string(),
                     daemon_ws_url: existing.daemon_ws_url.clone(),
+                    worker_ws_url: existing_runtime_state
+                        .as_ref()
+                        .and_then(|state| state.worker_ws_url.clone()),
+                    worker_pid: existing_runtime_state.and_then(|state| state.worker_pid),
                     hcodex_ws_url: Some(existing.proxy_base_ws_url.clone()),
                 };
                 info!(
                     event = "hcodex_ingress.reuse",
                     workspace = %existing.workspace_path.display(),
                     daemon_ws_url = %existing.daemon_ws_url,
+                    observer_ws_url = %existing.observer_ws_url,
                     proxy_base_ws_url = %existing.proxy_base_ws_url,
                     "reusing workspace hcodex ingress"
                 );
@@ -130,6 +144,8 @@ impl HcodexIngressManager {
                 workspace = %existing.workspace_path.display(),
                 previous_daemon_ws_url = %existing.daemon_ws_url,
                 requested_daemon_ws_url = %daemon_ws_url,
+                previous_observer_ws_url = %existing.observer_ws_url,
+                requested_observer_ws_url = %observer_ws_url,
                 previous_proxy_base_ws_url = %existing.proxy_base_ws_url,
                 "rebuilding workspace hcodex ingress"
             );
@@ -148,11 +164,13 @@ impl HcodexIngressManager {
             .context("failed to read hcodex ingress listener addr")?;
         let proxy_base_ws_url = format!("ws://127.0.0.1:{}", local_addr.port());
         let daemon_ws_url = daemon_ws_url.to_owned();
+        let observer_ws_url = observer_ws_url.to_owned();
         let repository = self.repository.clone();
         let daemon_request_channels = self.daemon_request_channels.clone();
         let observer_runtime = self.observer_runtime.clone();
         let workspace_for_task = workspace_path.clone();
         let daemon_ws_url_for_task = daemon_ws_url.clone();
+        let observer_ws_url_for_task = observer_ws_url.clone();
 
         let listener_task = tokio::spawn(async move {
             if let Err(error) = run_ingress_listener(
@@ -162,6 +180,7 @@ impl HcodexIngressManager {
                 observer_runtime,
                 workspace_for_task,
                 daemon_ws_url_for_task,
+                observer_ws_url_for_task,
             )
             .await
             {
@@ -173,19 +192,29 @@ impl HcodexIngressManager {
         let runtime = WorkspaceHcodexIngress {
             workspace_path: workspace_path.clone(),
             daemon_ws_url: daemon_ws_url.to_owned(),
+            observer_ws_url: observer_ws_url.to_owned(),
             proxy_base_ws_url: proxy_base_ws_url.clone(),
             abort_handle,
         };
+        let existing_runtime_state = read_workspace_runtime_state_file(&workspace_path)
+            .await
+            .ok()
+            .flatten();
         let state = WorkspaceRuntimeState {
-            schema_version: 2,
+            schema_version: 3,
             workspace_cwd: workspace_path.display().to_string(),
             daemon_ws_url: runtime.daemon_ws_url.clone(),
+            worker_ws_url: existing_runtime_state
+                .as_ref()
+                .and_then(|state| state.worker_ws_url.clone()),
+            worker_pid: existing_runtime_state.and_then(|state| state.worker_pid),
             hcodex_ws_url: Some(runtime.proxy_base_ws_url.clone()),
         };
         info!(
             event = "hcodex_ingress.spawned",
             workspace = %workspace_path.display(),
             daemon_ws_url = %runtime.daemon_ws_url,
+            observer_ws_url = %runtime.observer_ws_url,
             proxy_base_ws_url = %runtime.proxy_base_ws_url,
             "spawned workspace hcodex ingress"
         );
@@ -204,9 +233,13 @@ pub async fn hcodex_ingress_endpoint_is_live(url: &str) -> bool {
 fn should_reuse_existing_ingress(
     existing_daemon_ws_url: &str,
     requested_daemon_ws_url: &str,
+    existing_observer_ws_url: &str,
+    requested_observer_ws_url: &str,
     proxy_alive: bool,
 ) -> bool {
-    existing_daemon_ws_url == requested_daemon_ws_url && proxy_alive
+    existing_daemon_ws_url == requested_daemon_ws_url
+        && existing_observer_ws_url == requested_observer_ws_url
+        && proxy_alive
 }
 
 async fn run_ingress_listener(
@@ -216,6 +249,7 @@ async fn run_ingress_listener(
     observer_runtime: AppServerMirrorObserverManager,
     workspace_path: PathBuf,
     daemon_ws_url: String,
+    observer_ws_url: String,
 ) -> Result<()> {
     loop {
         let (stream, remote_addr) = listener.accept().await?;
@@ -224,6 +258,7 @@ async fn run_ingress_listener(
         let observer_runtime = observer_runtime.clone();
         let workspace_path = workspace_path.clone();
         let daemon_ws_url = daemon_ws_url.clone();
+        let observer_ws_url = observer_ws_url.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_ingress_connection(
                 stream,
@@ -233,6 +268,7 @@ async fn run_ingress_listener(
                 observer_runtime,
                 workspace_path,
                 daemon_ws_url,
+                observer_ws_url,
             )
             .await
             {
@@ -250,6 +286,7 @@ async fn handle_ingress_connection(
     observer_runtime: AppServerMirrorObserverManager,
     workspace_path: PathBuf,
     daemon_ws_url: String,
+    observer_ws_url: String,
 ) -> Result<()> {
     let captured_path = Arc::new(StdMutex::new(None::<(String, Option<String>)>));
     let captured_path_clone = captured_path.clone();
@@ -325,7 +362,7 @@ async fn handle_ingress_connection(
                     &observer_runtime,
                     &thread_key,
                     &workspace_path,
-                    &daemon_ws_url,
+                    &observer_ws_url,
                     &daemon_message,
                     &mut tracked_request_method_by_id,
                     &mut tracked_turn_mode_by_request_id,
@@ -432,7 +469,7 @@ async fn maybe_track_server_response(
     observer_runtime: &AppServerMirrorObserverManager,
     thread_key: &str,
     workspace_path: &Path,
-    daemon_ws_url: &str,
+    observer_ws_url: &str,
     message: &WsMessage,
     tracked_request_method_by_id: &mut HashMap<i64, TrackedRequestMethod>,
     tracked_turn_mode_by_request_id: &mut HashMap<i64, CollaborationMode>,
@@ -503,7 +540,7 @@ async fn maybe_track_server_response(
         }
         ObserverAttachMode::ResumeWs => {
             observer_runtime
-                .ensure_thread_observer(workspace_path, daemon_ws_url, thread_key, thread_id)
+                .ensure_thread_observer(workspace_path, observer_ws_url, thread_key, thread_id)
                 .await?;
         }
     }
@@ -672,16 +709,29 @@ mod tests {
         assert!(!should_reuse_existing_ingress(
             "ws://127.0.0.1:40111",
             "ws://127.0.0.1:40112",
+            "ws://127.0.0.1:40211",
+            "ws://127.0.0.1:40211",
             true
         ));
         assert!(!should_reuse_existing_ingress(
             "ws://127.0.0.1:40111",
             "ws://127.0.0.1:40111",
+            "ws://127.0.0.1:40211",
+            "ws://127.0.0.1:40211",
             false
+        ));
+        assert!(!should_reuse_existing_ingress(
+            "ws://127.0.0.1:40111",
+            "ws://127.0.0.1:40111",
+            "ws://127.0.0.1:40211",
+            "ws://127.0.0.1:40212",
+            true
         ));
         assert!(should_reuse_existing_ingress(
             "ws://127.0.0.1:40111",
             "ws://127.0.0.1:40111",
+            "ws://127.0.0.1:40211",
+            "ws://127.0.0.1:40211",
             true
         ));
     }

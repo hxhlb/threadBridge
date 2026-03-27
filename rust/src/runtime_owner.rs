@@ -8,7 +8,9 @@ use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
-use crate::app_server_runtime::{WorkspaceRuntimeManager, daemon_endpoint_is_live};
+use crate::app_server_runtime::{
+    WorkspaceRuntimeManager, daemon_endpoint_is_live, worker_endpoint_is_live,
+};
 use crate::config::RuntimeConfig;
 use crate::hcodex_ingress::{HcodexIngressManager, hcodex_ingress_endpoint_is_live};
 use crate::repository::ThreadRepository;
@@ -160,11 +162,16 @@ impl DesktopRuntimeOwner {
                     event = "runtime_owner.workspace.app_server_ready",
                     workspace = %workspace_path.display(),
                     daemon_ws_url = %runtime.daemon_ws_url,
+                    worker_ws_url = %runtime.worker_ws_url.as_deref().unwrap_or(""),
                     "desktop runtime owner ensured workspace app-server"
                 );
                 let _ = self
                     .hcodex_ingress_runtime
-                    .ensure_workspace_ingress(workspace_path, &runtime.daemon_ws_url)
+                    .ensure_workspace_ingress(
+                        workspace_path,
+                        &runtime.daemon_ws_url,
+                        runtime.client_ws_url(),
+                    )
                     .await?;
                 info!(
                     event = "runtime_owner.workspace.proxy_ready",
@@ -283,7 +290,11 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
             }
         };
 
-    let app_server_running = daemon_endpoint_is_live(&state.daemon_ws_url).await;
+    let worker_running = match state.worker_ws_url.as_deref() {
+        Some(url) => worker_endpoint_is_live(url).await,
+        None => true,
+    };
+    let app_server_running = worker_running && daemon_endpoint_is_live(&state.daemon_ws_url).await;
     let proxy_running = match state.hcodex_ws_url.as_deref() {
         Some(url) => hcodex_ingress_endpoint_is_live(url).await,
         None => false,
@@ -312,6 +323,10 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
         hcodex_ingress_status,
         runtime_readiness,
         last_checked_at,
-        last_error: None,
+        last_error: if worker_running {
+            None
+        } else {
+            Some("workspace app-server worker is unavailable".to_owned())
+        },
     }
 }

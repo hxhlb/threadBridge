@@ -1,5 +1,6 @@
 pub mod app_server_observer;
 pub mod app_server_runtime;
+pub mod app_server_ws_worker;
 pub mod bot_runner;
 pub mod codex;
 pub mod collaboration_mode;

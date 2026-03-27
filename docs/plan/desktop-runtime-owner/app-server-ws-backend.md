@@ -8,15 +8,16 @@
 
 - `app-server-ws-backend` 已是 `threadBridge` today runtime 實際依賴的核心 backend plane
 - `desktop runtime owner` 已擁有它的 lifecycle authority，並負責 workspace-scoped ensure / repair / reconcile
+- workspace-scoped backend child worker 已開始落地為 `app_server_ws_worker`
+- control / execution client，以及 desktop-side observer attach 已開始改走 worker-first websocket，而不再由 desktop process 直接連 upstream daemon
 - shared workspace app-server daemon、workspace-local state file、與 `hcodex ingress` 上游 backend 已落地
 - `CodexRunner`、observer、`hcodex ingress`、session verify / repair 都已實際依賴同一條 app-server ws backend contract
 - `thread/start`、`thread/resume`、`thread/read`、`turn/start`、interrupt、server request / notification intake 都已走 app-server JSON-RPC / ws 路徑
 
 目前尚未完成的部分：
 
-- 這個 backend plane 仍未在架構文檔與代碼分層中被完整當成單一子系統承認
-- 它的長期目標形狀雖已固定為 `desktop runtime owner` 監督下的 workspace-scoped child worker，但 today code 尚未真正收斂到這個形狀
-- today code 中與它相關的責任仍散落在 `codex.rs`、`app_server_runtime.rs`、`app_server_observer.rs`、`hcodex_ingress.rs`、`runtime_owner.rs`、`runtime_control.rs`
+- `hcodex ingress` 仍暫留 desktop process，且 relay 仍直連 upstream daemon；目前只把 observer attach 收回 worker
+- today code 中與 backend 相關的責任仍散落在 `codex.rs`、`app_server_runtime.rs`、`app_server_observer.rs`、`hcodex_ingress.rs`、`runtime_owner.rs`、`runtime_control.rs`
 - `observer` attach 仍建立在 `thread/resume` attach 語義上，而不是正式 upstream subscribe API
 - backend plane 與 shared runtime semantics 的長期 API 形狀仍未收斂成獨立 contract
 - 原生 busy truth 雖然天然屬於 backend，但 `threadBridge` today 仍未完全透過 backend API 取得 busy authority

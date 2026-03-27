@@ -1131,9 +1131,11 @@ mod tests {
         let state_dir = workspace.join(".threadbridge/state/app-server");
         fs::create_dir_all(&state_dir).await?;
         let state = WorkspaceRuntimeState {
-            schema_version: 2,
+            schema_version: 3,
             workspace_cwd: workspace.display().to_string(),
             daemon_ws_url: daemon_ws_url.to_owned(),
+            worker_ws_url: None,
+            worker_pid: None,
             hcodex_ws_url: None,
         };
         fs::write(

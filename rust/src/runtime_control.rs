@@ -370,11 +370,15 @@ impl WorkspaceRuntimeService {
         let _ = self
             .ctx
             .hcodex_ingress
-            .ensure_workspace_ingress(&workspace, &runtime.daemon_ws_url)
+            .ensure_workspace_ingress(
+                &workspace,
+                &runtime.daemon_ws_url,
+                runtime.client_ws_url(),
+            )
             .await?;
         Ok(CodexWorkspace {
             working_directory: workspace,
-            app_server_url: Some(runtime.daemon_ws_url),
+            app_server_url: Some(runtime.client_ws_url().to_owned()),
         })
     }
 
@@ -396,7 +400,7 @@ impl WorkspaceRuntimeService {
         };
         Ok(CodexWorkspace {
             working_directory: workspace,
-            app_server_url: Some(runtime.daemon_ws_url),
+            app_server_url: Some(runtime.client_ws_url().to_owned()),
         })
     }
 
@@ -423,13 +427,14 @@ impl WorkspaceRuntimeService {
                 state_path.display()
             )
         })?;
-        let Some(socket_addr) = state.daemon_ws_url.strip_prefix("ws://") else {
-            bail!("owner-managed daemon url must start with ws://");
+        let client_ws_url = state.client_ws_url();
+        let Some(socket_addr) = client_ws_url.strip_prefix("ws://") else {
+            bail!("owner-managed runtime url must start with ws://");
         };
         let _ = TcpStream::connect(socket_addr).await.with_context(|| {
             format!(
-                "owner-managed daemon is unavailable: {}",
-                state.daemon_ws_url
+                "owner-managed runtime is unavailable: {}",
+                client_ws_url
             )
         })?;
         Ok(state)

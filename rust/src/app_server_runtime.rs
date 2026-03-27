@@ -14,6 +14,8 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::app_server_ws_worker::WorkerReadyState;
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceRuntimeManager {
     inner: Arc<Mutex<HashMap<String, WorkspaceRuntime>>>,
@@ -23,6 +25,7 @@ pub struct WorkspaceRuntimeManager {
 struct WorkspaceRuntime {
     workspace_path: PathBuf,
     daemon_url: String,
+    worker_url: String,
     child: Arc<Mutex<Child>>,
 }
 
@@ -31,6 +34,10 @@ pub struct WorkspaceRuntimeState {
     pub schema_version: u32,
     pub workspace_cwd: String,
     pub daemon_ws_url: String,
+    #[serde(default)]
+    pub worker_ws_url: Option<String>,
+    #[serde(default)]
+    pub worker_pid: Option<u32>,
     #[serde(default)]
     pub hcodex_ws_url: Option<String>,
 }
@@ -46,7 +53,15 @@ pub struct HcodexLaunchTicket {
 const APP_SERVER_STATE_DIR: &str = ".threadbridge/state/app-server";
 const APP_SERVER_STATE_FILE: &str = "current.json";
 const HCODEX_LAUNCH_TICKETS_DIR: &str = ".threadbridge/state/app-server/launch-tickets";
-const RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
+const RUNTIME_STATE_SCHEMA_VERSION: u32 = 3;
+
+impl WorkspaceRuntimeState {
+    pub fn client_ws_url(&self) -> &str {
+        self.worker_ws_url
+            .as_deref()
+            .unwrap_or(&self.daemon_ws_url)
+    }
+}
 
 impl WorkspaceRuntimeManager {
     pub fn new() -> Self {
@@ -62,7 +77,7 @@ impl WorkspaceRuntimeManager {
         let key = canonical_workspace_key(workspace_path)?;
         let mut inner = self.inner.lock().await;
         if let Some(existing) = inner.get(&key).cloned()
-            && daemon_is_healthy(&existing).await
+            && worker_is_healthy(&existing).await
         {
             let existing_proxy_url = read_workspace_runtime_state_file(&existing.workspace_path)
                 .await
@@ -73,13 +88,16 @@ impl WorkspaceRuntimeManager {
                 schema_version: RUNTIME_STATE_SCHEMA_VERSION,
                 workspace_cwd: existing.workspace_path.display().to_string(),
                 daemon_ws_url: existing.daemon_url.clone(),
+                worker_ws_url: Some(existing.worker_url.clone()),
+                worker_pid: child_process_id(&existing.child).await,
                 hcodex_ws_url: existing_proxy_url,
             };
             info!(
                 event = "app_server_runtime.reuse",
                 workspace = %existing.workspace_path.display(),
                 daemon_ws_url = %existing.daemon_url,
-                "reusing shared codex app-server"
+                worker_ws_url = %existing.worker_url,
+                "reusing shared app-server worker"
             );
             drop(inner);
             write_workspace_runtime_state_file(&existing.workspace_path, &state).await?;
@@ -91,13 +109,16 @@ impl WorkspaceRuntimeManager {
             schema_version: RUNTIME_STATE_SCHEMA_VERSION,
             workspace_cwd: runtime.workspace_path.display().to_string(),
             daemon_ws_url: runtime.daemon_url.clone(),
+            worker_ws_url: Some(runtime.worker_url.clone()),
+            worker_pid: child_process_id(&runtime.child).await,
             hcodex_ws_url: None,
         };
         info!(
             event = "app_server_runtime.spawned",
             workspace = %runtime.workspace_path.display(),
             daemon_ws_url = %runtime.daemon_url,
-            "spawned shared codex app-server"
+            worker_ws_url = %runtime.worker_url,
+            "spawned shared app-server worker"
         );
         inner.insert(key, runtime.clone());
         drop(inner);
@@ -122,31 +143,47 @@ async fn spawn_workspace_runtime(workspace_path: &Path) -> Result<WorkspaceRunti
     let workspace_path = workspace_path
         .canonicalize()
         .unwrap_or_else(|_| workspace_path.to_path_buf());
-    let port = find_free_loopback_port().await?;
-    let daemon_url = format!("ws://127.0.0.1:{port}");
-    let mut child = Command::new("codex")
-        .args(["app-server", "--listen", &daemon_url])
-        .current_dir(&workspace_path)
+    let worker_port = find_free_loopback_port().await?;
+    let worker_url = format!("ws://127.0.0.1:{worker_port}");
+    let ready_file = workspace_path
+        .join(APP_SERVER_STATE_DIR)
+        .join(format!("worker-ready-{}.json", Uuid::new_v4()));
+    let worker_bin = resolve_worker_binary_path()?;
+    let mut child = Command::new(&worker_bin)
+        .args([
+            "--workspace",
+            workspace_path
+                .to_str()
+                .context("workspace path must be valid utf-8")?,
+            "--listen-ws-url",
+            &worker_url,
+            "--ready-file",
+            ready_file
+                .to_str()
+                .context("ready file path must be valid utf-8")?,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .context("failed to spawn shared codex app-server")?;
+        .with_context(|| format!("failed to spawn app_server_ws_worker at {}", worker_bin.display()))?;
 
     if let Some(stderr) = child.stderr.take() {
         let mut stderr_lines = BufReader::new(stderr).lines();
         tokio::spawn(async move {
             while let Ok(Some(line)) = stderr_lines.next_line().await {
-                debug!(event = "codex.shared_app_server.stderr", line = %line);
+                debug!(event = "threadbridge.app_server_worker.stderr", line = %line);
             }
         });
     }
 
+    let ready = wait_for_worker_ready(&ready_file, &mut child).await?;
     let child = Arc::new(Mutex::new(child));
     let runtime = WorkspaceRuntime {
         workspace_path,
-        daemon_url,
+        daemon_url: ready.daemon_ws_url,
+        worker_url: ready.worker_ws_url,
         child,
     };
     wait_for_daemon(&runtime).await?;
@@ -155,27 +192,31 @@ async fn spawn_workspace_runtime(workspace_path: &Path) -> Result<WorkspaceRunti
 
 async fn wait_for_daemon(runtime: &WorkspaceRuntime) -> Result<()> {
     for _ in 0..20 {
-        if daemon_is_healthy(runtime).await {
+        if worker_is_healthy(runtime).await {
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     bail!(
-        "shared codex app-server did not become healthy for {}",
+        "shared app-server worker did not become healthy for {}",
         runtime.workspace_path.display()
     );
 }
 
-async fn daemon_is_healthy(runtime: &WorkspaceRuntime) -> bool {
+async fn worker_is_healthy(runtime: &WorkspaceRuntime) -> bool {
     if let Ok(mut child) = runtime.child.try_lock()
         && child.try_wait().ok().flatten().is_some()
     {
         return false;
     }
-    daemon_endpoint_is_live(&runtime.daemon_url).await
+    worker_endpoint_is_live(&runtime.worker_url).await && daemon_endpoint_is_live(&runtime.daemon_url).await
 }
 
 pub async fn daemon_endpoint_is_live(url: &str) -> bool {
+    connect_async(url).await.is_ok()
+}
+
+pub async fn worker_endpoint_is_live(url: &str) -> bool {
     connect_async(url).await.is_ok()
 }
 
@@ -211,6 +252,66 @@ pub async fn issue_hcodex_launch_ticket(workspace_path: &Path, thread_key: &str)
     .await
     .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(ticket)
+}
+
+fn resolve_worker_binary_path() -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("THREADBRIDGE_APP_SERVER_WS_WORKER_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+    let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+    let worker_name = if cfg!(windows) {
+        "app_server_ws_worker.exe"
+    } else {
+        "app_server_ws_worker"
+    };
+    let current_dir = current_exe
+        .parent()
+        .context("current executable has no parent directory")?;
+    let direct = current_dir.join(worker_name);
+    if direct.exists() {
+        return Ok(direct);
+    }
+    if current_dir.file_name().and_then(|name| name.to_str()) == Some("deps")
+        && let Some(parent) = current_dir.parent()
+    {
+        let sibling = parent.join(worker_name);
+        if sibling.exists() {
+            return Ok(sibling);
+        }
+    }
+    Ok(direct)
+}
+
+async fn wait_for_worker_ready(ready_file: &Path, child: &mut Child) -> Result<WorkerReadyState> {
+    for _ in 0..50 {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to poll app-server worker process")?
+        {
+            bail!("app-server worker exited unexpectedly before readiness: {status:?}");
+        }
+        match tokio::fs::read_to_string(ready_file).await {
+            Ok(contents) => {
+                let _ = tokio::fs::remove_file(ready_file).await;
+                return serde_json::from_str(&contents)
+                    .with_context(|| format!("failed to parse {}", ready_file.display()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read {}", ready_file.display()));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    bail!(
+        "timed out waiting for app-server worker readiness at {}",
+        ready_file.display()
+    )
+}
+
+async fn child_process_id(child: &Arc<Mutex<Child>>) -> Option<u32> {
+    child.lock().await.id()
 }
 
 pub async fn consume_hcodex_launch_ticket(

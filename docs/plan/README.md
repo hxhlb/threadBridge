@@ -184,7 +184,7 @@
 - [app-server-ws-backend.md](desktop-runtime-owner/app-server-ws-backend.md)
   - doc kind: `plan`
   - 描述 `app-server-ws-backend` 作為 `desktop runtime owner` 受管 backend plane 的 today reality 與 target vision
-  - 固定它是 `threadBridge` today runtime 的核心 Codex backend substrate，長期應收斂成 workspace-scoped backend worker
+  - 固定它是 `threadBridge` today runtime 的核心 Codex backend substrate，且 workspace-scoped backend worker 已開始部分落地
   - 補清它與 owner、shared `runtime_control`、observer、`hcodex ingress`、Telegram / management surface 的邊界
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
