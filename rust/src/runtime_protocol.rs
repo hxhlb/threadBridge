@@ -1025,7 +1025,8 @@ mod tests {
     use super::{
         ManagedCodexBuildDefaultsView, ManagedCodexView, ManagedWorkspaceView, ThreadStateView,
         WorkingSessionRecordKind, aggregate_runtime_readiness, build_runtime_health,
-        build_thread_views, build_working_session_records, build_working_session_summaries,
+        build_thread_views, build_workspace_views, build_working_session_records,
+        build_working_session_summaries,
     };
     use crate::app_server_runtime::WorkspaceRuntimeState;
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
@@ -1263,6 +1264,62 @@ mod tests {
         let views = build_thread_views(&repo).await.unwrap();
         assert_eq!(views[0].binding_status, "healthy");
         assert_eq!(views[0].session_broken_reason, None);
+
+        let _ = fs::remove_dir_all(root).await;
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn build_thread_views_marks_missing_worker_as_unavailable() {
+        let root = temp_path();
+        let workspace = temp_path();
+        fs::create_dir_all(&workspace).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
+        let _record = repo
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+                full_auto_snapshot(),
+            )
+            .await
+            .unwrap();
+
+        let views = build_thread_views(&repo).await.unwrap();
+        assert_eq!(views[0].run_status, "unavailable");
+        assert_eq!(views[0].run_phase, "unavailable");
+
+        let _ = fs::remove_dir_all(root).await;
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn build_workspace_views_marks_missing_worker_as_unavailable() {
+        let root = temp_path();
+        let workspace = temp_path();
+        fs::create_dir_all(&workspace).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
+        let _record = repo
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+                full_auto_snapshot(),
+            )
+            .await
+            .unwrap();
+
+        let views = build_workspace_views(&repo, None).await.unwrap();
+        assert_eq!(views[0].run_status, "unavailable");
+        assert_eq!(views[0].run_phase, "unavailable");
 
         let _ = fs::remove_dir_all(root).await;
         let _ = fs::remove_dir_all(workspace).await;
