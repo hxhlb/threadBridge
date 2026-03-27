@@ -736,6 +736,8 @@ struct WorkingSessionsEventView {
     thread_key: String,
     updated_at: Option<String>,
     session_count: usize,
+    run_status: String,
+    run_phase: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1347,6 +1349,8 @@ impl ManagementApiState {
                     thread_key,
                     updated_at: None,
                     session_count: 0,
+                    run_status: "idle".to_owned(),
+                    run_phase: "idle".to_owned(),
                 });
                 continue;
             };
@@ -1360,10 +1364,19 @@ impl ManagementApiState {
                 .map(|summary| &summary.updated_at)
                 .max()
                 .cloned();
+            let latest_summary = summaries
+                .iter()
+                .max_by(|a, b| a.updated_at.cmp(&b.updated_at).then_with(|| a.session_id.cmp(&b.session_id)));
             views.push(WorkingSessionsEventView {
                 thread_key,
                 updated_at,
                 session_count: summaries.len(),
+                run_status: latest_summary
+                    .map(|summary| summary.run_status.clone())
+                    .unwrap_or_else(|| "idle".to_owned()),
+                run_phase: latest_summary
+                    .map(|summary| summary.run_phase.clone())
+                    .unwrap_or_else(|| "idle".to_owned()),
             });
         }
         views.sort_by(|a, b| a.thread_key.cmp(&b.thread_key));
@@ -2480,7 +2493,7 @@ mod tests {
             archived_threads: BTreeMap::new(),
             working_sessions: std::iter::once((
                 "thread-1".to_owned(),
-                json!({"thread_key": "thread-1", "session_count": 1, "updated_at": "2026-03-24T10:00:00.000Z"}),
+                json!({"thread_key": "thread-1", "session_count": 1, "updated_at": "2026-03-24T10:00:00.000Z", "run_status": "running", "run_phase": "turn_running"}),
             ))
             .collect(),
             transcripts: std::iter::once((
@@ -2509,7 +2522,7 @@ mod tests {
             .collect(),
             working_sessions: std::iter::once((
                 "thread-1".to_owned(),
-                json!({"thread_key": "thread-1", "session_count": 2, "updated_at": "2026-03-24T10:05:00.000Z"}),
+                json!({"thread_key": "thread-1", "session_count": 2, "updated_at": "2026-03-24T10:05:00.000Z", "run_status": "running", "run_phase": "turn_finalizing"}),
             ))
             .collect(),
             transcripts: std::iter::once((
@@ -2545,6 +2558,7 @@ mod tests {
             event.kind == RuntimeEventKind::WorkingSessionChanged
                 && event.op == RuntimeEventOperation::Upsert
                 && event.key.as_deref() == Some("thread-1")
+                && event.current.as_ref().and_then(|value| value.get("run_phase")).and_then(|value| value.as_str()) == Some("turn_finalizing")
         }));
         assert!(events.iter().any(|event| {
             event.kind == RuntimeEventKind::TranscriptChanged
