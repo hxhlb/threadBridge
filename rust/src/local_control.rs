@@ -5,7 +5,7 @@ use teloxide::prelude::*;
 use teloxide::types::{MessageId, ThreadId};
 
 use crate::repository::{ThreadRecord, ThreadRepository, ThreadStatus};
-use crate::telegram_runtime::{send_scoped_message, status_sync, thread_id_to_i32};
+use crate::telegram_runtime::{send_scoped_message, thread_id_to_i32, title_sync};
 
 #[derive(Clone)]
 pub struct TelegramControlBridgeHandle {
@@ -86,9 +86,8 @@ impl TelegramControlBridgeHandle {
             ),
         )
         .await?;
-        let _ =
-            status_sync::refresh_thread_topic_title(&self.bot, &self.repository, record, source)
-                .await;
+        let _ = title_sync::refresh_thread_topic_title(&self.bot, &self.repository, record, source)
+            .await;
         Ok(())
     }
 
@@ -97,9 +96,8 @@ impl TelegramControlBridgeHandle {
         record: &ThreadRecord,
         source: &'static str,
     ) -> Result<()> {
-        let _ =
-            status_sync::refresh_thread_topic_title(&self.bot, &self.repository, record, source)
-                .await;
+        let _ = title_sync::refresh_thread_topic_title(&self.bot, &self.repository, record, source)
+            .await;
         Ok(())
     }
 
@@ -156,7 +154,7 @@ impl TelegramControlBridgeHandle {
             "This thread has been restored from archive.",
         )
         .await?;
-        let _ = status_sync::refresh_thread_topic_title(
+        let _ = title_sync::refresh_thread_topic_title(
             &self.bot,
             &self.repository,
             restored,

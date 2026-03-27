@@ -8,10 +8,11 @@ use crate::app_server_runtime::WorkspaceRuntimeManager;
 use crate::config::{AppConfig, load_app_config, load_optional_telegram_config};
 use crate::local_control::TelegramControlBridgeHandle;
 use crate::management_api::{ManagementApiHandle, TelegramPollingState};
+use crate::runtime_busy_reconcile::reconcile_stale_bot_busy_sessions;
 use crate::runtime_control::RuntimeOwnershipMode;
 use crate::telegram_runtime::{
     AppState, Command, command_list, handle_callback_query, handle_command, handle_message,
-    status_sync::{reconcile_stale_bot_busy_sessions, spawn_workspace_status_watcher},
+    status_sync::spawn_workspace_status_watcher,
 };
 
 #[derive(Clone)]
@@ -59,7 +60,7 @@ async fn spawn_bot_runtime_from_state(
         )))
         .await;
 
-    match reconcile_stale_bot_busy_sessions(&state).await {
+    match reconcile_stale_bot_busy_sessions(&state.repository).await {
         Ok(report) => {
             info!(
                 event = "workspace_status.reconcile_stale_bot_busy.completed",

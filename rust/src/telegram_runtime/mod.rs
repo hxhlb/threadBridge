@@ -38,6 +38,7 @@ pub(crate) use crate::workspace_status::{
     SessionCurrentStatus, WorkspaceStatusCache, read_session_status, record_bot_status_event,
 };
 
+pub(crate) mod busy_copy;
 pub mod final_reply;
 mod interaction_bridge;
 mod media;
@@ -45,6 +46,7 @@ pub mod preview;
 mod restore;
 pub mod status_sync;
 mod thread_flow;
+pub(crate) mod title_sync;
 
 #[derive(Clone, Debug, BotCommands)]
 #[command(rename_rule = "snake_case")]
@@ -467,7 +469,7 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
                 .unwrap_or(0);
             restore::restore_thread(bot, message, query, state, thread_key, offset).await?;
         }
-        status_sync::CALLBACK_TUI_ADOPT_ACCEPT => {
+        title_sync::CALLBACK_TUI_ADOPT_ACCEPT => {
             let thread_key = parts.get(1).copied().unwrap_or_default();
             let Some(record) = state
                 .repository
@@ -490,7 +492,7 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
                 ),
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(
+            let _ = title_sync::refresh_thread_topic_title(
                 bot,
                 &state.repository,
                 &updated,
@@ -499,7 +501,7 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
             .await;
             bot.answer_callback_query(query.id.clone()).await?;
         }
-        status_sync::CALLBACK_TUI_ADOPT_REJECT => {
+        title_sync::CALLBACK_TUI_ADOPT_REJECT => {
             let thread_key = parts.get(1).copied().unwrap_or_default();
             let Some(record) = state
                 .repository
@@ -522,7 +524,7 @@ async fn run_callback_query(bot: &Bot, query: &CallbackQuery, state: &AppState) 
                 ),
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(
+            let _ = title_sync::refresh_thread_topic_title(
                 bot,
                 &state.repository,
                 &updated,

@@ -5,75 +5,39 @@ use std::time::Duration;
 use anyhow::Result;
 use serde_json::Value;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ThreadId};
-use tracing::{info, warn};
+use teloxide::types::{MessageId, ThreadId};
+use tracing::warn;
 
+#[allow(unused_imports)]
+pub(crate) use super::busy_copy::{busy_command_message, busy_text_message};
 use super::preview::TurnPreviewController;
+#[allow(unused_imports)]
+pub(crate) use super::title_sync::{
+    CALLBACK_TUI_ADOPT_ACCEPT, CALLBACK_TUI_ADOPT_REJECT, refresh_thread_topic_title,
+    render_topic_title, topic_title_suffix_label, tui_adoption_prompt_markup,
+    tui_adoption_prompt_text,
+};
 use super::*;
 use crate::delivery_bus::{
     ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
     provisional_key_for_text,
 };
 use crate::repository::{
-    ThreadRepository, TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin,
-    TranscriptMirrorPhase, TranscriptMirrorRole,
+    TranscriptMirrorDelivery, TranscriptMirrorEntry, TranscriptMirrorOrigin, TranscriptMirrorPhase,
+    TranscriptMirrorRole,
+};
+use crate::runtime_busy_reconcile::reconcile_stale_bot_busy_sessions as reconcile_stale_bot_busy_sessions_for_repository_owner;
+#[allow(unused_imports)]
+pub(crate) use crate::runtime_busy_reconcile::{
+    STARTUP_STALE_BUSY_RECOVERED_LOG, StaleBusyReconciliationReport,
 };
 use crate::thread_state::{
     BindingStatus, LifecycleStatus, resolve_binding_status, resolve_lifecycle_status,
 };
 use crate::workspace_status::{
-    LocalTuiSessionClaim, SessionActivitySource, SessionCurrentStatus, WorkspaceAggregateStatus,
-    WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client,
-    read_local_tui_session_claim, read_session_status, record_bot_status_event,
+    LocalTuiSessionClaim, WorkspaceAggregateStatus, WorkspaceStatusEventRecord, events_path,
+    is_hcodex_ingress_client, read_local_tui_session_claim,
 };
-
-const TELEGRAM_TOPIC_TITLE_MAX_CHARS: usize = 128;
-const STARTUP_STALE_BUSY_RECOVERED_LOG: &str =
-    "Recovered stale busy state from previous threadBridge process during startup.";
-pub(crate) const CALLBACK_TUI_ADOPT_ACCEPT: &str = "tui_adopt_accept";
-pub(crate) const CALLBACK_TUI_ADOPT_REJECT: &str = "tui_adopt_reject";
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StaleBusyReconciliationReport {
-    pub scanned_threads: usize,
-    pub unique_sessions: usize,
-    pub recovered_sessions: usize,
-    pub recovered_threads: usize,
-    pub skipped_threads: usize,
-}
-
-fn thread_id_from_i32(value: i32) -> ThreadId {
-    ThreadId(MessageId(value))
-}
-
-fn workspace_basename(workspace_path: Option<&Path>) -> Option<String> {
-    workspace_path
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn truncate_topic_base(base: &str, suffix: &str) -> String {
-    let suffix_len = suffix.chars().count();
-    if suffix_len >= TELEGRAM_TOPIC_TITLE_MAX_CHARS {
-        return suffix
-            .chars()
-            .take(TELEGRAM_TOPIC_TITLE_MAX_CHARS)
-            .collect::<String>();
-    }
-    let max_base_len = TELEGRAM_TOPIC_TITLE_MAX_CHARS - suffix_len;
-    let base_len = base.chars().count();
-    if base_len <= max_base_len {
-        return format!("{base}{suffix}");
-    }
-    let ellipsis = "...";
-    let keep_len = max_base_len.saturating_sub(ellipsis.chars().count());
-    let mut truncated = base.chars().take(keep_len).collect::<String>();
-    truncated.push_str(ellipsis);
-    format!("{truncated}{suffix}")
-}
 
 fn workspace_local_conflict(
     aggregate: Option<&WorkspaceAggregateStatus>,
@@ -100,276 +64,21 @@ fn workspace_local_conflict(
         .all(|item| item != expected_session_id)
 }
 
-pub(crate) fn render_topic_title(
-    record: &ThreadRecord,
-    workspace_path: Option<&Path>,
-    broken: bool,
-) -> String {
-    let base = record
-        .metadata
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .or_else(|| workspace_basename(workspace_path))
-        .unwrap_or_else(|| "Unbound".to_owned());
-
-    let mut suffix = String::new();
-    if broken {
-        suffix.push_str(" · broken");
-    }
-
-    truncate_topic_base(&base, &suffix)
-}
-
-pub(crate) fn topic_title_suffix_label(broken: bool) -> &'static str {
-    if broken { "broken" } else { "none" }
-}
-
-pub(crate) fn tui_adoption_prompt_text() -> String {
-    format_system_text(TelegramSystemIntent::Question, "後續對話是否以 TUI session")
-}
-
-pub(crate) fn tui_adoption_prompt_markup(thread_key: &str) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback(
-            "繼續 TUI 對話 (默認)",
-            format!("{CALLBACK_TUI_ADOPT_ACCEPT}:{thread_key}"),
-        ),
-        InlineKeyboardButton::callback(
-            "恢復原對話",
-            format!("{CALLBACK_TUI_ADOPT_REJECT}:{thread_key}"),
-        ),
-    ]])
-}
-
-pub(crate) async fn refresh_thread_topic_title(
-    bot: &Bot,
-    repository: &ThreadRepository,
-    record: &ThreadRecord,
-    source: &'static str,
-) -> Result<()> {
-    let Some(message_thread_id) = record.metadata.message_thread_id else {
-        return Ok(());
-    };
-    let session = repository.read_session_binding(record).await?;
-    let workspace_path = session
-        .as_ref()
-        .and_then(|binding| binding.workspace_cwd.as_deref())
-        .map(PathBuf::from);
-    let binding_status = resolve_binding_status(&record.metadata, session.as_ref());
-    let title = render_topic_title(
-        record,
-        workspace_path.as_deref(),
-        binding_status == BindingStatus::Broken,
-    );
-    apply_thread_topic_title(
-        bot,
-        record,
-        workspace_path.as_deref(),
-        message_thread_id,
-        &title,
-        source,
-    )
-    .await
-}
-
-async fn apply_thread_topic_title(
-    bot: &Bot,
-    record: &ThreadRecord,
-    workspace_path: Option<&Path>,
-    message_thread_id: i32,
-    title: &str,
-    source: &'static str,
-) -> Result<()> {
-    match bot
-        .edit_forum_topic(
-            ChatId(record.metadata.chat_id),
-            thread_id_from_i32(message_thread_id),
-        )
-        .name(title.to_owned())
-        .await
-    {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            let workspace = workspace_path
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "unbound".to_owned());
-            warn!(
-                event = "telegram.topic_title.refresh_failed",
-                source = source,
-                thread_key = %record.metadata.thread_key,
-                chat_id = record.metadata.chat_id,
-                message_thread_id,
-                workspace = %workspace,
-                stored_title = record.metadata.title.as_deref().unwrap_or(""),
-                desired_title = %title,
-                session_broken = record.metadata.session_broken,
-                error = %error,
-                "failed to update Telegram forum topic title"
-            );
-            Err(error.into())
-        }
-    }
-}
-
-pub(crate) fn busy_text_message(
-    snapshot: &SessionCurrentStatus,
-    image_saved: bool,
-) -> &'static str {
-    if snapshot.phase == crate::workspace_status::WorkspaceStatusPhase::TurnFinalizing {
-        return match snapshot.activity_source {
-            SessionActivitySource::Tui if image_saved => {
-                "Image saved. The shared TUI session is already settling after an interrupt request. Analysis will stay pending until that turn fully stops."
-            }
-            SessionActivitySource::Tui => {
-                "The shared TUI session is already settling after an interrupt request. Wait for it to stop before sending a new Telegram request."
-            }
-            SessionActivitySource::ManagedRuntime => {
-                "This thread's current Codex session is already settling after an interrupt request. Wait for it to stop before sending a new Telegram request."
-            }
-        };
-    }
-    match snapshot.activity_source {
-        SessionActivitySource::Tui if image_saved => {
-            "Image saved. Analysis will stay pending until the shared TUI session finishes its current turn. Use /stop if you want to interrupt it."
-        }
-        SessionActivitySource::Tui => {
-            "The shared TUI session is already running a turn. Wait for it to finish before sending a new Telegram request, or use /stop to interrupt it."
-        }
-        SessionActivitySource::ManagedRuntime => {
-            "This thread's current Codex session is already handling another Telegram request. Wait for it to finish before sending a new one, or use /stop to interrupt it."
-        }
-    }
-}
-
-pub(crate) fn busy_command_message(snapshot: &SessionCurrentStatus) -> &'static str {
-    if snapshot.phase == crate::workspace_status::WorkspaceStatusPhase::TurnFinalizing {
-        return match snapshot.activity_source {
-            SessionActivitySource::Tui => {
-                "The shared TUI session is already settling after an interrupt request. Wait for it to stop before changing this thread's session state."
-            }
-            SessionActivitySource::ManagedRuntime => {
-                "This thread's current Codex session is already settling after an interrupt request. Wait for it to stop before changing session state."
-            }
-        };
-    }
-    match snapshot.activity_source {
-        SessionActivitySource::Tui => {
-            "The shared TUI session is already running a turn. Wait for it to finish before changing this thread's session state, or use /stop to interrupt it."
-        }
-        SessionActivitySource::ManagedRuntime => {
-            "This thread's current Codex session is already handling another Telegram request. Wait for it to finish before changing session state, or use /stop to interrupt it."
-        }
-    }
-}
-
-fn session_reconciliation_key(workspace_path: &Path, session_id: &str) -> String {
-    let workspace = workspace_path
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_path.to_path_buf())
-        .display()
-        .to_string();
-    format!("{workspace}::{session_id}")
-}
-
-fn should_recover_stale_bot_busy(snapshot: &SessionCurrentStatus) -> bool {
-    snapshot.activity_source == SessionActivitySource::ManagedRuntime
-        && snapshot.phase.is_turn_busy()
+fn thread_id_from_i32(value: i32) -> ThreadId {
+    ThreadId(MessageId(value))
 }
 
 pub async fn reconcile_stale_bot_busy_sessions(
     state: &AppState,
 ) -> Result<StaleBusyReconciliationReport> {
-    reconcile_stale_bot_busy_sessions_for_repository(&state.repository).await
+    reconcile_stale_bot_busy_sessions_for_repository_owner(&state.repository).await
 }
 
+#[cfg(test)]
 async fn reconcile_stale_bot_busy_sessions_for_repository(
-    repository: &ThreadRepository,
+    repository: &crate::repository::ThreadRepository,
 ) -> Result<StaleBusyReconciliationReport> {
-    let records = repository.list_active_threads().await?;
-    let mut report = StaleBusyReconciliationReport::default();
-    let mut recovery_by_session: HashMap<String, bool> = HashMap::new();
-
-    for record in records {
-        report.scanned_threads += 1;
-        let Some(binding) = repository.read_session_binding(&record).await? else {
-            report.skipped_threads += 1;
-            continue;
-        };
-        let binding_status = resolve_binding_status(&record.metadata, Some(&binding));
-        let Some(session_id) = usable_bound_session_id(
-            crate::thread_state::ResolvedThreadState {
-                lifecycle_status: resolve_lifecycle_status(&record.metadata),
-                binding_status,
-                run_status: crate::thread_state::RunStatus::Idle,
-                run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
-            },
-            Some(&binding),
-        ) else {
-            report.skipped_threads += 1;
-            continue;
-        };
-        let Some(workspace_cwd) = binding.workspace_cwd.as_deref() else {
-            report.skipped_threads += 1;
-            continue;
-        };
-
-        let workspace_path = PathBuf::from(workspace_cwd);
-        let session_key = session_reconciliation_key(&workspace_path, session_id);
-        let recovered = if let Some(known) = recovery_by_session.get(&session_key).copied() {
-            known
-        } else {
-            report.unique_sessions += 1;
-            let recovered =
-                if let Some(snapshot) = read_session_status(&workspace_path, session_id).await? {
-                    if should_recover_stale_bot_busy(&snapshot) {
-                        info!(
-                            event = "workspace_status.reconcile_stale_bot_busy.recovered",
-                            thread_key = %record.metadata.thread_key,
-                            workspace = %workspace_path.display(),
-                            session_id,
-                            previous_phase = ?snapshot.phase,
-                            previous_turn_id = snapshot.turn_id.as_deref().unwrap_or(""),
-                            "recovered stale bot-owned busy session snapshot"
-                        );
-                        record_bot_status_event(
-                            &workspace_path,
-                            "bot_turn_recovered",
-                            Some(session_id),
-                            snapshot.turn_id.as_deref(),
-                            None,
-                        )
-                        .await?;
-                        report.recovered_sessions += 1;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-            recovery_by_session.insert(session_key.clone(), recovered);
-            recovered
-        };
-
-        if recovered {
-            repository
-                .append_log(
-                    &record,
-                    LogDirection::System,
-                    STARTUP_STALE_BUSY_RECOVERED_LOG,
-                    None,
-                )
-                .await?;
-            report.recovered_threads += 1;
-        } else {
-            report.skipped_threads += 1;
-        }
-    }
-
-    Ok(report)
+    reconcile_stale_bot_busy_sessions_for_repository_owner(repository).await
 }
 
 pub async fn spawn_workspace_status_watcher(bot: Bot, state: AppState) {
@@ -416,9 +125,9 @@ async fn sync_workspace_titles_once(
     let mut aggregate_by_workspace: HashMap<String, WorkspaceAggregateStatus> = HashMap::new();
 
     for record in records {
-        let Some(message_thread_id) = record.metadata.message_thread_id else {
+        if record.metadata.message_thread_id.is_none() {
             continue;
-        };
+        }
         active_conversations.insert(record.conversation_key.clone());
 
         let session = state.repository.read_session_binding(&record).await?;
@@ -458,15 +167,9 @@ async fn sync_workspace_titles_once(
             continue;
         }
 
-        if let Err(error) = apply_thread_topic_title(
-            bot,
-            &record,
-            workspace_path.as_deref(),
-            message_thread_id,
-            &rendered,
-            "workspace_status_sync",
-        )
-        .await
+        if let Err(error) =
+            refresh_thread_topic_title(bot, &state.repository, &record, "workspace_status_sync")
+                .await
         {
             warn!(
                 event = "workspace_status.sync.title_apply_failed",

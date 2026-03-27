@@ -12,7 +12,6 @@ use super::final_reply::send_final_assistant_reply;
 use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
-use super::status_sync;
 use super::*;
 use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
 use crate::collaboration_mode::CollaborationMode;
@@ -164,7 +163,7 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         resolved_state.lifecycle_status.as_str(),
         resolved_state.binding_status.as_str(),
         resolved_state.run_status.as_str(),
-        status_sync::topic_title_suffix_label(resolved_state.is_broken()),
+        title_sync::topic_title_suffix_label(resolved_state.is_broken()),
         current_phase,
         current_owner,
         gate_session_id,
@@ -544,7 +543,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(busy),
+                    busy_copy::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -580,7 +579,7 @@ pub(crate) async fn run_command(
                         "Started a fresh Codex session for this workspace.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(
+                    let _ = title_sync::refresh_thread_topic_title(
                         bot,
                         &state.repository,
                         &record,
@@ -647,7 +646,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(busy),
+                    busy_copy::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -682,7 +681,7 @@ pub(crate) async fn run_command(
                         "Codex session continuity verified for this workspace.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(
+                    let _ = title_sync::refresh_thread_topic_title(
                         bot,
                         &state.repository,
                         &updated,
@@ -699,7 +698,7 @@ pub(crate) async fn run_command(
                         "Codex session repair failed. Use /new_session to start fresh or /repair_session to retry.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(
+                    let _ = title_sync::refresh_thread_topic_title(
                         bot,
                         &state.repository,
                         &updated,
@@ -1216,7 +1215,7 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    status_sync::busy_command_message(busy),
+                    busy_copy::busy_command_message(busy),
                 )
                 .await?;
                 return Ok(());
@@ -1268,7 +1267,7 @@ pub(crate) async fn run_command(
                         "Codex session is unavailable. Use /repair_session or /new_session.",
                     )
                     .await?;
-                    let _ = status_sync::refresh_thread_topic_title(
+                    let _ = title_sync::refresh_thread_topic_title(
                         bot,
                         &state.repository,
                         &updated,
@@ -1312,7 +1311,7 @@ pub(crate) async fn run_command(
                     None,
                 )
                 .await?;
-            let _ = status_sync::refresh_thread_topic_title(
+            let _ = title_sync::refresh_thread_topic_title(
                 bot,
                 &state.repository,
                 &updated,
@@ -1396,7 +1395,7 @@ pub(crate) async fn run_command(
                 format!("Collaboration mode is now `{}`.", mode.as_str()),
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(
+            let _ = title_sync::refresh_thread_topic_title(
                 bot,
                 &state.repository,
                 &record,
@@ -1477,7 +1476,7 @@ pub(crate) async fn run_text_message(
             bot,
             msg.chat.id,
             Some(thread_id),
-            status_sync::busy_text_message(busy, false),
+            busy_copy::busy_text_message(busy, false),
         )
         .await?;
         return Ok(());
@@ -2052,7 +2051,7 @@ async fn execute_text_turn(
                 "Codex session is unavailable. Use /repair_session to retry or /new_session to start a fresh one.",
             )
             .await?;
-            let _ = status_sync::refresh_thread_topic_title(
+            let _ = title_sync::refresh_thread_topic_title(
                 bot,
                 &state.repository,
                 &record,
@@ -2093,7 +2092,7 @@ pub(crate) async fn launch_plan_implementation_turn(
         anyhow::bail!("workspace is missing a usable session");
     };
     if let Some(busy) = blocking_snapshot.as_ref() {
-        anyhow::bail!("{}", status_sync::busy_text_message(busy, false));
+        anyhow::bail!("{}", busy_copy::busy_text_message(busy, false));
     }
     let workspace_path = state
         .control
