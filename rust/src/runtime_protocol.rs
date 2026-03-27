@@ -14,7 +14,7 @@ use crate::repository::{
 use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus, WorkspaceRuntimeHeartbeat};
 use crate::thread_state::{
     BindingStatus, effective_busy_snapshot_for_binding, resolve_binding_status,
-    resolve_thread_state,
+    resolve_lifecycle_status, resolve_thread_state,
 };
 use crate::workspace_status::{WorkspaceStatusPhase, read_session_status};
 
@@ -227,6 +227,8 @@ struct WorkingSessionAggregate {
     status_updated_at: Option<String>,
     is_running: bool,
     phase: Option<WorkspaceStatusPhase>,
+    run_status_override: Option<&'static str>,
+    run_phase_override: Option<&'static str>,
     history_updated_at: Option<String>,
     last_error: Option<WorkingSessionError>,
 }
@@ -320,12 +322,28 @@ pub async fn build_workspace_views(
             .read_recent_workspace_sessions(&workspace_cwd)
             .await
             .unwrap_or_default();
-        let resolved_state = resolve_thread_state(&record.metadata, Some(&binding)).await?;
+        let resolved_state = resolve_thread_state(&record.metadata, Some(&binding)).await;
         let session_broken_reason =
             canonical_binding_broken_reason(&record.metadata, Some(&binding));
+        let (run_status, run_phase) = match resolved_state {
+            Ok(state) => (state.run_status.as_str(), state.run_phase.as_str()),
+            Err(error) => {
+                runtime_status.last_error = Some(match runtime_status.last_error.take() {
+                    Some(existing) => format!("{existing}; {error}"),
+                    None => error.to_string(),
+                });
+                if runtime_status.runtime_readiness == "ready" {
+                    runtime_status.runtime_readiness = "degraded";
+                }
+                if runtime_status.app_server_status == "running" {
+                    runtime_status.app_server_status = "unavailable";
+                }
+                ("unavailable", "unavailable")
+            }
+        };
         let recovery_hint = workspace_recovery_hint(
             false,
-            resolved_state.binding_status.as_str(),
+            resolve_binding_status(&record.metadata, Some(&binding)).as_str(),
             session_broken_reason.as_deref(),
             &runtime_status,
             binding.tui_session_adoption_pending,
@@ -340,9 +358,9 @@ pub async fn build_workspace_views(
             current_approval_policy: binding.current_approval_policy.clone(),
             current_sandbox_policy: binding.current_sandbox_policy.clone(),
             mode_drift: workspace_mode_drift(workspace_execution_mode, &binding),
-            binding_status: resolved_state.binding_status.as_str(),
-            run_status: resolved_state.run_status.as_str(),
-            run_phase: resolved_state.run_phase.as_str(),
+            binding_status: resolve_binding_status(&record.metadata, Some(&binding)).as_str(),
+            run_status,
+            run_phase,
             current_codex_thread_id: binding.current_codex_thread_id.clone(),
             tui_active_codex_thread_id: binding.tui_active_codex_thread_id.clone(),
             tui_session_adoption_pending: binding.tui_session_adoption_pending,
@@ -414,9 +432,15 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             ),
             None => None,
         };
-        let resolved_state = resolve_thread_state(&record.metadata, binding.as_ref()).await?;
+        let resolved_state = resolve_thread_state(&record.metadata, binding.as_ref()).await;
         let metadata = record.metadata;
+        let lifecycle_status = resolve_lifecycle_status(&metadata);
         let session_broken_reason = canonical_binding_broken_reason(&metadata, binding.as_ref());
+        let binding_status = resolve_binding_status(&metadata, binding.as_ref());
+        let (run_status, run_phase) = match resolved_state {
+            Ok(state) => (state.run_status.as_str(), state.run_phase.as_str()),
+            Err(_) => ("unavailable", "unavailable"),
+        };
         views.push(ThreadStateView {
             thread_key: metadata.thread_key,
             title: metadata.title,
@@ -433,10 +457,10 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             current_sandbox_policy: binding
                 .as_ref()
                 .and_then(|binding| binding.current_sandbox_policy.clone()),
-            lifecycle_status: resolved_state.lifecycle_status.as_str(),
-            binding_status: resolved_state.binding_status.as_str(),
-            run_status: resolved_state.run_status.as_str(),
-            run_phase: resolved_state.run_phase.as_str(),
+            lifecycle_status: lifecycle_status.as_str(),
+            binding_status: binding_status.as_str(),
+            run_status,
+            run_phase,
             current_codex_thread_id: binding
                 .as_ref()
                 .and_then(|binding| binding.current_codex_thread_id.clone()),
@@ -489,15 +513,18 @@ pub async fn build_working_session_summaries(
             workspace_cwd: workspace_cwd.clone(),
             started_at,
             updated_at,
-            run_status: if aggregate.is_running {
-                "running".to_owned()
-            } else {
-                "idle".to_owned()
-            },
+            run_status: aggregate
+                .run_status_override
+                .unwrap_or(if aggregate.is_running { "running" } else { "idle" })
+                .to_owned(),
             run_phase: aggregate
-                .phase
-                .unwrap_or(WorkspaceStatusPhase::Idle)
-                .as_str()
+                .run_phase_override
+                .unwrap_or(
+                    aggregate
+                        .phase
+                        .unwrap_or(WorkspaceStatusPhase::Idle)
+                        .as_str(),
+                )
                 .to_owned(),
             origins_seen: origins_seen_for_entries(&aggregate.entries),
             record_count,
@@ -616,7 +643,14 @@ async fn build_working_session_aggregates(
             read_session_status(workspace_path, session_id).await?,
         );
     }
-    let fallback_busy_snapshot = effective_busy_snapshot_for_binding(Some(binding)).await?;
+    let authority_session_ids = [
+        binding.current_codex_thread_id.as_deref(),
+        binding.tui_active_codex_thread_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let fallback_busy_snapshot = effective_busy_snapshot_for_binding(Some(binding)).await;
 
     for (session_id, status) in session_statuses {
         let aggregate = aggregates.entry(session_id.clone()).or_default();
@@ -624,15 +658,19 @@ async fn build_working_session_aggregates(
             aggregate.status_updated_at = Some(status.updated_at);
             aggregate.is_running = status.phase.is_turn_busy();
             aggregate.phase = Some(status.phase);
-        } else if fallback_busy_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.session_id == session_id)
-        {
-            aggregate.status_updated_at = fallback_busy_snapshot
+        } else if let Ok(snapshot) = fallback_busy_snapshot.as_ref() {
+            if snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.updated_at.clone());
-            aggregate.is_running = true;
-            aggregate.phase = fallback_busy_snapshot.as_ref().map(|snapshot| snapshot.phase);
+                .is_some_and(|snapshot| snapshot.session_id == session_id)
+            {
+                aggregate.status_updated_at = snapshot.as_ref().map(|snapshot| snapshot.updated_at.clone());
+                aggregate.is_running = true;
+                aggregate.phase = snapshot.as_ref().map(|snapshot| snapshot.phase);
+            }
+        } else if authority_session_ids.iter().any(|candidate| *candidate == session_id) {
+            aggregate.status_updated_at = Some(binding.updated_at.clone());
+            aggregate.run_status_override = Some("unavailable");
+            aggregate.run_phase_override = Some("unavailable");
         }
     }
 

@@ -5,6 +5,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,6 +34,8 @@ pub struct WorkerThreadRunState {
     pub active_turn_id: Option<String>,
     pub interruptible: bool,
     pub phase: Option<String>,
+    #[serde(rename = "lastTransitionAt")]
+    pub last_transition_at: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -40,6 +43,10 @@ struct WorkerState {
     pending_turn_requests: HashMap<i64, String>,
     turn_to_thread: HashMap<String, String>,
     thread_runs: HashMap<String, WorkerThreadRunState>,
+}
+
+fn now_iso() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub fn run_from_env() -> Result<()> {
@@ -307,6 +314,7 @@ where
             active_turn_id: None,
             interruptible: false,
             phase: Some("idle".to_owned()),
+            last_transition_at: None,
         });
     client_sink
         .send(WsMessage::Text(
@@ -359,6 +367,7 @@ async fn track_client_message(message: &WsMessage, worker_state: &Arc<Mutex<Work
             if let Some(run_state) = worker_state.lock().await.thread_runs.get_mut(thread_id) {
                 run_state.interruptible = false;
                 run_state.phase = Some("turn_interrupt_requested".to_owned());
+                run_state.last_transition_at = Some(now_iso());
             }
         }
         _ => {}
@@ -389,6 +398,7 @@ async fn track_upstream_message(message: &WsMessage, worker_state: &Arc<Mutex<Wo
                         active_turn_id: Some(turn_id.to_owned()),
                         interruptible: true,
                         phase: Some("turn_running".to_owned()),
+                        last_transition_at: Some(now_iso()),
                     },
                 );
             }
@@ -423,6 +433,7 @@ async fn track_upstream_message(message: &WsMessage, worker_state: &Arc<Mutex<Wo
                     active_turn_id: Some(turn_id.to_owned()),
                     interruptible: true,
                     phase: Some("turn_running".to_owned()),
+                    last_transition_at: Some(now_iso()),
                 },
             );
         }
@@ -450,6 +461,7 @@ async fn track_upstream_message(message: &WsMessage, worker_state: &Arc<Mutex<Wo
                     "failed" => "failed",
                     _ => "idle",
                 }.to_owned());
+                run_state.last_transition_at = Some(now_iso());
             }
         }
         _ => {}
@@ -540,6 +552,7 @@ mod tests {
                     active_turn_id: Some("turn_1".to_owned()),
                     interruptible: true,
                     phase: Some("turn_running".to_owned()),
+                    last_transition_at: None,
                 },
             );
         }
@@ -585,6 +598,7 @@ mod tests {
                     active_turn_id: Some("turn_1".to_owned()),
                     interruptible: false,
                     phase: Some("turn_interrupt_requested".to_owned()),
+                    last_transition_at: None,
                 },
             );
         }

@@ -372,7 +372,7 @@ impl WorkspaceRuntimeService {
             .hcodex_ingress
             .ensure_workspace_ingress(
                 &workspace,
-                &runtime.daemon_ws_url,
+                runtime.client_ws_url(),
                 runtime.client_ws_url(),
             )
             .await?;

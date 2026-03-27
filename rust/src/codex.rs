@@ -97,6 +97,8 @@ pub struct BackendThreadRunState {
     pub active_turn_id: Option<String>,
     pub interruptible: bool,
     pub phase: Option<String>,
+    #[serde(rename = "lastTransitionAt")]
+    pub last_transition_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

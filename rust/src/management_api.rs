@@ -2469,12 +2469,12 @@ mod tests {
             runtime: json!({"runtime_readiness": "ready"}),
             threads: std::iter::once((
                 "thread-1".to_owned(),
-                json!({"thread_key": "thread-1", "run_status": "idle"}),
+                json!({"thread_key": "thread-1", "run_status": "idle", "run_phase": "idle"}),
             ))
             .collect(),
             workspaces: std::iter::once((
                 "/tmp/workspace".to_owned(),
-                json!({"workspace_cwd": "/tmp/workspace", "run_status": "idle"}),
+                json!({"workspace_cwd": "/tmp/workspace", "run_status": "idle", "run_phase": "idle"}),
             ))
             .collect(),
             archived_threads: BTreeMap::new(),
@@ -2494,10 +2494,14 @@ mod tests {
             runtime: json!({"runtime_readiness": "degraded"}),
             threads: std::iter::once((
                 "thread-1".to_owned(),
-                json!({"thread_key": "thread-1", "run_status": "running"}),
+                json!({"thread_key": "thread-1", "run_status": "running", "run_phase": "turn_finalizing"}),
             ))
             .collect(),
-            workspaces: BTreeMap::new(),
+            workspaces: std::iter::once((
+                "/tmp/workspace".to_owned(),
+                json!({"workspace_cwd": "/tmp/workspace", "run_status": "running", "run_phase": "turn_finalizing"}),
+            ))
+            .collect(),
             archived_threads: std::iter::once((
                 "thread-1".to_owned(),
                 json!({"thread_key": "thread-1", "archived_at": "2026-03-24T00:00:00.000Z"}),
@@ -2524,11 +2528,13 @@ mod tests {
             event.kind == RuntimeEventKind::ThreadStateChanged
                 && event.op == RuntimeEventOperation::Upsert
                 && event.key.as_deref() == Some("thread-1")
+                && event.current.as_ref().and_then(|value| value.get("run_phase")).and_then(|value| value.as_str()) == Some("turn_finalizing")
         }));
         assert!(events.iter().any(|event| {
             event.kind == RuntimeEventKind::WorkspaceStateChanged
-                && event.op == RuntimeEventOperation::Remove
+                && event.op == RuntimeEventOperation::Upsert
                 && event.key.as_deref() == Some("/tmp/workspace")
+                && event.current.as_ref().and_then(|value| value.get("run_phase")).and_then(|value| value.as_str()) == Some("turn_finalizing")
         }));
         assert!(events.iter().any(|event| {
             event.kind == RuntimeEventKind::ArchivedThreadChanged

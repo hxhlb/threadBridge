@@ -169,7 +169,7 @@ impl DesktopRuntimeOwner {
                     .hcodex_ingress_runtime
                     .ensure_workspace_ingress(
                         workspace_path,
-                        &runtime.daemon_ws_url,
+                        runtime.client_ws_url(),
                         runtime.client_ws_url(),
                     )
                     .await?;

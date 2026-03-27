@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
-use chrono::Utc;
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::app_server_runtime::read_workspace_runtime_state_file;
@@ -9,9 +8,7 @@ use crate::codex::{CodexRunner, CodexWorkspace};
 use crate::repository::{SessionBinding, ThreadMetadata, ThreadStatus};
 use crate::workspace_status::{
     SessionActivitySource, SessionCurrentStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
-    read_session_status,
-    read_workspace_status_with_cache, recover_stale_tui_busy_session,
-    stale_tui_busy_session_needs_recovery,
+    read_workspace_status_with_cache,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -148,59 +145,7 @@ pub async fn effective_busy_snapshot_for_binding(
     let Some(binding) = binding else {
         return Ok(None);
     };
-    let Some(workspace_path) = binding_workspace_path(Some(binding)) else {
-        return Ok(None);
-    };
-
-    let current_snapshot = if let Some(session_id) = current_session_id(binding) {
-        recover_stale_tui_busy_snapshot_if_needed(
-            &workspace_path,
-            read_session_status(&workspace_path, session_id).await?,
-        )
-        .await?
-    } else {
-        None
-    };
-    if current_snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
-    {
-        return Ok(current_snapshot);
-    }
-
-    let Some(tui_session_id) = tui_session_id(binding) else {
-        return Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot));
-    };
-    if Some(tui_session_id) == current_session_id(binding) {
-        return Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot));
-    }
-
-    let tui_snapshot = recover_stale_tui_busy_snapshot_if_needed(
-        &workspace_path,
-        read_session_status(&workspace_path, tui_session_id).await?,
-    )
-    .await?;
-    if tui_snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
-    {
-        Ok(tui_snapshot)
-    } else {
-        Ok(worker_busy_snapshot_for_binding(binding).await?.or(current_snapshot))
-    }
-}
-
-async fn recover_stale_tui_busy_snapshot_if_needed(
-    workspace_path: &PathBuf,
-    snapshot: Option<SessionCurrentStatus>,
-) -> Result<Option<SessionCurrentStatus>> {
-    let Some(snapshot) = snapshot else {
-        return Ok(None);
-    };
-    if !stale_tui_busy_session_needs_recovery(workspace_path, &snapshot).await? {
-        return Ok(Some(snapshot));
-    }
-    recover_stale_tui_busy_session(workspace_path, &snapshot.session_id).await
+    worker_busy_snapshot_for_binding(binding).await
 }
 
 async fn worker_busy_snapshot_for_binding(
@@ -209,33 +154,44 @@ async fn worker_busy_snapshot_for_binding(
     let Some(workspace_path) = binding_workspace_path(Some(binding)) else {
         return Ok(None);
     };
-    let Some(runtime_state) = read_workspace_runtime_state_file(&workspace_path).await? else {
+    let Some(session_ids) = candidate_session_ids(binding) else {
         return Ok(None);
+    };
+    let Some(runtime_state) = read_workspace_runtime_state_file(&workspace_path).await? else {
+        bail!(
+            "workspace runtime state is unavailable for {}",
+            workspace_path.display()
+        );
     };
     let Some(worker_ws_url) = runtime_state.worker_ws_url.as_deref() else {
-        return Ok(None);
+        bail!(
+            "workspace worker endpoint is unavailable for {}",
+            workspace_path.display()
+        );
     };
 
-    for session_id in [current_session_id(binding), tui_session_id(binding)]
-        .into_iter()
-        .flatten()
-    {
-        let workspace = CodexWorkspace {
-            working_directory: workspace_path.clone(),
-            app_server_url: Some(worker_ws_url.to_owned()),
-        };
-        let runner = CodexRunner::new(None);
-        let run_state = match runner.read_thread_run_state(&workspace, session_id).await {
-            Ok(run_state) => run_state,
-            Err(_) => continue,
-        };
+    let workspace = CodexWorkspace {
+        working_directory: workspace_path.clone(),
+        app_server_url: Some(worker_ws_url.to_owned()),
+    };
+    let runner = CodexRunner::new(None);
+    for session_id in session_ids {
+        let run_state = runner
+            .read_thread_run_state(&workspace, &session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to read worker run state for session `{session_id}` in {}",
+                    workspace_path.display()
+                )
+            })?;
         if !run_state.is_busy {
             continue;
         }
         return Ok(Some(SessionCurrentStatus {
             schema_version: 2,
             workspace_cwd: workspace_path.display().to_string(),
-            session_id: session_id.to_owned(),
+            session_id,
             activity_source: SessionActivitySource::ManagedRuntime,
             live: true,
             phase: match run_state.phase.as_deref() {
@@ -253,11 +209,31 @@ async fn worker_busy_snapshot_for_binding(
             pending_interrupt_turn_id: None,
             pending_interrupt_requested_at: None,
             observer_attach_mode: None,
-            updated_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            updated_at: run_state
+                .last_transition_at
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         }));
     }
 
     Ok(None)
+}
+
+fn candidate_session_ids(binding: &SessionBinding) -> Option<Vec<String>> {
+    let mut session_ids = Vec::new();
+    for candidate in [current_session_id(binding), tui_session_id(binding)]
+        .into_iter()
+        .flatten()
+    {
+        if session_ids.iter().any(|existing| existing == candidate) {
+            continue;
+        }
+        session_ids.push(candidate.to_owned());
+    }
+    if session_ids.is_empty() {
+        None
+    } else {
+        Some(session_ids)
+    }
 }
 
 pub async fn cached_effective_busy_snapshot_for_binding(
