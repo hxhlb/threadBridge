@@ -1202,6 +1202,27 @@ impl CodexRunner {
         serde_json::from_value(result).context("invalid threadbridge/getThreadRunState result")
     }
 
+    pub async fn respond_request_user_input(
+        &self,
+        workspace: &CodexWorkspace,
+        thread_id: &str,
+        request_id: i64,
+        response: &ToolRequestUserInputResponse,
+    ) -> Result<()> {
+        let mut client = AppServerClient::start(workspace).await?;
+        let _ = client
+            .request_simple(
+                "threadbridge/respondRequestUserInput",
+                json!({
+                    "threadId": thread_id,
+                    "requestId": request_id,
+                    "response": serde_json::to_value(response)?,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
     fn ensure_locked_thread_id(
         &self,
         locked_thread_id: &str,

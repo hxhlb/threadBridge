@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -43,6 +44,7 @@ struct WorkerState {
     pending_turn_requests: HashMap<i64, String>,
     turn_to_thread: HashMap<String, String>,
     thread_runs: HashMap<String, WorkerThreadRunState>,
+    thread_channels: HashMap<String, mpsc::UnboundedSender<WsMessage>>,
 }
 
 fn now_iso() -> String {
@@ -190,6 +192,8 @@ async fn proxy_client_session(
 
     let (mut client_sink, mut client_stream) = client_ws.split();
     let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
+    let (injected_tx, mut injected_rx) = mpsc::unbounded_channel();
+    let mut session_thread_ids = HashSet::new();
     loop {
         tokio::select! {
             client_message = client_stream.next() => {
@@ -211,12 +215,34 @@ async fn proxy_client_session(
                     break;
                 };
                 let message = upstream_message.context("failed to read worker upstream websocket message")?;
-                track_upstream_message(&message, &worker_state).await?;
+                track_upstream_message(
+                    &message,
+                    &worker_state,
+                    &injected_tx,
+                    &mut session_thread_ids,
+                )
+                .await?;
                 client_sink
                     .send(message)
                     .await
                     .context("failed to forward worker upstream message to client")?;
             }
+            injected_message = injected_rx.recv() => {
+                let Some(injected_message) = injected_message else {
+                    break;
+                };
+                upstream_sink
+                    .send(injected_message)
+                    .await
+                    .context("failed to forward injected worker message upstream")?;
+            }
+        }
+    }
+
+    {
+        let mut state = worker_state.lock().await;
+        for thread_id in session_thread_ids {
+            state.thread_channels.remove(&thread_id);
         }
     }
 
@@ -295,40 +321,91 @@ where
     let Some(method) = payload.get("method").and_then(Value::as_str) else {
         return Ok(false);
     };
-    if method != "threadbridge/getThreadRunState" {
-        return Ok(false);
+    match method {
+        "threadbridge/getThreadRunState" => {
+            let thread_id = payload
+                .get("params")
+                .and_then(|params| params.get("threadId"))
+                .and_then(Value::as_str)
+                .context("threadbridge/getThreadRunState missing threadId")?;
+            let state = worker_state.lock().await;
+            let run_state = state
+                .thread_runs
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_else(|| WorkerThreadRunState {
+                    thread_id: thread_id.to_owned(),
+                    is_busy: false,
+                    active_turn_id: None,
+                    interruptible: false,
+                    phase: Some("idle".to_owned()),
+                    last_transition_at: None,
+                });
+            client_sink
+                .send(WsMessage::Text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": serde_json::to_value(run_state)?,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .context("failed to send worker local response")?;
+            Ok(true)
+        }
+        "threadbridge/respondRequestUserInput" => {
+            let thread_id = payload
+                .get("params")
+                .and_then(|params| params.get("threadId"))
+                .and_then(Value::as_str)
+                .context("threadbridge/respondRequestUserInput missing threadId")?;
+            let target_request_id = payload
+                .get("params")
+                .and_then(|params| params.get("requestId"))
+                .and_then(Value::as_i64)
+                .context("threadbridge/respondRequestUserInput missing requestId")?;
+            let response = payload
+                .get("params")
+                .and_then(|params| params.get("response"))
+                .cloned()
+                .context("threadbridge/respondRequestUserInput missing response")?;
+            let injected = {
+                let state = worker_state.lock().await;
+                let sender = state
+                    .thread_channels
+                    .get(thread_id)
+                    .cloned()
+                    .with_context(|| format!("no live worker ingress channel for thread `{thread_id}`"))?;
+                sender
+                    .send(WsMessage::Text(
+                        json!({
+                            "id": target_request_id,
+                            "result": response,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .map_err(|_| anyhow!("failed to inject request_user_input response into worker session"))?;
+                json!({})
+            };
+            client_sink
+                .send(WsMessage::Text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": injected,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .context("failed to send worker local response")?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
-    let thread_id = payload
-        .get("params")
-        .and_then(|params| params.get("threadId"))
-        .and_then(Value::as_str)
-        .context("threadbridge/getThreadRunState missing threadId")?;
-    let state = worker_state.lock().await;
-    let run_state = state
-        .thread_runs
-        .get(thread_id)
-        .cloned()
-        .unwrap_or_else(|| WorkerThreadRunState {
-            thread_id: thread_id.to_owned(),
-            is_busy: false,
-            active_turn_id: None,
-            interruptible: false,
-            phase: Some("idle".to_owned()),
-            last_transition_at: None,
-        });
-    client_sink
-        .send(WsMessage::Text(
-            json!({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": serde_json::to_value(run_state)?,
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .context("failed to send worker local response")?;
-    Ok(true)
 }
 
 async fn track_client_message(message: &WsMessage, worker_state: &Arc<Mutex<WorkerState>>) -> Result<()> {
@@ -375,10 +452,32 @@ async fn track_client_message(message: &WsMessage, worker_state: &Arc<Mutex<Work
     Ok(())
 }
 
-async fn track_upstream_message(message: &WsMessage, worker_state: &Arc<Mutex<WorkerState>>) -> Result<()> {
+async fn track_upstream_message(
+    message: &WsMessage,
+    worker_state: &Arc<Mutex<WorkerState>>,
+    injected_tx: &mpsc::UnboundedSender<WsMessage>,
+    session_thread_ids: &mut HashSet<String>,
+) -> Result<()> {
     let Some(payload) = parse_json_message(message)? else {
         return Ok(());
     };
+    if let Some(request_id) = payload.get("id").and_then(Value::as_i64)
+        && payload.get("method").and_then(Value::as_str) == Some("item/tool/requestUserInput")
+        && let Some(thread_id) = payload
+            .get("params")
+            .and_then(|params| params.get("threadId"))
+            .and_then(Value::as_str)
+    {
+        let mut state = worker_state.lock().await;
+        state
+            .thread_channels
+            .insert(thread_id.to_owned(), injected_tx.clone());
+        session_thread_ids.insert(thread_id.to_owned());
+        if let Some(run_state) = state.thread_runs.get_mut(thread_id) {
+            run_state.last_transition_at.get_or_insert_with(now_iso);
+        }
+        let _ = request_id;
+    }
     if let Some(response_id) = payload.get("id").and_then(Value::as_i64) {
         let turn = payload
             .get("result")
@@ -487,8 +586,9 @@ fn parse_json_message(message: &WsMessage) -> Result<Option<Value>> {
 mod tests {
     use super::{WorkerState, track_client_message, track_upstream_message};
     use serde_json::json;
+    use std::collections::HashSet;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, mpsc};
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     #[tokio::test]
@@ -511,6 +611,8 @@ mod tests {
         )
         .await
         .unwrap();
+        let (injected_tx, _injected_rx) = mpsc::unbounded_channel();
+        let mut session_thread_ids = HashSet::new();
         track_upstream_message(
             &WsMessage::Text(
                 json!({
@@ -526,6 +628,8 @@ mod tests {
                 .into(),
             ),
             &state,
+            &injected_tx,
+            &mut session_thread_ids,
         )
         .await
         .unwrap();
@@ -556,6 +660,8 @@ mod tests {
                 },
             );
         }
+        let (injected_tx, _injected_rx) = mpsc::unbounded_channel();
+        let mut session_thread_ids = HashSet::new();
         track_upstream_message(
             &WsMessage::Text(
                 json!({
@@ -572,6 +678,8 @@ mod tests {
                 .into(),
             ),
             &state,
+            &injected_tx,
+            &mut session_thread_ids,
         )
         .await
         .unwrap();
@@ -602,6 +710,8 @@ mod tests {
                 },
             );
         }
+        let (injected_tx, _injected_rx) = mpsc::unbounded_channel();
+        let mut session_thread_ids = HashSet::new();
         track_upstream_message(
             &WsMessage::Text(
                 json!({
@@ -618,6 +728,8 @@ mod tests {
                 .into(),
             ),
             &state,
+            &injected_tx,
+            &mut session_thread_ids,
         )
         .await
         .unwrap();

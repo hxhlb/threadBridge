@@ -87,6 +87,7 @@ pub enum CompletedInteractiveRequest {
     },
     Tui {
         thread_key: String,
+        thread_id: String,
         request_id: i64,
         prompt_message_id: Option<i32>,
         response: ToolRequestUserInputResponse,
@@ -390,6 +391,7 @@ fn to_completed_request(pending: PendingInteractiveRequest) -> CompletedInteract
         },
         None => CompletedInteractiveRequest::Tui {
             thread_key: pending.thread_key,
+            thread_id: pending.thread_id,
             request_id: pending.request_id,
             prompt_message_id: pending.prompt_message_id,
             response,

@@ -807,13 +807,39 @@ pub(crate) async fn apply_interactive_advance(
             }
             CompletedInteractiveRequest::Tui {
                 thread_key,
+                thread_id: codex_thread_id,
                 request_id,
                 prompt_message_id,
                 response,
             } => {
+                let record = state
+                    .repository
+                    .find_active_thread_by_key(&thread_key)
+                    .await?
+                    .context("interactive request thread disappeared before completion")?;
+                let binding = state
+                    .repository
+                    .read_session_binding(&record)
+                    .await?
+                    .context("interactive request thread is missing session binding")?;
+                let workspace_path = binding
+                    .workspace_cwd
+                    .as_deref()
+                    .map(std::path::PathBuf::from)
+                    .context("interactive request thread is missing workspace path")?;
+                let codex_workspace = state
+                    .control
+                    .workspace_runtime_service()
+                    .shared_codex_workspace(workspace_path)
+                    .await?;
                 state
-                    .hcodex_ingress
-                    .submit_request_user_input_response(&thread_key, request_id, &response)
+                    .codex
+                    .respond_request_user_input(
+                        &codex_workspace,
+                        &codex_thread_id,
+                        request_id,
+                        &response,
+                    )
                     .await?;
                 if let Some(message_id) = prompt_message_id {
                     bot.edit_message_text(
