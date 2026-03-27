@@ -362,29 +362,13 @@ impl WorkspaceRuntimeService {
             owner_managed = self.ctx.runtime_is_owner_managed(),
             "runtime control requested control-path workspace runtime"
         );
-        let runtime = if self.ctx.runtime_is_owner_managed() {
-            self.read_owner_managed_workspace_runtime(&workspace).await?
-        } else {
-            let runtime = self
-                .ctx
-                .app_server_runtime
-                .ensure_workspace_daemon(&workspace)
-                .await?;
-            let _ = self
-                .ctx
-                .hcodex_ingress
-                .ensure_workspace_ingress(
-                    &workspace,
-                    runtime.client_ws_url(),
-                    runtime.client_ws_url(),
-                )
-                .await?;
-            runtime
-        };
-        Ok(CodexWorkspace {
-            working_directory: workspace,
-            app_server_url: Some(runtime.client_ws_url().to_owned()),
-        })
+        let runtime_state = self
+            .resolve_control_runtime_state(&workspace)
+            .await?;
+        Ok(self.codex_workspace_from_runtime_state(
+            workspace,
+            &runtime_state,
+        ))
     }
 
     pub async fn shared_codex_workspace(&self, workspace: PathBuf) -> Result<CodexWorkspace> {
@@ -394,19 +378,70 @@ impl WorkspaceRuntimeService {
             owner_managed = self.ctx.runtime_is_owner_managed(),
             "runtime control requested shared workspace runtime"
         );
-        let runtime = if self.ctx.runtime_is_owner_managed() {
-            self.read_owner_managed_workspace_runtime(&workspace)
-                .await?
-        } else {
-            self.ctx
-                .app_server_runtime
-                .ensure_workspace_daemon(&workspace)
-                .await?
-        };
-        Ok(CodexWorkspace {
+        let runtime_state = self
+            .resolve_shared_runtime_state(&workspace)
+            .await?;
+        Ok(self.codex_workspace_from_runtime_state(
+            workspace,
+            &runtime_state,
+        ))
+    }
+
+    async fn resolve_control_runtime_state(
+        &self,
+        workspace: &Path,
+    ) -> Result<WorkspaceRuntimeState> {
+        if self.ctx.runtime_is_owner_managed() {
+            return self.read_owner_managed_workspace_runtime(workspace).await;
+        }
+
+        self.ensure_self_managed_control_runtime(workspace).await
+    }
+
+    async fn resolve_shared_runtime_state(
+        &self,
+        workspace: &Path,
+    ) -> Result<WorkspaceRuntimeState> {
+        if self.ctx.runtime_is_owner_managed() {
+            return self.read_owner_managed_workspace_runtime(workspace).await;
+        }
+
+        self.ctx
+            .app_server_runtime
+            .ensure_workspace_daemon(workspace)
+            .await
+    }
+
+    async fn ensure_self_managed_control_runtime(
+        &self,
+        workspace: &Path,
+    ) -> Result<WorkspaceRuntimeState> {
+        let runtime_state = self
+            .ctx
+            .app_server_runtime
+            .ensure_workspace_daemon(workspace)
+            .await?;
+        let _ = self
+            .ctx
+            .hcodex_ingress
+            .ensure_workspace_ingress(
+                workspace,
+                runtime_state.client_ws_url(),
+                runtime_state.client_ws_url(),
+            )
+            .await?;
+        Ok(runtime_state)
+    }
+
+    fn codex_workspace_from_runtime_state(
+        &self,
+        workspace: PathBuf,
+        runtime_state: &WorkspaceRuntimeState,
+    ) -> CodexWorkspace {
+        CodexWorkspace {
             working_directory: workspace,
-            app_server_url: Some(runtime.client_ws_url().to_owned()),
-        })
+            app_server_url: Some(runtime_state.client_ws_url().to_owned()),
+        }
     }
 
     async fn read_owner_managed_workspace_runtime(
