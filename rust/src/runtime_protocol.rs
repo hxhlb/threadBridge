@@ -123,6 +123,7 @@ pub struct ManagedWorkspaceView {
     pub mode_drift: bool,
     pub binding_status: &'static str,
     pub run_status: &'static str,
+    pub run_phase: &'static str,
     pub current_codex_thread_id: Option<String>,
     pub tui_active_codex_thread_id: Option<String>,
     pub tui_session_adoption_pending: bool,
@@ -155,6 +156,7 @@ pub struct ThreadStateView {
     pub lifecycle_status: &'static str,
     pub binding_status: &'static str,
     pub run_status: &'static str,
+    pub run_phase: &'static str,
     pub current_codex_thread_id: Option<String>,
     pub tui_active_codex_thread_id: Option<String>,
     pub tui_session_adoption_pending: bool,
@@ -340,6 +342,7 @@ pub async fn build_workspace_views(
             mode_drift: workspace_mode_drift(workspace_execution_mode, &binding),
             binding_status: resolved_state.binding_status.as_str(),
             run_status: resolved_state.run_status.as_str(),
+            run_phase: resolved_state.run_phase.as_str(),
             current_codex_thread_id: binding.current_codex_thread_id.clone(),
             tui_active_codex_thread_id: binding.tui_active_codex_thread_id.clone(),
             tui_session_adoption_pending: binding.tui_session_adoption_pending,
@@ -433,6 +436,7 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             lifecycle_status: resolved_state.lifecycle_status.as_str(),
             binding_status: resolved_state.binding_status.as_str(),
             run_status: resolved_state.run_status.as_str(),
+            run_phase: resolved_state.run_phase.as_str(),
             current_codex_thread_id: binding
                 .as_ref()
                 .and_then(|binding| binding.current_codex_thread_id.clone()),
@@ -1120,6 +1124,7 @@ mod tests {
             lifecycle_status: "active",
             binding_status: "healthy",
             run_status: "idle",
+            run_phase: "idle",
             current_codex_thread_id: Some("thr_current".to_owned()),
             tui_active_codex_thread_id: None,
             tui_session_adoption_pending: false,
@@ -1136,6 +1141,7 @@ mod tests {
         assert_eq!(value["lifecycle_status"], "active");
         assert_eq!(value["binding_status"], "healthy");
         assert_eq!(value["run_status"], "idle");
+        assert_eq!(value["run_phase"], "idle");
         assert_eq!(value["last_verified_at"], "2026-03-24T09:00:00.000Z");
         assert_eq!(value["last_codex_turn_at"], "2026-03-24T10:00:00.000Z");
         assert_eq!(value["last_used_at"], "2026-03-24T10:00:00.000Z");
@@ -1155,6 +1161,7 @@ mod tests {
             mode_drift: true,
             binding_status: "broken",
             run_status: "idle",
+            run_phase: "idle",
             current_codex_thread_id: Some("thr_current".to_owned()),
             tui_active_codex_thread_id: Some("thr_tui".to_owned()),
             tui_session_adoption_pending: false,
@@ -1176,6 +1183,7 @@ mod tests {
         let value = serde_json::to_value(view).unwrap();
         assert_eq!(value["binding_status"], "broken");
         assert_eq!(value["run_status"], "idle");
+        assert_eq!(value["run_phase"], "idle");
         assert_eq!(value["current_codex_thread_id"], "thr_current");
         assert_eq!(value["hcodex_ingress_status"], "running");
         assert!(value.get("tui_proxy_status").is_none());
@@ -1276,6 +1284,7 @@ mod tests {
                 mode_drift: false,
                 binding_status: "healthy",
                 run_status: "running",
+                run_phase: "turn_running",
                 current_codex_thread_id: Some("thr-a".to_owned()),
                 tui_active_codex_thread_id: None,
                 tui_session_adoption_pending: false,
@@ -1304,6 +1313,7 @@ mod tests {
                 mode_drift: false,
                 binding_status: "broken",
                 run_status: "idle",
+                run_phase: "idle",
                 current_codex_thread_id: Some("thr-b".to_owned()),
                 tui_active_codex_thread_id: None,
                 tui_session_adoption_pending: false,

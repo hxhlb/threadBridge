@@ -1232,6 +1232,7 @@ mod tests {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Broken,
             run_status: RunStatus::Idle,
+            run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
         };
         let hint = session_binding_hint_for_state(state, None);
         assert!(hint.contains("/repair_session"));
@@ -1251,11 +1252,13 @@ mod tests {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Healthy,
             run_status: RunStatus::Idle,
+            run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
         };
         let broken = ResolvedThreadState {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Broken,
             run_status: RunStatus::Idle,
+            run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
         };
 
         assert_eq!(

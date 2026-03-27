@@ -752,6 +752,7 @@ mod macos_app {
                 mode_drift: true,
                 binding_status: "healthy",
                 run_status: "idle",
+                run_phase: "idle",
                 current_codex_thread_id: Some("thr_current".to_owned()),
                 tui_active_codex_thread_id: None,
                 tui_session_adoption_pending: false,

@@ -78,6 +78,7 @@ pub struct ResolvedThreadState {
     pub lifecycle_status: LifecycleStatus,
     pub binding_status: BindingStatus,
     pub run_status: RunStatus,
+    pub run_phase: WorkspaceStatusPhase,
 }
 
 impl ResolvedThreadState {
@@ -271,44 +272,58 @@ pub async fn cached_effective_busy_snapshot_for_binding(
 }
 
 pub async fn resolve_run_status(binding: Option<&SessionBinding>) -> Result<RunStatus> {
-    Ok(
-        if effective_busy_snapshot_for_binding(binding)
-            .await?
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
-        {
-            RunStatus::Running
-        } else {
-            RunStatus::Idle
-        },
-    )
+    Ok(if resolve_run_phase(binding).await?.is_turn_busy() {
+        RunStatus::Running
+    } else {
+        RunStatus::Idle
+    })
 }
 
 pub async fn resolve_run_status_with_cache(
     cache: &WorkspaceStatusCache,
     binding: Option<&SessionBinding>,
 ) -> Result<RunStatus> {
-    Ok(
-        if cached_effective_busy_snapshot_for_binding(cache, binding)
-            .await?
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.phase.is_turn_busy())
-        {
-            RunStatus::Running
-        } else {
-            RunStatus::Idle
-        },
-    )
+    Ok(if resolve_run_phase_with_cache(cache, binding)
+        .await?
+        .is_turn_busy()
+    {
+        RunStatus::Running
+    } else {
+        RunStatus::Idle
+    })
+}
+
+pub async fn resolve_run_phase(binding: Option<&SessionBinding>) -> Result<WorkspaceStatusPhase> {
+    Ok(effective_busy_snapshot_for_binding(binding)
+        .await?
+        .map(|snapshot| snapshot.phase)
+        .unwrap_or(WorkspaceStatusPhase::Idle))
+}
+
+pub async fn resolve_run_phase_with_cache(
+    cache: &WorkspaceStatusCache,
+    binding: Option<&SessionBinding>,
+) -> Result<WorkspaceStatusPhase> {
+    Ok(cached_effective_busy_snapshot_for_binding(cache, binding)
+        .await?
+        .map(|snapshot| snapshot.phase)
+        .unwrap_or(WorkspaceStatusPhase::Idle))
 }
 
 pub async fn resolve_thread_state(
     metadata: &ThreadMetadata,
     binding: Option<&SessionBinding>,
 ) -> Result<ResolvedThreadState> {
+    let run_phase = resolve_run_phase(binding).await?;
     Ok(ResolvedThreadState {
         lifecycle_status: resolve_lifecycle_status(metadata),
         binding_status: resolve_binding_status(metadata, binding),
-        run_status: resolve_run_status(binding).await?,
+        run_status: if run_phase.is_turn_busy() {
+            RunStatus::Running
+        } else {
+            RunStatus::Idle
+        },
+        run_phase,
     })
 }
 
@@ -317,10 +332,16 @@ pub async fn resolve_thread_state_with_cache(
     binding: Option<&SessionBinding>,
     cache: &WorkspaceStatusCache,
 ) -> Result<ResolvedThreadState> {
+    let run_phase = resolve_run_phase_with_cache(cache, binding).await?;
     Ok(ResolvedThreadState {
         lifecycle_status: resolve_lifecycle_status(metadata),
         binding_status: resolve_binding_status(metadata, binding),
-        run_status: resolve_run_status_with_cache(cache, binding).await?,
+        run_status: if run_phase.is_turn_busy() {
+            RunStatus::Running
+        } else {
+            RunStatus::Idle
+        },
+        run_phase,
     })
 }
 
@@ -807,6 +828,7 @@ mod tests {
             lifecycle_status: LifecycleStatus::Archived,
             binding_status: BindingStatus::Healthy,
             run_status: RunStatus::Idle,
+            run_phase: WorkspaceStatusPhase::Idle,
         };
         assert!(archived.is_archived());
         assert!(!archived.is_unbound());
@@ -817,6 +839,7 @@ mod tests {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Broken,
             run_status: RunStatus::Running,
+            run_phase: WorkspaceStatusPhase::TurnRunning,
         };
         assert!(!broken_running.is_archived());
         assert!(!broken_running.is_unbound());
@@ -827,6 +850,7 @@ mod tests {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Unbound,
             run_status: RunStatus::Idle,
+            run_phase: WorkspaceStatusPhase::Idle,
         };
         assert!(unbound_idle.is_unbound());
     }

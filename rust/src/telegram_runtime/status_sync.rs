@@ -304,6 +304,7 @@ async fn reconcile_stale_bot_busy_sessions_for_repository(
                 lifecycle_status: resolve_lifecycle_status(&record.metadata),
                 binding_status,
                 run_status: crate::thread_state::RunStatus::Idle,
+                run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
             },
             Some(&binding),
         ) else {
