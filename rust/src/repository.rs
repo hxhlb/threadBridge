@@ -143,12 +143,30 @@ pub enum TranscriptMirrorPhase {
 pub struct TranscriptMirrorEntry {
     pub timestamp: String,
     pub session_id: String,
+    #[serde(default)]
+    pub turn_id: Option<String>,
     pub origin: TranscriptMirrorOrigin,
     pub role: TranscriptMirrorRole,
     pub delivery: TranscriptMirrorDelivery,
     #[serde(default)]
     pub phase: Option<TranscriptMirrorPhase>,
     pub text: String,
+}
+
+fn should_store_transcript_mirror_entry(entry: &TranscriptMirrorEntry) -> bool {
+    !matches!(entry.delivery, TranscriptMirrorDelivery::Final) || entry.turn_id.is_some()
+}
+
+fn same_transcript_turn_identity(
+    existing: &TranscriptMirrorEntry,
+    candidate: &TranscriptMirrorEntry,
+) -> bool {
+    matches!(&existing.delivery, TranscriptMirrorDelivery::Final)
+        && matches!(&candidate.delivery, TranscriptMirrorDelivery::Final)
+        && existing.session_id == candidate.session_id
+        && existing.turn_id == candidate.turn_id
+        && existing.role == candidate.role
+        && existing.phase == candidate.phase
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -520,12 +538,23 @@ impl ThreadRepository {
         record: &ThreadRecord,
         entry: &TranscriptMirrorEntry,
     ) -> Result<bool> {
+        if !should_store_transcript_mirror_entry(entry) {
+            return Ok(false);
+        }
         let path = record.transcript_mirror_path();
         let lock = self.jsonl_file_lock(&path).await;
         let _guard = lock.lock().await;
         let existing_entries = self
             .load_jsonl_entries_locked::<TranscriptMirrorEntry>(&path)
             .await?;
+        if entry.turn_id.is_some()
+            && matches!(entry.delivery, TranscriptMirrorDelivery::Final)
+            && existing_entries
+                .iter()
+                .any(|existing| same_transcript_turn_identity(existing, entry))
+        {
+            return Ok(false);
+        }
         if existing_entries.iter().any(|existing| existing == entry) {
             return Ok(false);
         }
@@ -1728,6 +1757,7 @@ mod tests {
         let entry = TranscriptMirrorEntry {
             timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
             session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
             origin: TranscriptMirrorOrigin::Tui,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Final,
@@ -1758,6 +1788,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn append_transcript_mirror_deduplicates_final_by_turn_identity() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let first = TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            origin: TranscriptMirrorOrigin::Telegram,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "first writer".to_owned(),
+        };
+        let second = TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:01.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            origin: TranscriptMirrorOrigin::Tui,
+            role: TranscriptMirrorRole::Assistant,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "second writer".to_owned(),
+        };
+
+        assert!(
+            repo.append_transcript_mirror(&record, &first)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .append_transcript_mirror(&record, &second)
+                .await
+                .unwrap()
+        );
+
+        let entries = repo.read_full_transcript_mirror(&record).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "first writer");
+        assert_eq!(entries[0].origin, TranscriptMirrorOrigin::Telegram);
+    }
+
+    #[tokio::test]
+    async fn append_transcript_mirror_skips_final_without_turn_id() {
+        let root = temp_path();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo.create_thread(1, 7, "Title".to_owned()).await.unwrap();
+        let entry = TranscriptMirrorEntry {
+            timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
+            session_id: "thr_123".to_owned(),
+            turn_id: None,
+            origin: TranscriptMirrorOrigin::Telegram,
+            role: TranscriptMirrorRole::User,
+            delivery: TranscriptMirrorDelivery::Final,
+            phase: None,
+            text: "hello".to_owned(),
+        };
+
+        assert!(
+            !repo
+                .append_transcript_mirror(&record, &entry)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !fs::try_exists(record.transcript_mirror_path())
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn read_transcript_mirror_filters_by_delivery_and_limit() {
         let root = temp_path();
         let repo = ThreadRepository::open(&root).await.unwrap();
@@ -1766,6 +1869,7 @@ mod tests {
             TranscriptMirrorEntry {
                 timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
                 session_id: "thr_123".to_owned(),
+                turn_id: Some("turn-1".to_owned()),
                 origin: TranscriptMirrorOrigin::Telegram,
                 role: TranscriptMirrorRole::User,
                 delivery: TranscriptMirrorDelivery::Final,
@@ -1775,6 +1879,7 @@ mod tests {
             TranscriptMirrorEntry {
                 timestamp: "2026-03-21T00:00:01.000Z".to_owned(),
                 session_id: "thr_123".to_owned(),
+                turn_id: None,
                 origin: TranscriptMirrorOrigin::Telegram,
                 role: TranscriptMirrorRole::Assistant,
                 delivery: TranscriptMirrorDelivery::Process,
@@ -1784,6 +1889,7 @@ mod tests {
             TranscriptMirrorEntry {
                 timestamp: "2026-03-21T00:00:02.000Z".to_owned(),
                 session_id: "thr_123".to_owned(),
+                turn_id: Some("turn-1".to_owned()),
                 origin: TranscriptMirrorOrigin::Telegram,
                 role: TranscriptMirrorRole::Assistant,
                 delivery: TranscriptMirrorDelivery::Final,
@@ -1824,6 +1930,7 @@ mod tests {
                     &TranscriptMirrorEntry {
                         timestamp: format!("2026-03-21T00:00:{index:02}.000Z"),
                         session_id: "thr_123".to_owned(),
+                        turn_id: None,
                         origin: TranscriptMirrorOrigin::Tui,
                         role: TranscriptMirrorRole::Assistant,
                         delivery: TranscriptMirrorDelivery::Process,
@@ -1901,6 +2008,7 @@ mod tests {
         let valid = serde_json::to_string(&TranscriptMirrorEntry {
             timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
             session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
             origin: TranscriptMirrorOrigin::Tui,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Final,
@@ -1930,6 +2038,7 @@ mod tests {
         let first = serde_json::to_string(&TranscriptMirrorEntry {
             timestamp: "2026-03-21T00:00:00.000Z".to_owned(),
             session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
             origin: TranscriptMirrorOrigin::Tui,
             role: TranscriptMirrorRole::User,
             delivery: TranscriptMirrorDelivery::Final,
@@ -1940,6 +2049,7 @@ mod tests {
         let second = serde_json::to_string(&TranscriptMirrorEntry {
             timestamp: "2026-03-21T00:00:01.000Z".to_owned(),
             session_id: "thr_123".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
             origin: TranscriptMirrorOrigin::Tui,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Final,

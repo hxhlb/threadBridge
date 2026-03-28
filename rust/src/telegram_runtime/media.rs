@@ -825,6 +825,8 @@ async fn execute_image_analysis_turn(
     let execution_mode = workspace_execution_mode(&workspace_path).await?;
     let turn_workspace_path = workspace_path.clone();
     let turn_session_id = existing_thread_id.to_owned();
+    let turn_id_slot = Arc::new(Mutex::new(None::<String>));
+    let event_turn_id_slot = turn_id_slot.clone();
     let result = state
         .codex
         .run_locked_with_events_and_mode(
@@ -836,11 +838,13 @@ async fn execute_image_analysis_turn(
                 let preview = preview.clone();
                 let turn_workspace_path = turn_workspace_path.clone();
                 let turn_session_id = turn_session_id.clone();
+                let turn_id_slot = event_turn_id_slot.clone();
                 async move {
                     if let crate::codex::CodexThreadEvent::TurnStarted {
                         turn_id: Some(turn_id),
                     } = &event
                     {
+                        *turn_id_slot.lock().await = Some(turn_id.clone());
                         let _ = record_bot_status_event(
                             &turn_workspace_path,
                             "bot_turn_started",
@@ -901,13 +905,14 @@ async fn execute_image_analysis_turn(
             return Err(error);
         }
     };
+    let completed_turn_id = turn_id_slot.lock().await.clone();
     let visible_final_text =
         compose_visible_final_reply(&result.final_response, result.final_plan_text.as_deref());
     record_bot_status_event(
         &workspace_path,
         "bot_turn_completed",
         Some(existing_thread_id),
-        None,
+        completed_turn_id.as_deref(),
         visible_final_text.as_deref(),
     )
     .await?;
@@ -979,6 +984,7 @@ async fn execute_image_analysis_turn(
             &crate::repository::TranscriptMirrorEntry {
                 timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 session_id: existing_thread_id.to_owned(),
+                turn_id: completed_turn_id.clone(),
                 origin: crate::repository::TranscriptMirrorOrigin::Telegram,
                 role: crate::repository::TranscriptMirrorRole::Assistant,
                 delivery: crate::repository::TranscriptMirrorDelivery::Final,

@@ -373,28 +373,6 @@ pub async fn append_status_event(
     Ok(())
 }
 
-async fn last_status_event(workspace_path: &Path) -> Result<Option<WorkspaceStatusEventRecord>> {
-    for path in [
-        events_path(workspace_path),
-        legacy_events_path(workspace_path),
-    ] {
-        let contents = match fs::read_to_string(&path).await {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to read {}", path.display()));
-            }
-        };
-        let Some(line) = contents.lines().rev().find(|line| !line.trim().is_empty()) else {
-            continue;
-        };
-        return Ok(Some(serde_json::from_str(line).with_context(|| {
-            format!("failed to parse trailing event from {}", path.display())
-        })?));
-    }
-    Ok(None)
-}
-
 async fn copy_if_missing(src: &Path, dst: &Path) -> Result<()> {
     if fs::try_exists(dst).await? || !fs::try_exists(src).await? {
         return Ok(());
@@ -447,16 +425,44 @@ async fn should_skip_duplicate_turn_completed_event(
     let Some(turn_id) = turn_id else {
         return Ok(false);
     };
-    let Some(previous) = last_status_event(workspace_path).await? else {
-        return Ok(false);
-    };
-    if previous.event != "turn_completed" || previous.source != SessionActivitySource::Tui {
-        return Ok(false);
+    for path in [
+        events_path(workspace_path),
+        legacy_events_path(workspace_path),
+    ] {
+        let contents = match fs::read_to_string(&path).await {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
+        };
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(existing) = serde_json::from_str::<WorkspaceStatusEventRecord>(line) else {
+                continue;
+            };
+            if existing.event != "turn_completed" {
+                continue;
+            }
+            let existing_session = existing
+                .payload
+                .get("thread-id")
+                .and_then(Value::as_str)
+                .or_else(|| existing.payload.get("session_id").and_then(Value::as_str));
+            let existing_turn = existing
+                .payload
+                .get("turn-id")
+                .and_then(Value::as_str)
+                .or_else(|| existing.payload.get("turn_id").and_then(Value::as_str));
+            if existing_session == Some(session_id) && existing_turn == Some(turn_id) {
+                return Ok(true);
+            }
+        }
     }
-    Ok(
-        previous.payload.get("thread-id").and_then(Value::as_str) == Some(session_id)
-            && previous.payload.get("turn-id").and_then(Value::as_str) == Some(turn_id),
-    )
+    Ok(false)
 }
 
 pub async fn ensure_workspace_status_surface(workspace_path: &Path) -> Result<()> {
@@ -1162,7 +1168,8 @@ mod tests {
         list_live_local_sessions, local_tui_session_claim_path, read_local_tui_session_claim,
         read_session_status, read_workspace_aggregate_status, record_bot_status_event,
         record_hcodex_ingress_completed, record_hcodex_ingress_connected,
-        record_hcodex_ingress_prompt, record_hcodex_ingress_turn_started,
+        record_hcodex_ingress_preview_text, record_hcodex_ingress_prompt,
+        record_hcodex_ingress_turn_started,
         record_hcodex_launcher_ended, record_hcodex_launcher_started, session_status_path,
     };
     use std::path::PathBuf;
@@ -2044,6 +2051,29 @@ mod tests {
         ensure_workspace_status_surface(&workspace).await.unwrap();
 
         record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
+            .await
+            .unwrap();
+        record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
+            .await
+            .unwrap();
+
+        let lines = fs::read_to_string(events_path(&workspace)).await.unwrap();
+        let turn_completed_count = lines
+            .lines()
+            .filter(|line| line.contains("\"event\":\"turn_completed\""))
+            .count();
+        assert_eq!(turn_completed_count, 1);
+    }
+
+    #[tokio::test]
+    async fn hcodex_ingress_completed_deduplicates_non_adjacent_same_turn_id() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+
+        record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))
+            .await
+            .unwrap();
+        record_hcodex_ingress_preview_text(&workspace, "thr_same", "draft update")
             .await
             .unwrap();
         record_hcodex_ingress_completed(&workspace, "thr_same", Some("turn-1"), Some("hello"))

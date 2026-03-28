@@ -470,16 +470,11 @@ async fn sync_local_transcript_mirrors_once(
                     .repository
                     .append_transcript_mirror(&owner_record, &entry)
                     .await?;
-                if inserted
-                    && entry.delivery == TranscriptMirrorDelivery::Final
+                if entry.delivery == TranscriptMirrorDelivery::Final
                     && let Some(message_thread_id) = owner_record.metadata.message_thread_id
                 {
-                    let turn_id = event
-                        .payload
-                        .get("turn-id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    let provisional_key = turn_id.as_ref().is_none().then(|| {
+                    let turn_id = entry.turn_id.clone();
+                    let provisional_key = turn_id.is_none().then(|| {
                         provisional_key_for_text(
                             &entry.session_id,
                             DeliveryKind::AssistantFinal,
@@ -500,16 +495,16 @@ async fn sync_local_transcript_mirrors_once(
                             owner: "status_sync".to_owned(),
                         })
                         .await?;
+                    let preview_completed = ensure_mirror_preview(
+                        mirror_previews,
+                        bot,
+                        state,
+                        &owner_record,
+                        message_thread_id,
+                    )
+                    .complete(&entry.text)
+                    .await;
                     if matches!(claim, ClaimStatus::Claimed(_)) {
-                        ensure_mirror_preview(
-                            mirror_previews,
-                            bot,
-                            state,
-                            &owner_record,
-                            message_thread_id,
-                        )
-                        .complete(&entry.text)
-                        .await;
                         super::final_reply::send_final_assistant_reply(
                             bot,
                             &owner_record,
@@ -538,6 +533,8 @@ async fn sync_local_transcript_mirrors_once(
                                             message_thread_id
                                         ),
                                         "state": "committed",
+                                        "preview_completed": preview_completed,
+                                        "mirror_inserted": inserted,
                                     }]
                                 }),
                             })
@@ -632,6 +629,7 @@ fn local_mirror_entry_from_event(
             Some(TranscriptMirrorEntry {
                 timestamp: event.occurred_at.clone(),
                 session_id: session_id.to_owned(),
+                turn_id: turn_id_from_event_payload(&event.payload),
                 origin: transcript_origin_from_event(event),
                 role: TranscriptMirrorRole::User,
                 delivery: TranscriptMirrorDelivery::Final,
@@ -655,6 +653,7 @@ fn local_mirror_entry_from_event(
             Some(TranscriptMirrorEntry {
                 timestamp: event.occurred_at.clone(),
                 session_id: session_id.to_owned(),
+                turn_id: turn_id_from_event_payload(&event.payload),
                 origin: transcript_origin_from_event(event),
                 role: TranscriptMirrorRole::Assistant,
                 delivery: TranscriptMirrorDelivery::Final,
@@ -679,6 +678,7 @@ fn local_mirror_entry_from_event(
             Some(TranscriptMirrorEntry {
                 timestamp: event.occurred_at.clone(),
                 session_id: session_id.to_owned(),
+                turn_id: turn_id_from_event_payload(&event.payload),
                 origin: transcript_origin_from_event(event),
                 role: TranscriptMirrorRole::Assistant,
                 delivery: TranscriptMirrorDelivery::Process,
@@ -688,6 +688,14 @@ fn local_mirror_entry_from_event(
         }
         _ => None,
     }
+}
+
+fn turn_id_from_event_payload(payload: &Value) -> Option<String> {
+    payload
+        .get("turn-id")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("turn_id").and_then(Value::as_str))
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -961,6 +969,25 @@ mod tests {
             }),
         };
         assert!(local_mirror_entry_from_event(&event, Some("thr_cli")).is_none());
+    }
+
+    #[test]
+    fn turn_completed_entry_carries_turn_id() {
+        let event = WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "turn_completed".to_owned(),
+            source: crate::workspace_status::SessionActivitySource::Tui,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
+            payload: json!({
+                "thread-id": "thr_cli",
+                "turn-id": "turn-1",
+                "last-assistant-message": "done"
+            }),
+        };
+        let entry =
+            local_mirror_entry_from_event(&event, Some("thr_cli")).expect("assistant final entry");
+        assert_eq!(entry.turn_id.as_deref(), Some("turn-1"));
     }
 
     #[tokio::test]

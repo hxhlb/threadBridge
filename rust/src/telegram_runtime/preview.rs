@@ -601,6 +601,7 @@ mod tests {
         let changed = renderer.consume_process_entry(&TranscriptMirrorEntry {
             timestamp: "2026-03-22T00:00:00.000Z".to_owned(),
             session_id: "session-1".to_owned(),
+            turn_id: None,
             origin: TranscriptMirrorOrigin::Telegram,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Process,
@@ -617,6 +618,7 @@ mod tests {
         assert!(renderer.consume_process_entry(&TranscriptMirrorEntry {
             timestamp: "2026-03-22T00:00:00.000Z".to_owned(),
             session_id: "session-1".to_owned(),
+            turn_id: None,
             origin: TranscriptMirrorOrigin::Telegram,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Process,
@@ -627,6 +629,7 @@ mod tests {
         assert!(renderer.consume_process_entry(&TranscriptMirrorEntry {
             timestamp: "2026-03-22T00:00:01.000Z".to_owned(),
             session_id: "session-1".to_owned(),
+            turn_id: None,
             origin: TranscriptMirrorOrigin::Telegram,
             role: TranscriptMirrorRole::Assistant,
             delivery: TranscriptMirrorDelivery::Process,

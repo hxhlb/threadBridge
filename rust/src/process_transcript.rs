@@ -149,6 +149,7 @@ fn process_entry_from_item(
     Some(TranscriptMirrorEntry {
         timestamp,
         session_id: session_id.to_owned(),
+        turn_id: None,
         origin,
         role: TranscriptMirrorRole::Assistant,
         delivery: TranscriptMirrorDelivery::Process,
