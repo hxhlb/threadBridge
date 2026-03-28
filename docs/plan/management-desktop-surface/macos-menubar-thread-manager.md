@@ -23,13 +23,10 @@
   - `POST /api/runtime-owner/reconcile`
   - `POST /api/threads/:thread_key/adopt-tui`
   - `POST /api/threads/:thread_key/reject-tui`
-  - `POST /api/threads/:thread_key/repair-session-binding`
+  - `POST /api/threads/:thread_key/actions`
   - `GET /api/workspaces/:thread_key/launch-config`
   - `POST /api/workspaces/:thread_key/open`
   - `POST /api/workspaces/:thread_key/repair-runtime`
-  - `POST /api/workspaces/:thread_key/launch-hcodex-new`
-  - `POST /api/workspaces/:thread_key/launch-hcodex-continue-current`
-  - `POST /api/workspaces/:thread_key/launch-hcodex-resume`
   - `POST /api/threads/:thread_key/archive`
   - `POST /api/threads/:thread_key/restore`
   - `POST /api/managed-codex/preference`
@@ -388,8 +385,8 @@ web 管理面需要每個 workspace 最近 5 個 Codex `thread.id`；tray 已不
 更新來源至少包括：
 
 - Telegram 正常 turn
-- `/new_session`
-- `/repair_session`
+- `/start_fresh_session`
+- `/repair_session_binding`
 - 受管 TUI `thread/start`
 - 受管 TUI `thread/resume`
 - adoption 成功後切換
@@ -425,8 +422,8 @@ v1 明確限制：
 
 - `./.threadbridge/bin/hcodex`
 - `/add_workspace`
-- `/new_session`
-- `/repair_session`
+- `/start_fresh_session`
+- `/repair_session_binding`
 - `/archive_workspace`
 - `/restore_workspace`
 

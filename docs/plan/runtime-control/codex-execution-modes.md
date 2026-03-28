@@ -36,7 +36,8 @@
   - `mode_drift`
   - mode-aware launch commands
 - Telegram adapter 已提供 execution mode command surface：
-  - `/execution_mode`
+  - `/get_workspace_execution_mode`
+  - `/set_workspace_execution_mode`
   - 可直接查看目前 workspace mode / current session mode / `mode_drift`
   - 可直接寫回 workspace-local execution mode config
 - tray workspace label 已改成顯示 workspace execution mode，而不是 `ready/degraded`
@@ -179,7 +180,7 @@ management API / launch-config 現在已開始表達：
 另外已新增：
 
 - `GET /api/workspaces/:thread_key/execution-mode`
-- `PUT /api/workspaces/:thread_key/execution-mode`
+- `POST /api/threads/:thread_key/actions` + `{ "action": "set_workspace_execution_mode", "execution_mode": "full_auto|yolo" }`
 
 web 管理面現在也已提供：
 
@@ -238,7 +239,7 @@ web 管理面現在也已提供：
 
 ## 建議的下一步
 
-1. 更新其餘 plan 文檔，反映 execution mode 已是部分落地的正式 runtime 語義，且 Telegram 已有 `/execution_mode` surface。
+1. 更新其餘 plan 文檔，反映 execution mode 已是部分落地的正式 runtime 語義，且 Telegram 已有 `/get_workspace_execution_mode` / `/set_workspace_execution_mode` surface。
 2. 在 `runtime-protocol` 補齊 execution mode control 的正式命名，避免目前仍同時存在 management API route 與 Telegram slash command 的雙重表述。
 3. 固定 Telegram user-facing naming，決定是否繼續沿用 `full_auto / yolo`，或提供更穩定的高階文案。
 4. 另外補一份與 execution mode 分離的 `Codex 工作模型` control 規格，不要把 model 與 mode 混在同一份開關語意裡。

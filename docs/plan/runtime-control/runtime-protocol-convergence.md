@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-這份文檔目前是純草稿。
+這份文檔目前是收斂草稿；Phase 1（shared control action 最小切片）已落地。
 
 目前已實作：
 
@@ -25,22 +25,27 @@
   - `GET /api/events`
 - management API 已有一批實際 control route：
   - workspace pick/add
-  - repair session binding
+  - unified runtime action route（`POST /api/threads/:thread_key/actions`）
   - open workspace
   - repair runtime
-  - `launch-hcodex-*`
   - archive / restore
   - managed Codex preference / refresh / build
 - Telegram adapter 已有一批實際 command surface：
-  - `/new_session`
-  - `/repair_session`
-  - `/launch ...`
-  - `/execution_mode`
+  - `/start_fresh_session`
+  - `/repair_session_binding`
+  - `/launch_local_session ...`
+  - `/get_workspace_execution_mode`
+  - `/set_workspace_execution_mode ...`
   - `/sessions`
   - `/session_log`
   - `/stop`
   - `/plan_mode`
   - `/default_mode`
+- shared protocol 已新增最小 control action 型別：
+  - `RuntimeControlActionRequest`
+  - `RuntimeControlActionResult`
+  - `RuntimeControlActionEnvelope`
+  - `LaunchLocalSessionTarget`
 - observer / interaction 已有一條 shared event lane：
   - `RuntimeInteractionEvent::RequestUserInput`
   - `RuntimeInteractionEvent::RequestResolved`
@@ -48,11 +53,10 @@
 
 目前尚未完成：
 
-- control action 尚未有一套和 view / event 同級的 Rust protocol 型別
-- 很多 capability 仍只有 route 名或 slash command 名，缺少 canonical action object
+- control action 型別已落地最小切片，但尚未覆蓋 collaboration/interrupt 等剩餘 capability
 - interaction event 仍是平行語言，尚未正式併入同一份 runtime protocol 契約
 - collaboration mode 尚未進入 management / protocol public view
-- `/new_session`、`/stop` 這類能力尚未形成 management API / Telegram / protocol 三面一致的收斂
+- `/stop`、collaboration mode 這類能力尚未形成 management API / Telegram / protocol 三面一致的收斂
 - 部分 capability 只存在 local app API 或 Telegram surface，尚未成為 transport-facing public contract
 
 ## 問題
@@ -121,12 +125,12 @@
 
 - execution mode
   - protocol: `set_workspace_execution_mode`
-  - HTTP: `PUT /api/workspaces/:thread_key/execution-mode`
-  - Telegram: `/execution_mode`
+  - HTTP: `POST /api/threads/:thread_key/actions` + action payload
+  - Telegram: `/set_workspace_execution_mode`
 - local launch
   - protocol: `launch_local_session`
-  - HTTP: `launch-hcodex-new|continue-current|resume`
-  - Telegram: `/launch new|current|resume`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `target=new|continue_current|resume`
+  - Telegram: `/launch_local_session new|continue_current|resume`
 
 這代表目前真正缺的不是更多 route，而是少一層被代碼承認的 canonical action model。
 
@@ -157,12 +161,13 @@ v1 應至少覆蓋：
 - `build_managed_codex_source`
 - `set_managed_codex_build_defaults`
 
-建議新增的 shared 型別至少包括：
+目前已落地的 shared 型別包括：
 
 - `RuntimeControlAction`
-- `RuntimeControlActionKind`
-- per-action request payload
-- per-action response payload
+- `RuntimeControlActionRequest`
+- `RuntimeControlActionResult`
+- `RuntimeControlActionEnvelope`
+- `LaunchLocalSessionTarget`
 
 這一層的目標不是立刻換 transport，而是讓 management API 與 Telegram 都呼叫同一個 canonical action vocabulary。
 
@@ -197,8 +202,7 @@ v1 至少應固定：
 近期應優先補齊這幾個 capability：
 
 - `start_fresh_session`
-  - 目前有 Telegram command 與 shared service
-  - 缺 management API public surface
+  - 已有 management API + Telegram + shared protocol
 - `set_thread_collaboration_mode`
   - 目前有 Telegram command 與 repository persistence
   - 缺 management/API/protocol public view
@@ -206,7 +210,10 @@ v1 至少應固定：
   - 目前有 Telegram command 與 Codex client call
   - 缺 management/API/protocol public surface
 
-這三個能力是最值得優先處理的，因為它們最能驗證「protocol 先於 adapter」是否真的成立。
+目前狀態更新：
+
+- `start_fresh_session` 已在 shared action route 上落地，應從優先補齊清單移除
+- 下一步優先應轉為 `set_thread_collaboration_mode` 與 `interrupt_running_turn`
 
 #### Workstream D: Public Vocabulary Cleanup
 
@@ -274,9 +281,8 @@ v1 至少應固定：
 
 優先順序：
 
-1. `start_fresh_session`
-2. `set_thread_collaboration_mode`
-3. `interrupt_running_turn`
+1. `set_thread_collaboration_mode`
+2. `interrupt_running_turn`
 
 完成標誌：
 
@@ -318,7 +324,7 @@ v1 至少應固定：
 
 - 可以為每個重要 capability 先說出 canonical action 名，再說出各 adapter surface
 - `runtime_protocol.rs` 不再只有 read model，也開始承載 control / interaction vocabulary
-- `new_session`、`stop`、`plan_mode/default_mode` 不再只是 Telegram-first 功能
+- `start_fresh_session`、`stop`、`plan_mode/default_mode` 不再只是 Telegram-first 功能
 - management API、Telegram、plan 文檔不再各自重複發明同一能力的名字
 
 ## 與其他計劃的關係
@@ -338,7 +344,7 @@ v1 至少應固定：
 
 - `RuntimeControlAction` 應直接放進 `runtime_protocol.rs`，還是拆成獨立模組？
 - interaction event 應和 `RuntimeEventKind` 共用同一個 enum family，還是保持另一條 typed stream？
-- `start_fresh_session` 是否需要補 management API route，還是只先收斂 shared action vocabulary？
+- unified action route 是否要繼續擴到 `set_thread_collaboration_mode` 與 `interrupt_running_turn`？
 - collaboration mode 是否應進入 `ManagedWorkspaceView` / `ThreadStateView`，還是暫時只作 control surface？
 - `/stop` 的對等 management/API surface 是否應該先補，還是先只補 protocol action 和 shared dispatcher？
 - control action 結果是否需要進 typed SSE，還是目前仍以 view diff 為主？
@@ -346,7 +352,7 @@ v1 至少應固定：
 ## 建議的下一步
 
 1. 先在 `runtime-protocol` 主規格確認這份 rollout 草稿採用的 canonical action 名稱。
-2. 先做一個最小 shared Rust 型別切片，至少覆蓋 execution mode、launch、repair session 三個 action。
+2. 把 shared control action 切片從 execution mode / launch / repair / start fresh，擴到 collaboration mode 與 interrupt。
 3. 再決定 interaction vocabulary 是要併入 `RuntimeEventKind`，還是保持獨立但同級的 protocol 型別。
 4. 補一輪文檔同步，把 `telegram-adapter-migration`、`session-lifecycle`、`codex-busy-input-gate` 的 action naming 引到同一套語言。
 5. 最後再開始補缺 management/API surface 的 capability，而不是先擴更多新功能。

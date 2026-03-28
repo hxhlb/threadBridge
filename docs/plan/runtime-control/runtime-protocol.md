@@ -20,7 +20,7 @@
   - managed Codex preference / cache refresh / source build / build-defaults
   - workspace launch config
   - adopt / reject pending TUI handoff
-  - `launch-hcodex-new` / `launch-hcodex-continue-current` / `launch-hcodex-resume`
+  - `POST /api/threads/:thread_key/actions`（`start_fresh_session` / `repair_session_binding` / `set_workspace_execution_mode` / `launch_local_session`）
 - `threadbridge_desktop` 已開始直接依賴這些本地 view / action
 - transport-neutral 的正式 view / action 命名仍未完全收斂
 - local HTTP + SSE 已成為目前最務實的實驗載體
@@ -391,7 +391,7 @@ v1 先固定下面這組 query naming：
   - HTTP: `GET /api/workspaces/:thread_key/launch-config`
 - `get_workspace_execution_mode`
   - HTTP: `GET /api/workspaces/:thread_key/execution-mode`
-  - Telegram: `/execution_mode` 無參數時
+  - Telegram: `/get_workspace_execution_mode`
 
 ## 建議的 control action
 
@@ -408,6 +408,7 @@ v1 至少定義：
 
 - `add_workspace`
 - `pick_workspace_and_add_binding`
+- `start_fresh_session`
 - `repair_session_binding`
 - `set_workspace_execution_mode`
 - `set_workspace_codex_model`
@@ -472,30 +473,33 @@ v1 至少定義：
   - Rust payload: `WorkingSessionRecordView`
 - `get_workspace_execution_mode`
   - HTTP: `GET /api/workspaces/:thread_key/execution-mode`
-  - Telegram: `/execution_mode`
+  - Telegram: `/get_workspace_execution_mode`
 - `get_workspace_launch_config`
   - HTTP: `GET /api/workspaces/:thread_key/launch-config`
   - Telegram:
     - 目前不直接暴露 raw launch config
-    - `/launch` 只暴露 control surface
+    - `/launch_local_session` 只暴露 control surface
 
 ### Control surfaces
 
+- `start_fresh_session`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "start_fresh_session" }`
+  - Telegram: `/start_fresh_session`
 - `set_workspace_execution_mode`
-  - HTTP: `PUT /api/workspaces/:thread_key/execution-mode`
-  - Telegram: `/execution_mode full_auto|yolo`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "set_workspace_execution_mode", "execution_mode": "full_auto|yolo" }`
+  - Telegram: `/set_workspace_execution_mode full_auto|yolo`
 - `launch_local_session(target=new)`
-  - HTTP: `POST /api/workspaces/:thread_key/launch-hcodex-new`
-  - Telegram: `/launch new`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "launch_local_session", "target": "new" }`
+  - Telegram: `/launch_local_session new`
 - `launch_local_session(target=continue_current)`
-  - HTTP: `POST /api/workspaces/:thread_key/launch-hcodex-continue-current`
-  - Telegram: `/launch current`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "launch_local_session", "target": "continue_current" }`
+  - Telegram: `/launch_local_session continue_current`
 - `launch_local_session(target=resume)`
-  - HTTP: `POST /api/workspaces/:thread_key/launch-hcodex-resume`
-  - Telegram: `/launch resume <session_id>`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "launch_local_session", "target": "resume", "session_id": "<session_id>" }`
+  - Telegram: `/launch_local_session resume <session_id>`
 - `repair_session_binding`
-  - HTTP: `POST /api/threads/:thread_key/repair-session-binding`
-  - Telegram: `/repair_session`
+  - HTTP: `POST /api/threads/:thread_key/actions` + `{ "action": "repair_session_binding" }`
+  - Telegram: `/repair_session_binding`
 - `archive_thread`
   - HTTP: `POST /api/threads/:thread_key/archive`
   - Telegram: `/archive_workspace`
@@ -522,7 +526,7 @@ v1 至少定義：
 - 一個 canonical action 可以有多個 transport surface
   - 例如 `launch_local_session`
 - 一個 transport surface 不應同時混合多個 canonical action
-  - 例如 `/new_session` 不應再偷偷兼做 local launch
+  - 例如 `/start_fresh_session` 不應再偷偷兼做 local launch
 - 若某個 capability 目前只存在 Telegram，不代表它就是 Telegram-only 語義
   - 例如 `interrupt_running_turn`
   - 之後仍可補 management API / desktop UI surface，而不需要重命名 protocol action
@@ -540,14 +544,11 @@ v1 至少定義：
 
 - `POST /api/workspaces/pick-and-add`
 - `POST /api/runtime-owner/reconcile`
+- `POST /api/threads/:thread_key/actions`
 - `POST /api/threads/:thread_key/adopt-tui`
 - `POST /api/threads/:thread_key/reject-tui`
-- `POST /api/threads/:thread_key/repair-session-binding`
 - `GET /api/workspaces/:thread_key/launch-config`
 - `POST /api/workspaces/:thread_key/open`
-- `POST /api/workspaces/:thread_key/launch-hcodex-new`
-- `POST /api/workspaces/:thread_key/launch-hcodex-continue-current`
-- `POST /api/workspaces/:thread_key/launch-hcodex-resume`
 - `POST /api/workspaces/:thread_key/repair-runtime`
 - `POST /api/threads/:thread_key/archive`
 - `POST /api/threads/:thread_key/restore`
