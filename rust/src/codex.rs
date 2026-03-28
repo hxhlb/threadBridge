@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::oneshot;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
@@ -1419,6 +1420,7 @@ pub(crate) async fn observe_thread_with_handlers<F, Fut, H, Hf, N, Nf>(
     mut on_event: F,
     mut on_server_request: H,
     mut on_server_notification: N,
+    mut shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<()>
 where
     F: FnMut(CodexThreadEvent) -> Fut,
@@ -1431,7 +1433,7 @@ where
     let mut client = AppServerClient::start_websocket(app_server_url).await?;
     let result = client
         .request_simple(
-            "threadbridge/observeThread",
+            "threadbridge/subscribeThread",
             json!({
                 "threadId": thread_id,
             }),
@@ -1453,7 +1455,25 @@ where
     let mut latest_agent_message_by_id: HashMap<String, String> = HashMap::new();
     let mut latest_plan_by_id: HashMap<String, String> = HashMap::new();
     loop {
-        match client.read_message().await? {
+        let message = if let Some(rx) = shutdown_rx.as_mut() {
+            tokio::select! {
+                _ = rx => {
+                    if let Err(error) = request_observer_unsubscribe(&mut client, thread_id).await {
+                        warn!(
+                            event = "codex.observe_thread.unsubscribe_failed",
+                            thread_id = %thread_id,
+                            error = %error,
+                        );
+                    }
+                    return Ok(());
+                }
+                message = client.read_message() => message?,
+            }
+        } else {
+            client.read_message().await?
+        };
+
+        match message {
             RpcMessage::Notification { method, params } => {
                 if let Some(notification) = CodexRunner::map_server_notification(
                     &method,
@@ -1486,6 +1506,18 @@ where
             RpcMessage::Response { .. } | RpcMessage::Error { .. } => {}
         }
     }
+}
+
+async fn request_observer_unsubscribe(client: &mut AppServerClient, thread_id: &str) -> Result<()> {
+    let _ = client
+        .request_simple(
+            "threadbridge/unsubscribeThread",
+            json!({
+                "threadId": thread_id,
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
 fn normalize_item(item: Value) -> Value {

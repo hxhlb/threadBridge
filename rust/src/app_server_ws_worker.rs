@@ -62,6 +62,7 @@ struct WorkerIngressRuntime {
 
 #[derive(Debug, Default)]
 struct ObserverSessionState {
+    observer_mode: bool,
     observed_thread_id: Option<String>,
 }
 
@@ -399,7 +400,7 @@ where
         return Ok(LocalRequestAction::Forward(message.clone()));
     };
 
-    if observer_session.observed_thread_id.is_some() && observer_disallows_method(method) {
+    if observer_session.observer_mode && observer_disallows_method(method) {
         send_local_error(
             client_sink,
             request_id,
@@ -529,13 +530,37 @@ where
             Ok(LocalRequestAction::Consumed)
         }
         "threadbridge/observeThread" => {
+            send_local_error(
+                client_sink,
+                request_id,
+                -32601,
+                "threadbridge/observeThread has been removed; use threadbridge/subscribeThread",
+            )
+            .await?;
+            Ok(LocalRequestAction::Consumed)
+        }
+        "threadbridge/subscribeThread" => {
             let thread_id = payload
                 .get("params")
                 .and_then(|params| params.get("threadId"))
                 .and_then(Value::as_str)
-                .context("threadbridge/observeThread missing threadId")?;
+                .context("threadbridge/subscribeThread missing threadId")?;
+            observer_session.observer_mode = true;
             observer_session.observed_thread_id = Some(thread_id.to_owned());
-            Ok(LocalRequestAction::Forward(observer_resume_request(
+            Ok(LocalRequestAction::Forward(observer_subscribe_request(
+                request_id, thread_id,
+            )))
+        }
+        "threadbridge/unsubscribeThread" => {
+            let thread_id = payload
+                .get("params")
+                .and_then(|params| params.get("threadId"))
+                .and_then(Value::as_str)
+                .context("threadbridge/unsubscribeThread missing threadId")?;
+            if observer_session.observed_thread_id.as_deref() == Some(thread_id) {
+                observer_session.observed_thread_id = None;
+            }
+            Ok(LocalRequestAction::Forward(observer_unsubscribe_request(
                 request_id, thread_id,
             )))
         }
@@ -543,7 +568,7 @@ where
     }
 }
 
-fn observer_resume_request(request_id: i64, thread_id: &str) -> WsMessage {
+fn observer_subscribe_request(request_id: i64, thread_id: &str) -> WsMessage {
     WsMessage::Text(
         json!({
             "jsonrpc": "2.0",
@@ -552,6 +577,21 @@ fn observer_resume_request(request_id: i64, thread_id: &str) -> WsMessage {
             "params": {
                 "threadId": thread_id,
                 "persistExtendedHistory": false,
+            },
+        })
+        .to_string()
+        .into(),
+    )
+}
+
+fn observer_unsubscribe_request(request_id: i64, thread_id: &str) -> WsMessage {
+    WsMessage::Text(
+        json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "thread/unsubscribe",
+            "params": {
+                "threadId": thread_id,
             },
         })
         .to_string()
@@ -783,8 +823,8 @@ fn parse_json_message(message: &WsMessage) -> Result<Option<Value>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkerState, observer_disallows_method, observer_resume_request, track_client_message,
-        track_upstream_message,
+        WorkerState, observer_disallows_method, observer_subscribe_request,
+        observer_unsubscribe_request, track_client_message, track_upstream_message,
     };
     use serde_json::json;
     use std::collections::HashSet;
@@ -946,8 +986,8 @@ mod tests {
     }
 
     #[test]
-    fn observe_thread_translates_to_thread_resume_request() {
-        let message = observer_resume_request(99, "thr_obs");
+    fn subscribe_thread_translates_to_thread_resume_request() {
+        let message = observer_subscribe_request(99, "thr_obs");
         let WsMessage::Text(text) = message else {
             panic!("expected text message");
         };
@@ -959,11 +999,24 @@ mod tests {
     }
 
     #[test]
+    fn unsubscribe_thread_translates_to_thread_unsubscribe_request() {
+        let message = observer_unsubscribe_request(55, "thr_obs");
+        let WsMessage::Text(text) = message else {
+            panic!("expected text message");
+        };
+        let payload: serde_json::Value = serde_json::from_str(text.as_str()).expect("json payload");
+        assert_eq!(payload["id"], 55);
+        assert_eq!(payload["method"], "thread/unsubscribe");
+        assert_eq!(payload["params"]["threadId"], "thr_obs");
+    }
+
+    #[test]
     fn observer_mode_blocks_write_methods() {
         assert!(observer_disallows_method("turn/start"));
         assert!(observer_disallows_method(
             "threadbridge/respondRequestUserInput"
         ));
+        assert!(!observer_disallows_method("threadbridge/unsubscribeThread"));
         assert!(!observer_disallows_method("thread/read"));
     }
 }

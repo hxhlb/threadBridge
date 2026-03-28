@@ -1,5 +1,9 @@
 # App-Server WS Backend Worker 進度報告（2026-03-27）
 
+後續增量進度請見：
+
+- [app-server-ws-backend-progress-2026-03-28.md](app-server-ws-backend-progress-2026-03-28.md)
+
 ## 目前進度
 
 這份報告覆蓋 `app-server-ws-backend` 的 backend worker 主線落地狀態，時間窗為 `2026-03-27` 當日提交。

@@ -17,7 +17,7 @@
 目前尚未完成的部分：
 
 - today code 中與 backend 相關的責任仍散落在 `codex.rs`、`app_server_runtime.rs`、`app_server_observer.rs`、`hcodex_ingress.rs`、`runtime_owner.rs`、`runtime_control.rs`
-- `observer` attach 對 threadBridge surface 已改走 worker-local `threadbridge/observeThread`；但 upstream 仍未提供正式 subscribe API
+- `observer` attach 對 threadBridge surface 已改走 worker-local `threadbridge/subscribeThread` / `threadbridge/unsubscribeThread`；但 upstream 仍未提供正式 `thread/subscribe` API
 - backend plane 與 shared runtime semantics 的長期 API 形狀仍未收斂成獨立 contract
 - 原生 busy truth 雖已開始透過 backend API（worker run-state）提供 authority，但產品層 busy gate 與兼容衍生路徑仍未完全收斂
 
@@ -121,7 +121,7 @@
 - `turn/start`
 - notification / server request mapping
 - thread cwd continuity 驗證
-- observer attach 前的 `thread/resume`
+- observer attach 前的 worker-local subscribe contract（today 映射為 `thread/resume`）
 
 這一層不是 owner，也不是 surface；它是 backend contract 的主要 client-facing 入口。
 
@@ -133,7 +133,7 @@
 
 承擔 read-side consumption 與 projection，包括：
 
-- `thread/resume` attach
+- `threadbridge/subscribeThread` attach / `threadbridge/unsubscribeThread` detach
 - preview / process / final mirror intake
 - adapter-neutral interaction event emission
 - runtime interaction resolved / turn completed follow-up
@@ -291,4 +291,4 @@ observer 消費 backend，但不是 backend owner。
 
 - 在收斂到 workspace-scoped child worker 的過程中，backend API 與 shared runtime protocol 的接縫應如何分層，才能避免雙重 authority 長期並存？
 - observer / ingress 中哪些 backend-adjacent 能力應先下沉到 worker，哪些仍應暫留在 `threadBridge` shared runtime semantics？
-- `thread/resume` attach 語義在 observer 路徑上的長期 contract，是否應等 upstream subscribe API 更明確後再收斂？
+- observer 已收斂為 worker-local subscribe contract 後，何時與如何切換到 upstream 原生 `thread/subscribe`（若上游提供）而不破壞 threadBridge 邊界？

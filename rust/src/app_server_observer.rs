@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::Value;
-use tokio::sync::Mutex;
-use tokio::task::AbortHandle;
+use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
+use tokio::time::{Duration, timeout};
 use tracing::{info, warn};
 
 use crate::codex::{
@@ -35,7 +36,8 @@ pub struct AppServerMirrorObserverManager {
 #[derive(Debug)]
 struct RunningObserver {
     thread_id: String,
-    abort_handle: AbortHandle,
+    stop_tx: Option<oneshot::Sender<()>>,
+    task_handle: JoinHandle<()>,
 }
 
 #[derive(Debug, Default)]
@@ -78,6 +80,7 @@ impl AppServerMirrorObserverManager {
         let observer_thread_id = thread_id.clone();
         let turn_modes = self.turn_modes.clone();
         let interaction_sender = self.interaction_sender.clone();
+        let (stop_tx, stop_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             if let Err(error) = run_thread_observer(
                 turn_modes,
@@ -86,24 +89,26 @@ impl AppServerMirrorObserverManager {
                 observer_ws_url,
                 observer_thread_key,
                 observer_thread_id,
+                stop_rx,
             )
             .await
             {
                 warn!(event = "app_server_observer.failed", error = %error);
             }
         });
-        self.replace_observer(key, thread_key, thread_id, task.abort_handle())
+        self.replace_observer(key, thread_key, thread_id, stop_tx, task)
             .await
     }
 
     pub async fn stop_thread_observer(&self, workspace_path: &Path, thread_key: &str) {
         let key = observer_key(workspace_path, thread_key);
         if let Some(existing) = self.inner.lock().await.remove(&key) {
-            existing.abort_handle.abort();
+            let thread_id = existing.thread_id.clone();
+            stop_running_observer(existing).await;
             info!(
                 event = "app_server_observer.source_closed",
                 thread_key = %thread_key,
-                thread_id = %existing.thread_id,
+                thread_id = %thread_id,
             );
         }
     }
@@ -120,11 +125,15 @@ impl AppServerMirrorObserverManager {
         key: String,
         thread_key: String,
         thread_id: String,
-        abort_handle: AbortHandle,
+        stop_tx: oneshot::Sender<()>,
+        task_handle: JoinHandle<()>,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-        if let Some(previous) = inner.remove(&key) {
-            previous.abort_handle.abort();
+        let previous = {
+            let mut inner = self.inner.lock().await;
+            inner.remove(&key)
+        };
+        if let Some(previous) = previous {
+            stop_running_observer(previous).await;
         }
         info!(
             event = "app_server_observer.source_registered",
@@ -132,11 +141,12 @@ impl AppServerMirrorObserverManager {
             thread_id = %thread_id,
             attach_mode = ObserverAttachMode::WorkerObserve.as_str(),
         );
-        inner.insert(
+        self.inner.lock().await.insert(
             key,
             RunningObserver {
                 thread_id,
-                abort_handle,
+                stop_tx: Some(stop_tx),
+                task_handle,
             },
         );
         Ok(())
@@ -147,10 +157,39 @@ impl AppServerMirrorObserverManager {
         let Some(existing) = inner.get(key) else {
             return Ok(true);
         };
+        if existing.task_handle.is_finished() {
+            return Ok(true);
+        }
         if existing.thread_id == thread_id {
             return Ok(false);
         }
         Ok(true)
+    }
+}
+
+async fn stop_running_observer(mut observer: RunningObserver) {
+    if let Some(stop_tx) = observer.stop_tx.take() {
+        let _ = stop_tx.send(());
+    }
+    let task_handle = &mut observer.task_handle;
+    match timeout(Duration::from_secs(2), task_handle).await {
+        Ok(join_result) => {
+            if let Err(error) = join_result {
+                warn!(
+                    event = "app_server_observer.source_join_failed",
+                    thread_id = %observer.thread_id,
+                    error = %error,
+                );
+            }
+        }
+        Err(_) => {
+            observer.task_handle.abort();
+            let _ = observer.task_handle.await;
+            warn!(
+                event = "app_server_observer.source_abort_after_timeout",
+                thread_id = %observer.thread_id,
+            );
+        }
     }
 }
 
@@ -177,6 +216,7 @@ async fn run_thread_observer(
     observer_ws_url: String,
     thread_key: String,
     thread_id: String,
+    shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
     let state = Arc::new(Mutex::new(ObserverState::default()));
     observe_thread_with_handlers(
@@ -228,6 +268,7 @@ async fn run_thread_observer(
                 async move { handle_server_notification(&interaction_sender, notification).await }
             }
         },
+        Some(shutdown_rx),
     )
     .await
 }
@@ -465,10 +506,15 @@ fn extract_user_prompt_text(event: &CodexThreadEvent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_agent_message_text, extract_completed_plan_text, extract_user_prompt_text,
+        AppServerMirrorObserverManager, RunningObserver, extract_agent_message_text,
+        extract_completed_plan_text, extract_user_prompt_text, observer_key, stop_running_observer,
     };
     use crate::codex::CodexThreadEvent;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, oneshot};
 
     #[test]
     fn extract_agent_message_text_reads_item_text() {
@@ -510,5 +556,73 @@ mod tests {
             extract_user_prompt_text(&event),
             Some("first\n\nsecond".to_owned())
         );
+    }
+
+    #[tokio::test]
+    async fn source_needs_replacement_when_task_finished() {
+        let manager = AppServerMirrorObserverManager::new(Arc::new(Mutex::new(HashMap::new())));
+        let key = observer_key(Path::new("/tmp/workspace"), "thread-key");
+        let task_handle = tokio::spawn(async {});
+        manager.inner.lock().await.insert(
+            key.clone(),
+            RunningObserver {
+                thread_id: "thr_1".to_owned(),
+                stop_tx: None,
+                task_handle,
+            },
+        );
+        tokio::task::yield_now().await;
+        assert!(
+            manager
+                .source_needs_replacement(&key, "thr_1")
+                .await
+                .unwrap()
+        );
+        let existing = manager
+            .inner
+            .lock()
+            .await
+            .remove(&key)
+            .expect("running observer");
+        stop_running_observer(existing).await;
+    }
+
+    #[tokio::test]
+    async fn source_needs_replacement_respects_running_task_and_thread_id() {
+        let manager = AppServerMirrorObserverManager::new(Arc::new(Mutex::new(HashMap::new())));
+        let key = observer_key(Path::new("/tmp/workspace"), "thread-key");
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let task_handle = tokio::spawn(async move {
+            let _ = stop_rx.await;
+        });
+        manager.inner.lock().await.insert(
+            key.clone(),
+            RunningObserver {
+                thread_id: "thr_1".to_owned(),
+                stop_tx: Some(stop_tx),
+                task_handle,
+            },
+        );
+
+        assert!(
+            !manager
+                .source_needs_replacement(&key, "thr_1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            manager
+                .source_needs_replacement(&key, "thr_2")
+                .await
+                .unwrap()
+        );
+
+        let existing = manager
+            .inner
+            .lock()
+            .await
+            .remove(&key)
+            .expect("running observer");
+        stop_running_observer(existing).await;
     }
 }

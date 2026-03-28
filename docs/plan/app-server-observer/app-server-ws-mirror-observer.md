@@ -27,7 +27,7 @@
 
 目前尚未完成：
 
-- observer 對 threadBridge surface 已改走 worker-local `threadbridge/observeThread` attach contract；但 upstream 仍未提供正式 subscribe API
+- observer 對 threadBridge surface 已收斂為 worker-local `threadbridge/subscribeThread` / `threadbridge/unsubscribeThread` contract；但 upstream 仍未提供正式 `thread/subscribe` API
 - 少量文檔、legacy compatibility alias、與歷史分析仍沿用 `tui_proxy` 詞彙，尚未完全對齊新的 ingress/observer 分層
 - broader session observability 與 transport-neutral observer contract 仍未完成
 
@@ -330,12 +330,13 @@
 - threadBridge 若把 observer 更深地建立在 ws transport 上，等於更明確依賴這條能力
 - 這在架構上是合理的，但在產品風險上仍需要清楚承認
 
-### 2. `thread/resume` 目前在語義上更像 attach+resume，而不是純 observer subscribe
+### 2. upstream 尚未提供正式 `thread/subscribe` API
 
 也就是說：
 
-- 今天雖然可以把它用作 observer attach
-- 但 upstream 若將來提供更明確的 `thread/subscribe` API，threadBridge 應優先切過去
+- today `threadBridge` 的 observer subscribe contract 是 worker-local `threadbridge/subscribeThread`
+- worker 目前仍把這個 contract 轉譯到 upstream `thread/resume`（`persistExtendedHistory=false`）作為過渡
+- 若 upstream 提供正式 `thread/subscribe` API，應直接切換 worker 內部轉譯，而不改動 threadBridge 對外 subscribe contract
 
 ### 3. server request arbitration 仍需要明確策略
 
@@ -376,7 +377,6 @@
 
 ## 開放問題
 
-- observer attach 應直接使用現有 `thread/resume`，還是先在 threadBridge 內明確包出 `observe_thread()` 語義等待未來 upstream 對應？
 - observer 若與 `hcodex` 同時在線，哪些 event 需要 dedupe，哪些應完整保留？
 - 目前 proxy 直接攔截 `turn/start` prompt 的行為，是否真的還有必要保留？
 - 若 ws transport 未來仍維持 experimental，threadBridge 是否需要為 observer 明確標示 capability / degraded mode？
@@ -386,7 +386,8 @@
 1. 在文檔上正式承認：mirror 的主要 read-side intake 已移到 observer，而 `TUI proxy` 只保留歷史名稱與分析語境。
 2. 補齊 observer 的 contract 文檔：
    - `initialize`
-   - attach 指定 `thread.id`
+   - `threadbridge/subscribeThread` attach 指定 `thread.id`
+   - `threadbridge/unsubscribeThread` detach
    - 消費 `turn/*`、`item/*`、`serverRequest/resolved`
    - 寫入現有 transcript / workspace status
 3. 持續驗證 observer 與 ingress 並存時的 mirror record、interaction event、與 dedupe 邊界。

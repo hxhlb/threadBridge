@@ -191,6 +191,10 @@
   - doc kind: `historical`
   - backend worker 主線進度快照（2026-03-27）
   - 匯總 worker-first run authority、interaction response/ingress 下沉、local runtime helper 收斂，以及 worker mode 驗證 runbook
+- [app-server-ws-backend-progress-2026-03-28.md](desktop-runtime-owner/app-server-ws-backend-progress-2026-03-28.md)
+  - doc kind: `historical`
+  - observer contract 收斂進度快照（2026-03-28）
+  - 記錄 `subscribeThread/unsubscribeThread` 落地、`observeThread` 移除、以及顯式 detach + timeout fallback
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
   - 記錄 `hcodex` launch URL、local bridge、upstream Codex `--remote` 的實際契約

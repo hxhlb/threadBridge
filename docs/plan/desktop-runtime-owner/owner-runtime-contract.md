@@ -17,7 +17,7 @@
 
 目前尚未完成的部分：
 
-- observer attach 仍建立在 `thread/resume` attach 語義上，而不是正式的 upstream subscribe API
+- observer attach 已收斂為 worker-local `subscribeThread/unsubscribeThread` contract；但 upstream 仍未提供正式 `thread/subscribe` API
 - Telegram 雖已透過 shared control semantics 與 interaction bridge 工作，但仍未完全退回純 protocol consumer
 - `hcodex` ingress、launch contract、與 compatibility shim 的長期保留邊界仍未完全寫死
 - adoption 的最終命名與對外呈現仍未拍板
