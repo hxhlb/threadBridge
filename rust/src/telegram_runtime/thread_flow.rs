@@ -52,6 +52,25 @@ fn is_nonfatal_collaboration_mode_error(error: &anyhow::Error) -> bool {
         .starts_with(COLLABORATION_MODE_UNAVAILABLE_PREFIX)
 }
 
+fn format_error_chain(error: &anyhow::Error) -> String {
+    let chain = error
+        .chain()
+        .filter_map(|cause| {
+            let text = cause.to_string();
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        })
+        .collect::<Vec<_>>();
+    if chain.is_empty() {
+        "unknown error".to_owned()
+    } else {
+        chain.join(" | ")
+    }
+}
+
 async fn persist_collaboration_mode_change(
     state: &AppState,
     record: ThreadRecord,
@@ -1685,6 +1704,8 @@ fn spawn_text_turn(
     collaboration_mode: CollaborationMode,
 ) {
     tokio::spawn(async move {
+        let thread_key = record.metadata.thread_key.clone();
+        let log_workspace_path = workspace_path.clone();
         if let Err(error) = execute_text_turn(
             &bot,
             &state,
@@ -1701,9 +1722,13 @@ fn spawn_text_turn(
         {
             error!(
                 event = "telegram.thread.message.background_failed",
+                thread_key = %thread_key,
+                workspace = %log_workspace_path.display(),
+                codex_thread_id = %existing_thread_id,
                 chat_id = chat_id.0,
                 message_thread_id = thread_id_to_i32(thread_id),
                 error = %error,
+                error_chain = %format_error_chain(&error),
                 "background text turn failed"
             );
             let _ = send_scoped_warning_message(
@@ -1734,7 +1759,13 @@ async fn execute_text_turn(
         .control
         .workspace_runtime_service()
         .shared_codex_workspace(workspace_path.clone())
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve shared workspace runtime: {}",
+                workspace_path.display()
+            )
+        })?;
     let preview = Arc::new(Mutex::new(TurnPreviewController::new(
         bot.clone(),
         chat_id,
@@ -1753,7 +1784,14 @@ async fn execute_text_turn(
     let delivery_bus = state.control.delivery_bus.clone();
     let turn_id_slot = Arc::new(Mutex::new(None::<String>));
     let event_turn_id_slot = turn_id_slot.clone();
-    let execution_mode = workspace_execution_mode(&workspace_path).await?;
+    let execution_mode = workspace_execution_mode(&workspace_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve workspace execution mode: {}",
+                workspace_path.display()
+            )
+        })?;
     let interactive_bot = bot.clone();
     let interactive_state = state.clone();
     let interactive_thread_key = record.metadata.thread_key.clone();
@@ -1853,7 +1891,14 @@ async fn execute_text_turn(
                 }
             },
         )
-        .await;
+        .await
+        .with_context(|| {
+            format!(
+                "failed to run codex turn for thread {} in {}",
+                existing_thread_id,
+                workspace_path.display()
+            )
+        });
     preview_heartbeat.stop().await;
     typing.stop().await;
 
@@ -2067,7 +2112,14 @@ async fn execute_text_turn(
                             .await;
                     }
                 }
-                dispatch_workspace_telegram_outbox(bot, state, &record, thread_id).await?;
+                dispatch_workspace_telegram_outbox(bot, state, &record, thread_id)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to dispatch workspace telegram outbox for thread {}",
+                            record.metadata.thread_key
+                        )
+                    })?;
             }
         },
         Err(error) => {

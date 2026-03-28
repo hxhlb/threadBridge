@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 const STATUS_SCHEMA_VERSION: u32 = 2;
@@ -156,6 +156,23 @@ pub struct BusySelectedSessionStatus {
     pub snapshot: SessionCurrentStatus,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceEventLogRead {
+    pub events: Vec<WorkspaceStatusEventRecord>,
+    pub recovered_line_numbers: Vec<usize>,
+    pub malformed_line_numbers: Vec<usize>,
+    pub rewritten: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParsedWorkspaceEventLog {
+    events: Vec<WorkspaceStatusEventRecord>,
+    recovered_line_numbers: Vec<usize>,
+    malformed_line_numbers: Vec<usize>,
+}
+
+static EVENT_APPEND_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
 fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -206,6 +223,99 @@ pub fn events_path(workspace_path: &Path) -> PathBuf {
 
 fn legacy_events_path(workspace_path: &Path) -> PathBuf {
     legacy_status_dir(workspace_path).join(EVENTS_FILE)
+}
+
+async fn event_append_lock(path: &Path) -> Arc<Mutex<()>> {
+    let key = path.to_string_lossy().into_owned();
+    let locks = EVENT_APPEND_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = locks.lock().await;
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn parse_workspace_event_log(content: &str) -> ParsedWorkspaceEventLog {
+    let mut parsed = ParsedWorkspaceEventLog::default();
+    for (idx, raw_line) in content.lines().enumerate() {
+        let line_no = idx + 1;
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(event) = serde_json::from_str::<WorkspaceStatusEventRecord>(line) {
+            parsed.events.push(event);
+            continue;
+        }
+
+        let mut recovered = Vec::new();
+        let mut stream_failed = false;
+        let mut stream =
+            serde_json::Deserializer::from_str(line).into_iter::<WorkspaceStatusEventRecord>();
+        while let Some(item) = stream.next() {
+            match item {
+                Ok(event) => recovered.push(event),
+                Err(_) => {
+                    stream_failed = true;
+                    break;
+                }
+            }
+        }
+
+        if !recovered.is_empty() {
+            let recovered_count = recovered.len();
+            parsed.events.extend(recovered.into_iter());
+            if !stream_failed {
+                if recovered_count >= 2 {
+                    parsed.recovered_line_numbers.push(line_no);
+                } else {
+                    parsed.malformed_line_numbers.push(line_no);
+                }
+            } else {
+                parsed.malformed_line_numbers.push(line_no);
+            }
+            continue;
+        }
+
+        parsed.malformed_line_numbers.push(line_no);
+    }
+    parsed
+}
+
+pub async fn read_workspace_event_log_repairing(
+    workspace_path: &Path,
+) -> Result<Option<WorkspaceEventLogRead>> {
+    let path = events_path(workspace_path);
+    let content = match fs::read_to_string(&path).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+
+    let parsed = parse_workspace_event_log(&content);
+    let mut rewritten = false;
+    if !parsed.recovered_line_numbers.is_empty() && parsed.malformed_line_numbers.is_empty() {
+        let mut normalized = String::new();
+        for event in &parsed.events {
+            normalized.push_str(&serde_json::to_string(event)?);
+            normalized.push('\n');
+        }
+        if normalized != content {
+            fs::write(&path, normalized)
+                .await
+                .with_context(|| format!("failed to repair {}", path.display()))?;
+            rewritten = true;
+        }
+    }
+
+    Ok(Some(WorkspaceEventLogRead {
+        events: parsed.events,
+        recovered_line_numbers: parsed.recovered_line_numbers,
+        malformed_line_numbers: parsed.malformed_line_numbers,
+        rewritten,
+    }))
 }
 
 fn session_file_name(session_id: &str) -> String {
@@ -358,17 +468,18 @@ pub async fn append_status_event(
     event: &WorkspaceStatusEventRecord,
 ) -> Result<()> {
     let path = events_path(workspace_path);
+    let append_lock = event_append_lock(&path).await;
+    let _append_guard = append_lock.lock().await;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
     }
+    let serialized = format!("{}\n", serde_json::to_string(event)?);
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .await?;
-    file.write_all(serde_json::to_string(event)?.as_bytes())
-        .await?;
-    file.write_all(b"\n").await?;
+    file.write_all(serialized.as_bytes()).await?;
     file.flush().await?;
     Ok(())
 }
@@ -436,14 +547,7 @@ async fn should_skip_duplicate_turn_completed_event(
                 return Err(error).with_context(|| format!("failed to read {}", path.display()));
             }
         };
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(existing) = serde_json::from_str::<WorkspaceStatusEventRecord>(line) else {
-                continue;
-            };
+        for existing in parse_workspace_event_log(&contents).events {
             if existing.event != "turn_completed" {
                 continue;
             }
@@ -1161,19 +1265,23 @@ pub async fn busy_selected_session_status(
 mod tests {
     use super::{
         HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, ObserverAttachMode, SessionActivitySource,
-        SessionCurrentStatus, WorkspaceAggregateStatus, WorkspaceStatusCache, WorkspaceStatusPhase,
-        busy_selected_session_status, current_status_path, default_local_tui_session_claim,
-        ensure_workspace_status_surface, events_path, legacy_current_status_path,
-        legacy_events_path, legacy_local_tui_session_claim_path, legacy_session_status_path,
-        list_live_local_sessions, local_tui_session_claim_path, read_local_tui_session_claim,
-        read_session_status, read_workspace_aggregate_status, record_bot_status_event,
+        SessionCurrentStatus, WorkspaceAggregateStatus, WorkspaceEventLogRead,
+        WorkspaceStatusCache, WorkspaceStatusEventRecord, WorkspaceStatusPhase,
+        append_status_event, busy_selected_session_status, current_status_path,
+        default_local_tui_session_claim, ensure_workspace_status_surface, events_path,
+        legacy_current_status_path, legacy_events_path, legacy_local_tui_session_claim_path,
+        legacy_session_status_path, list_live_local_sessions, local_tui_session_claim_path,
+        read_local_tui_session_claim, read_session_status, read_workspace_aggregate_status,
+        read_workspace_event_log_repairing, record_bot_status_event,
         record_hcodex_ingress_completed, record_hcodex_ingress_connected,
         record_hcodex_ingress_preview_text, record_hcodex_ingress_prompt,
-        record_hcodex_ingress_turn_started,
-        record_hcodex_launcher_ended, record_hcodex_launcher_started, session_status_path,
+        record_hcodex_ingress_turn_started, record_hcodex_launcher_ended,
+        record_hcodex_launcher_started, session_status_path,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tokio::fs;
+    use tokio::sync::Barrier;
     use uuid::Uuid;
 
     fn temp_path() -> PathBuf {
@@ -2104,5 +2212,142 @@ mod tests {
         assert_eq!(session.phase, WorkspaceStatusPhase::TurnRunning);
         assert_eq!(session.turn_id.as_deref(), Some("turn-1"));
         assert_eq!(session.client.as_deref(), Some(HCODEX_INGRESS_CLIENT));
+    }
+
+    #[tokio::test]
+    async fn concurrent_status_event_appends_stay_parseable() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+
+        let count = 32usize;
+        let barrier = Arc::new(Barrier::new(count));
+        let mut tasks = Vec::with_capacity(count);
+        for idx in 0..count {
+            let workspace = workspace.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let event = WorkspaceStatusEventRecord {
+                    schema_version: 2,
+                    event: "preview_text".to_owned(),
+                    source: SessionActivitySource::Tui,
+                    workspace_cwd: workspace.display().to_string(),
+                    occurred_at: format!("2026-03-28T08:17:{idx:02}.000Z"),
+                    payload: serde_json::json!({
+                        "session_id": "thr_tui",
+                        "client": HCODEX_INGRESS_CLIENT,
+                        "text": format!("line-{idx}"),
+                    }),
+                };
+                append_status_event(&workspace, &event).await.unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let read = read_workspace_event_log_repairing(&workspace)
+            .await
+            .unwrap()
+            .unwrap_or_else(WorkspaceEventLogRead::default);
+        assert_eq!(read.events.len(), count);
+        assert!(read.recovered_line_numbers.is_empty());
+        assert!(read.malformed_line_numbers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_workspace_event_log_repairing_splits_concatenated_lines() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let path = events_path(&workspace);
+
+        let first = serde_json::to_string(&WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "user_prompt_submitted".to_owned(),
+            source: SessionActivitySource::Tui,
+            workspace_cwd: workspace.display().to_string(),
+            occurred_at: "2026-03-28T08:16:07.213Z".to_owned(),
+            payload: serde_json::json!({
+                "session_id": "thr_tui",
+                "client": HCODEX_INGRESS_CLIENT,
+                "prompt": "看看現在的時間",
+            }),
+        })
+        .unwrap();
+        let second = serde_json::to_string(&WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "bot_turn_started".to_owned(),
+            source: SessionActivitySource::ManagedRuntime,
+            workspace_cwd: workspace.display().to_string(),
+            occurred_at: "2026-03-28T08:16:07.213Z".to_owned(),
+            payload: serde_json::json!({
+                "session_id": "thr_tui",
+                "turn_id": "turn-1",
+            }),
+        })
+        .unwrap();
+        fs::write(&path, format!("{first}{second}\n"))
+            .await
+            .unwrap();
+
+        let read = read_workspace_event_log_repairing(&workspace)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.events.len(), 2);
+        assert_eq!(read.recovered_line_numbers, vec![1]);
+        assert!(read.malformed_line_numbers.is_empty());
+        assert!(read.rewritten);
+
+        let repaired = fs::read_to_string(&path).await.unwrap();
+        for line in repaired.lines() {
+            let _: WorkspaceStatusEventRecord = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_turn_completed_check_handles_concatenated_json_objects() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let path = events_path(&workspace);
+
+        let completed = serde_json::to_string(&WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "turn_completed".to_owned(),
+            source: SessionActivitySource::Tui,
+            workspace_cwd: workspace.display().to_string(),
+            occurred_at: "2026-03-28T08:17:09.605Z".to_owned(),
+            payload: serde_json::json!({
+                "thread-id": "thr_tui",
+                "turn-id": "turn-1",
+                "last-assistant-message": "done",
+            }),
+        })
+        .unwrap();
+        let preview = serde_json::to_string(&WorkspaceStatusEventRecord {
+            schema_version: 2,
+            event: "preview_text".to_owned(),
+            source: SessionActivitySource::Tui,
+            workspace_cwd: workspace.display().to_string(),
+            occurred_at: "2026-03-28T08:17:09.606Z".to_owned(),
+            payload: serde_json::json!({
+                "session_id": "thr_tui",
+                "client": HCODEX_INGRESS_CLIENT,
+                "text": "done",
+            }),
+        })
+        .unwrap();
+        fs::write(&path, format!("{completed}{preview}\n"))
+            .await
+            .unwrap();
+
+        let skipped = super::should_skip_duplicate_turn_completed_event(
+            &workspace,
+            "thr_tui",
+            Some("turn-1"),
+        )
+        .await
+        .unwrap();
+        assert!(skipped);
     }
 }

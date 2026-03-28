@@ -35,8 +35,9 @@ use crate::thread_state::{
     BindingStatus, LifecycleStatus, resolve_binding_status, resolve_lifecycle_status,
 };
 use crate::workspace_status::{
-    LocalTuiSessionClaim, WorkspaceAggregateStatus, WorkspaceStatusEventRecord, events_path,
-    is_hcodex_ingress_client, read_local_tui_session_claim,
+    LocalTuiSessionClaim, WorkspaceAggregateStatus, WorkspaceEventLogRead,
+    WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client,
+    read_local_tui_session_claim, read_workspace_event_log_repairing,
 };
 
 fn workspace_local_conflict(
@@ -249,20 +250,22 @@ async fn sync_local_transcript_mirrors_once(
         let workspace_path = PathBuf::from(&workspace_key);
         let Some(local_tui_claim) = read_local_tui_session_claim(&workspace_path).await? else {
             pending_local_user_prompts.retain(|key| !key.starts_with(&workspace_key));
-            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+            let Some(event_log) = read_workspace_event_log_repairing(&workspace_path).await? else {
                 continue;
             };
-            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            log_workspace_event_log_diagnostics(&workspace_path, &workspace_key, &event_log);
+            workspace_event_offsets.insert(workspace_key.clone(), event_log.events.len());
             continue;
         };
         let aggregate =
             crate::workspace_status::read_workspace_aggregate_status(&workspace_path).await?;
         if workspace_local_conflict(Some(&aggregate), Some(&local_tui_claim)) {
             pending_local_user_prompts.retain(|key| !key.starts_with(&workspace_key));
-            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+            let Some(event_log) = read_workspace_event_log_repairing(&workspace_path).await? else {
                 continue;
             };
-            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            log_workspace_event_log_diagnostics(&workspace_path, &workspace_key, &event_log);
+            workspace_event_offsets.insert(workspace_key.clone(), event_log.events.len());
             continue;
         }
         let Some(owner_record) = workspace_records
@@ -271,36 +274,27 @@ async fn sync_local_transcript_mirrors_once(
             .cloned()
         else {
             pending_local_user_prompts.retain(|key| !key.starts_with(&workspace_key));
-            let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+            let Some(event_log) = read_workspace_event_log_repairing(&workspace_path).await? else {
                 continue;
             };
-            workspace_event_offsets.insert(workspace_key.clone(), lines.len());
+            log_workspace_event_log_diagnostics(&workspace_path, &workspace_key, &event_log);
+            workspace_event_offsets.insert(workspace_key.clone(), event_log.events.len());
             continue;
         };
         let Some(message_thread_id) = owner_record.metadata.message_thread_id else {
             continue;
         };
 
-        let Some(lines) = read_workspace_event_lines(&workspace_path).await? else {
+        let Some(event_log) = read_workspace_event_log_repairing(&workspace_path).await? else {
             continue;
         };
+        log_workspace_event_log_diagnostics(&workspace_path, &workspace_key, &event_log);
         let previous_offset = match workspace_event_offsets.get(&workspace_key).copied() {
             Some(offset) => offset,
-            None => initial_workspace_event_offset(&lines, &local_tui_claim),
+            None => initial_workspace_event_offset(&event_log.events, &local_tui_claim),
         };
-        let new_offset = lines.len();
-        for line in lines.iter().skip(previous_offset) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let event: WorkspaceStatusEventRecord = match serde_json::from_str(trimmed) {
-                Ok(event) => event,
-                Err(error) => {
-                    warn!(event = "workspace_mirror.event_parse_failed", error = %error);
-                    continue;
-                }
-            };
+        let new_offset = event_log.events.len();
+        for event in event_log.events.iter().skip(previous_offset) {
             match event.event.as_str() {
                 "user_prompt_submitted" => {
                     let Some(session_id) = event
@@ -322,10 +316,9 @@ async fn sync_local_transcript_mirrors_once(
                     {
                         continue;
                     }
-                    let Some(entry) = local_mirror_entry_from_event(
-                        &event,
-                        local_tui_claim.session_id.as_deref(),
-                    ) else {
+                    let Some(entry) =
+                        local_mirror_entry_from_event(event, local_tui_claim.session_id.as_deref())
+                    else {
                         warn!(
                             event = "workspace_mirror.local_user_prompt_missing_text",
                             workspace = %workspace_key,
@@ -464,7 +457,7 @@ async fn sync_local_transcript_mirrors_once(
                 _ => {}
             }
             if let Some(entry) =
-                local_mirror_entry_from_event(&event, local_tui_claim.session_id.as_deref())
+                local_mirror_entry_from_event(event, local_tui_claim.session_id.as_deref())
             {
                 let inserted = state
                     .repository
@@ -581,17 +574,13 @@ fn local_prompt_tracking_key(workspace_key: &str, session_id: &str) -> String {
 }
 
 fn initial_workspace_event_offset(
-    lines: &[String],
+    events: &[WorkspaceStatusEventRecord],
     local_tui_claim: &LocalTuiSessionClaim,
 ) -> usize {
-    lines
+    events
         .iter()
-        .position(|line| {
-            serde_json::from_str::<WorkspaceStatusEventRecord>(line)
-                .ok()
-                .is_some_and(|event| event.occurred_at >= local_tui_claim.started_at)
-        })
-        .unwrap_or(lines.len())
+        .position(|event| event.occurred_at >= local_tui_claim.started_at)
+        .unwrap_or(events.len())
 }
 
 fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
@@ -602,14 +591,28 @@ fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> Transcrip
     }
 }
 
-async fn read_workspace_event_lines(workspace_path: &Path) -> Result<Option<Vec<String>>> {
-    let path = events_path(workspace_path);
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    Ok(Some(content.lines().map(str::to_owned).collect()))
+fn log_workspace_event_log_diagnostics(
+    workspace_path: &Path,
+    workspace_key: &str,
+    event_log: &WorkspaceEventLogRead,
+) {
+    if !event_log.recovered_line_numbers.is_empty() {
+        warn!(
+            event = "workspace_mirror.event_log_recovered",
+            workspace = %workspace_key,
+            path = %events_path(workspace_path).display(),
+            recovered_lines = ?event_log.recovered_line_numbers,
+            rewritten = event_log.rewritten,
+        );
+    }
+    if !event_log.malformed_line_numbers.is_empty() {
+        warn!(
+            event = "workspace_mirror.event_parse_failed",
+            workspace = %workspace_key,
+            path = %events_path(workspace_path).display(),
+            malformed_lines = ?event_log.malformed_line_numbers,
+        );
+    }
 }
 
 fn local_mirror_entry_from_event(
@@ -916,28 +919,26 @@ mod tests {
             started_at: "2026-03-19T00:00:10.000Z".to_owned(),
             updated_at: "2026-03-19T00:00:10.000Z".to_owned(),
         };
-        let lines = vec![
-            serde_json::to_string(&WorkspaceStatusEventRecord {
+        let events = vec![
+            WorkspaceStatusEventRecord {
                 schema_version: 2,
                 event: "user_prompt_submitted".to_owned(),
                 source: crate::workspace_status::SessionActivitySource::Tui,
                 workspace_cwd: "/tmp/workspace".to_owned(),
                 occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
                 payload: json!({"session_id": "thr_old", "prompt": "old"}),
-            })
-            .unwrap(),
-            serde_json::to_string(&WorkspaceStatusEventRecord {
+            },
+            WorkspaceStatusEventRecord {
                 schema_version: 2,
                 event: "user_prompt_submitted".to_owned(),
                 source: crate::workspace_status::SessionActivitySource::Tui,
                 workspace_cwd: "/tmp/workspace".to_owned(),
                 occurred_at: "2026-03-19T00:00:11.000Z".to_owned(),
                 payload: json!({"session_id": "thr_tui", "prompt": "new"}),
-            })
-            .unwrap(),
+            },
         ];
 
-        assert_eq!(initial_workspace_event_offset(&lines, &local_tui_claim), 1);
+        assert_eq!(initial_workspace_event_offset(&events, &local_tui_claim), 1);
     }
 
     #[test]
