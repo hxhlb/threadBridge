@@ -8,9 +8,7 @@ use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
-use crate::app_server_runtime::{
-    WorkspaceRuntimeManager, daemon_endpoint_is_live, worker_endpoint_is_live,
-};
+use crate::app_server_runtime::{WorkspaceRuntimeManager, daemon_endpoint_is_live};
 use crate::config::RuntimeConfig;
 use crate::hcodex_ingress::hcodex_ingress_endpoint_is_live;
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
@@ -280,11 +278,7 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
             }
         };
 
-    let worker_running = match state.worker_ws_url.as_deref() {
-        Some(url) => worker_endpoint_is_live(url).await,
-        None => true,
-    };
-    let app_server_running = worker_running && daemon_endpoint_is_live(&state.daemon_ws_url).await;
+    let app_server_running = daemon_endpoint_is_live(&state.daemon_ws_url).await;
     let proxy_running = match state.hcodex_ws_url.as_deref() {
         Some(url) => hcodex_ingress_endpoint_is_live(url).await,
         None => false,
@@ -313,10 +307,87 @@ async fn heartbeat_for_workspace(workspace_path: &Path) -> WorkspaceRuntimeHeart
         hcodex_ingress_status,
         runtime_readiness,
         last_checked_at,
-        last_error: if worker_running {
-            None
-        } else {
-            Some("workspace app-server worker is unavailable".to_owned())
-        },
+        last_error: (!app_server_running)
+            .then_some("workspace app-server daemon is unavailable".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heartbeat_for_workspace;
+    use crate::app_server_runtime::{WorkspaceRuntimeState, write_workspace_runtime_state_file};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::net::TcpListener;
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("threadbridge-runtime-owner-{name}-{suffix}"));
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+        dir
+    }
+
+    #[tokio::test]
+    async fn heartbeat_ignores_stale_worker_endpoint_when_daemon_is_live() {
+        let root = unique_temp_dir("daemon-live");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace dir");
+        let daemon = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind daemon listener");
+        let daemon_port = daemon.local_addr().expect("local addr").port();
+        let state = WorkspaceRuntimeState {
+            schema_version: 3,
+            workspace_cwd: workspace.display().to_string(),
+            daemon_ws_url: format!("ws://127.0.0.1:{daemon_port}"),
+            worker_ws_url: Some("ws://127.0.0.1:1".to_owned()),
+            worker_pid: None,
+            hcodex_ws_url: None,
+        };
+        write_workspace_runtime_state_file(&workspace, &state)
+            .await
+            .expect("write state");
+
+        let heartbeat = heartbeat_for_workspace(&workspace).await;
+
+        assert_eq!(heartbeat.app_server_status, "running");
+        assert_eq!(heartbeat.runtime_readiness, "degraded");
+        assert_eq!(heartbeat.last_error, None);
+
+        drop(daemon);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_marks_runtime_unavailable_when_daemon_is_down() {
+        let root = unique_temp_dir("daemon-down");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace dir");
+        let state = WorkspaceRuntimeState {
+            schema_version: 3,
+            workspace_cwd: workspace.display().to_string(),
+            daemon_ws_url: "ws://127.0.0.1:9".to_owned(),
+            worker_ws_url: Some("ws://127.0.0.1:1".to_owned()),
+            worker_pid: None,
+            hcodex_ws_url: None,
+        };
+        write_workspace_runtime_state_file(&workspace, &state)
+            .await
+            .expect("write state");
+
+        let heartbeat = heartbeat_for_workspace(&workspace).await;
+
+        assert_eq!(heartbeat.app_server_status, "stale");
+        assert_eq!(heartbeat.runtime_readiness, "unavailable");
+        assert_eq!(
+            heartbeat.last_error.as_deref(),
+            Some("workspace app-server daemon is unavailable")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

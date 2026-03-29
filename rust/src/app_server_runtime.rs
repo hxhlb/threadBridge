@@ -9,12 +9,13 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::info;
+use url::Url;
 use uuid::Uuid;
 
 use crate::app_server_ws_worker::WorkerReadyState;
@@ -60,6 +61,13 @@ const APP_SERVER_STATE_FILE: &str = "current.json";
 const HCODEX_LAUNCH_TICKETS_DIR: &str = ".threadbridge/state/app-server/launch-tickets";
 const RUNTIME_STATE_SCHEMA_VERSION: u32 = 3;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HcodexReuseStrategy {
+    Reuse(String),
+    RecoverFromWorker,
+    None,
+}
+
 impl WorkspaceRuntimeState {
     pub fn client_ws_url(&self) -> &str {
         self.worker_ws_url.as_deref().unwrap_or(&self.daemon_ws_url)
@@ -88,22 +96,27 @@ impl WorkspaceRuntimeManager {
         let key = canonical_workspace_key(workspace_path)?;
         let mut inner = self.inner.lock().await;
         if let Some(existing) = inner.get(&key).cloned()
-            && worker_is_healthy(&existing).await
+            && runtime_is_healthy(&existing).await
         {
-            let existing_proxy_url = read_workspace_runtime_state_file(&existing.workspace_path)
+            let persisted_hcodex_url = read_workspace_runtime_state_file(&existing.workspace_path)
                 .await
                 .ok()
                 .flatten()
-                .and_then(|state| state.hcodex_ws_url);
-            let hcodex_ws_url = if self.data_root_path.is_some() {
-                let ensured = ensure_worker_hcodex_ingress(&existing.worker_url)
-                    .await?
-                    .or(existing_proxy_url)
-                    .filter(|value| !value.trim().is_empty())
-                    .context("owner-managed worker is missing hcodex launch endpoint")?;
-                Some(ensured)
-            } else {
-                existing_proxy_url
+                .and_then(|state| normalize_non_empty_url(state.hcodex_ws_url));
+            let hcodex_ws_url = match reuse_hcodex_strategy(
+                self.data_root_path.is_some(),
+                existing.hcodex_url.clone(),
+                persisted_hcodex_url,
+            ) {
+                HcodexReuseStrategy::Reuse(url) => Some(url),
+                HcodexReuseStrategy::RecoverFromWorker => {
+                    let ensured = ensure_worker_hcodex_ingress(&existing.worker_url)
+                        .await?
+                        .and_then(|value| normalize_non_empty_url(Some(value)))
+                        .context("owner-managed worker is missing hcodex launch endpoint")?;
+                    Some(ensured)
+                }
+                HcodexReuseStrategy::None => None,
             };
             let state = WorkspaceRuntimeState {
                 schema_version: RUNTIME_STATE_SCHEMA_VERSION,
@@ -128,17 +141,8 @@ impl WorkspaceRuntimeManager {
 
         let runtime =
             spawn_workspace_runtime(workspace_path, self.data_root_path.as_deref()).await?;
-        let hcodex_ws_url = if self.data_root_path.is_some() {
-            let ensured = runtime
-                .hcodex_url
-                .clone()
-                .or(ensure_worker_hcodex_ingress(&runtime.worker_url).await?)
-                .filter(|value| !value.trim().is_empty())
-                .context("owner-managed worker did not publish hcodex launch endpoint")?;
-            Some(ensured)
-        } else {
-            runtime.hcodex_url.clone()
-        };
+        let hcodex_ws_url =
+            spawned_hcodex_url(self.data_root_path.is_some(), runtime.hcodex_url.clone())?;
         let state = WorkspaceRuntimeState {
             schema_version: RUNTIME_STATE_SCHEMA_VERSION,
             workspace_cwd: runtime.workspace_path.display().to_string(),
@@ -253,38 +257,59 @@ async fn spawn_workspace_runtime(
         hcodex_url: ready.hcodex_ws_url,
         child,
     };
-    if let Err(error) = wait_for_daemon(&runtime).await {
-        let _ = cleanup_partial_workspace_runtime_state_file(
-            &runtime.workspace_path,
-            Some(&runtime.daemon_url),
-        )
-        .await;
-        return Err(error);
-    }
     Ok(runtime)
 }
 
-async fn wait_for_daemon(runtime: &WorkspaceRuntime) -> Result<()> {
-    for _ in 0..20 {
-        if worker_is_healthy(runtime).await {
-            return Ok(());
+fn normalize_non_empty_url(url: Option<String>) -> Option<String> {
+    url.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    bail!(
-        "shared app-server worker did not become healthy for {}",
-        runtime.workspace_path.display()
-    );
+    })
 }
 
-async fn worker_is_healthy(runtime: &WorkspaceRuntime) -> bool {
-    if let Ok(mut child) = runtime.child.try_lock()
-        && child.try_wait().ok().flatten().is_some()
-    {
-        return false;
+fn spawned_hcodex_url(
+    owner_managed: bool,
+    ready_hcodex_url: Option<String>,
+) -> Result<Option<String>> {
+    let ready_hcodex_url = normalize_non_empty_url(ready_hcodex_url);
+    if owner_managed {
+        return Ok(Some(ready_hcodex_url.context(
+            "owner-managed worker did not publish hcodex launch endpoint",
+        )?));
     }
-    worker_endpoint_is_live(&runtime.worker_url).await
-        && daemon_endpoint_is_live(&runtime.daemon_url).await
+    Ok(ready_hcodex_url)
+}
+
+fn reuse_hcodex_strategy(
+    owner_managed: bool,
+    runtime_hcodex_url: Option<String>,
+    persisted_hcodex_url: Option<String>,
+) -> HcodexReuseStrategy {
+    if let Some(url) = normalize_non_empty_url(runtime_hcodex_url)
+        .or_else(|| normalize_non_empty_url(persisted_hcodex_url))
+    {
+        return HcodexReuseStrategy::Reuse(url);
+    }
+    if owner_managed {
+        HcodexReuseStrategy::RecoverFromWorker
+    } else {
+        HcodexReuseStrategy::None
+    }
+}
+
+async fn runtime_is_healthy(runtime: &WorkspaceRuntime) -> bool {
+    child_is_alive(&runtime.child).await && daemon_endpoint_is_live(&runtime.daemon_url).await
+}
+
+async fn child_is_alive(child: &Arc<Mutex<Child>>) -> bool {
+    if let Ok(mut child) = child.try_lock() {
+        return child.try_wait().ok().flatten().is_none();
+    }
+    true
 }
 
 async fn ensure_worker_hcodex_ingress(worker_ws_url: &str) -> Result<Option<String>> {
@@ -332,11 +357,23 @@ async fn ensure_worker_hcodex_ingress(worker_ws_url: &str) -> Result<Option<Stri
 }
 
 pub async fn daemon_endpoint_is_live(url: &str) -> bool {
-    connect_async(url).await.is_ok()
+    let Ok(addr) = socket_addr_from_ws_url(url) else {
+        return false;
+    };
+    TcpStream::connect(addr).await.is_ok()
 }
 
-pub async fn worker_endpoint_is_live(url: &str) -> bool {
-    connect_async(url).await.is_ok()
+fn socket_addr_from_ws_url(url: &str) -> Result<String> {
+    let parsed = Url::parse(url).with_context(|| format!("invalid websocket url: {url}"))?;
+    if !matches!(parsed.scheme(), "ws" | "wss") {
+        bail!("websocket url must start with ws:// or wss://");
+    }
+    if parsed.path() != "/" && !parsed.path().is_empty() {
+        bail!("websocket url must use root path");
+    }
+    let host = parsed.host_str().context("websocket url is missing host")?;
+    let port = parsed.port().context("websocket url is missing port")?;
+    Ok(format!("{host}:{port}"))
 }
 
 async fn find_free_loopback_port() -> Result<u16> {
@@ -452,10 +489,14 @@ async fn cleanup_partial_workspace_runtime_state_file(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_worker_binary_path_from;
+    use super::{
+        HcodexReuseStrategy, daemon_endpoint_is_live, normalize_non_empty_url,
+        resolve_worker_binary_path_from, reuse_hcodex_strategy, spawned_hcodex_url,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::net::TcpListener;
 
     fn unique_temp_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -527,6 +568,64 @@ mod tests {
             .expect("read state");
         assert!(remaining.is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spawned_hcodex_url_requires_ready_endpoint_for_owner_managed_runtime() {
+        let error = spawned_hcodex_url(true, None).expect_err("owner-managed spawn should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("owner-managed worker did not publish hcodex launch endpoint")
+        );
+    }
+
+    #[test]
+    fn reuse_hcodex_strategy_prefers_existing_endpoint_before_worker_recovery() {
+        let strategy = reuse_hcodex_strategy(
+            true,
+            Some("ws://127.0.0.1:5000".to_owned()),
+            Some("ws://127.0.0.1:5001".to_owned()),
+        );
+        assert_eq!(
+            strategy,
+            HcodexReuseStrategy::Reuse("ws://127.0.0.1:5000".to_owned())
+        );
+    }
+
+    #[test]
+    fn reuse_hcodex_strategy_only_recovers_for_owner_managed_missing_endpoint() {
+        assert_eq!(
+            reuse_hcodex_strategy(true, None, None),
+            HcodexReuseStrategy::RecoverFromWorker
+        );
+        assert_eq!(
+            reuse_hcodex_strategy(false, None, None),
+            HcodexReuseStrategy::None
+        );
+    }
+
+    #[test]
+    fn normalize_non_empty_url_trims_blank_values() {
+        assert_eq!(normalize_non_empty_url(Some("  ".to_owned())), None);
+        assert_eq!(
+            normalize_non_empty_url(Some(" ws://127.0.0.1:6000 ".to_owned())),
+            Some("ws://127.0.0.1:6000".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_endpoint_is_live_uses_tcp_connectivity() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind daemon listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let url = format!("ws://127.0.0.1:{port}");
+
+        assert!(daemon_endpoint_is_live(&url).await);
+
+        drop(listener);
+        assert!(!daemon_endpoint_is_live(&url).await);
     }
 }
 

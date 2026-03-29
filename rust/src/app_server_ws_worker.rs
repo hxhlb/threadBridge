@@ -339,8 +339,9 @@ async fn write_ready_file(path: &Path, state: &WorkerReadyState) -> Result<()> {
 }
 
 async fn wait_for_daemon(daemon_ws_url: &str) -> Result<()> {
+    let daemon_addr = socket_addr_from_ws_url(daemon_ws_url)?;
     for _ in 0..20 {
-        if connect_async(daemon_ws_url).await.is_ok() {
+        if TcpStream::connect(&daemon_addr).await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
