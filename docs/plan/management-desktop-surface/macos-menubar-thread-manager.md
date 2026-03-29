@@ -65,6 +65,7 @@
 
 - web 管理面可評估以 HeroUI 作為前端組件庫重構基礎
 - tray menu 已收斂；workspace submenu 在 v1 只保留 `New Session` 與 `Continue Telegram Session` 兩個入口，不再承擔 recent session browser 或其他 control action
+- macOS app 產品形態應優先收斂成 menubar-only 常駐工具；正常運行時預設隱藏 Dock 圖標，不把 Dock 當成主要入口
 
 目前新增確認的優先級判斷是：
 
@@ -92,6 +93,7 @@
 - `tray-icon` 提供極簡入口
 - 瀏覽器管理頁承接完整管理面
 - threadBridge 提供 local server 與 runtime owner
+- 正常運行時以 macOS menubar app 形態存在，而不是常駐一個 Dock app
 
 這份 plan 應處理：
 
@@ -137,6 +139,16 @@ v1 的 tray menu 明確不再提供：
 - recent session list / arbitrary session picker
 - archive / restore / reconnect / repair runtime
 - runtime/debug 類 control action
+
+### 1.1 Dock Presence
+
+v1 另固定一個產品形態約束：
+
+- `threadBridge` 在正常背景運行時應隱藏 macOS Dock 圖標
+- 主入口是 menubar tray icon 與瀏覽器管理頁，不是 Dock
+- 若未來需要短暫前台視窗或 debug 視窗，也應視為例外 surface，而不是把 Dock 恢復成常駐主入口
+
+這個約束的目的不是單純少一個圖標，而是避免 desktop runtime owner / tray utility / browser management surface 的產品定位再次漂回一般前台桌面 app。
 
 ### 2. Web 管理面
 
@@ -228,9 +240,22 @@ web 管理面中的 v1 action 以既有 lifecycle/control 語義為主：
 
 ### 4. First-Run Onboarding
 
-暫不提供。
+目前仍未提供完整 onboarding，但新增確認一條明確的 first-run flow 草稿。
 
-目前 desktop runtime 雖然仍可在沒有 Telegram 憑據時先啟動，但在真正可用的一次使用引導完成前，web 管理面不應再暴露半成品 onboarding 區塊。設定與 workspace 管理先直接放在正式頁面中處理。
+第一次使用引導建議收斂成 3 步：
+
+1. 啟動 desktop runtime 後先顯示 welcome alert，再明確引導使用者打開 web 管理面。
+2. 在 web 管理面優先完成 Telegram bot token 填寫與保存。
+3. token 可用後，立刻引導使用者新增第一個 workspace，完成最小可用 setup。
+
+這條 onboarding 的目的不是再做一套獨立設定精靈，而是把既有正式管理面上的關鍵首次操作串成一條最短成功路徑。
+
+因此它應遵守幾個約束：
+
+- onboarding 的主承載面仍是 web 管理面，不是 tray menu
+- tray / alert 只負責 welcome 與導流，不承擔完整表單流程
+- onboarding 完成的定義應是「bot token 已配置，且第一個 workspace 已加入」
+- 若使用者已完成 setup，就不應反覆彈出同樣的首次引導
 
 ## 建議的資料模型
 
@@ -452,6 +477,6 @@ v1 明確限制：
 
 1. 先把已存在的 local query / control API、typed SSE、session observability pane、與 execution mode controls 視為管理面 v1 的既有骨架，不再把它們當成前置待辦。
 2. 讓 [runtime-protocol.md](../runtime-control/runtime-protocol.md) 與這份文檔一起收斂 naming，特別是 workspace/thread/session/control 的 user-facing vocabulary。
-3. 繼續收斂 tray-icon UI 與 workspace-first 瀏覽器管理頁，特別是 `workspace = thread` 主模型、desktop-only 啟動、以及移除暫不可用 onboarding 後的資訊架構。
+3. 繼續收斂 tray-icon UI 與 workspace-first 瀏覽器管理頁，特別是 `workspace = thread` 主模型、desktop-only 啟動、以及 first-run onboarding 的 welcome -> token -> first workspace 最短路徑。
 4. 持續把 managed Codex update/install UX 從目前可用骨架收斂成更正式的產品面，而不是只停在 raw build / refresh action。
 5. 若要正式重構 web 管理面，可評估以 HeroUI 作為前端組件庫基礎。
