@@ -10,7 +10,7 @@ CARGO_HOME_DIR="${CARGO_HOME:-$REPO_ROOT/.cargo}"
 CARGO_TARGET_DIR_PATH="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 BUILD_PROFILE="${BUILD_PROFILE:-dev}"
 RUSTUP_HOME_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
-RUNTIME_PATH="$HOME/.cargo/bin:$REPO_ROOT/bin:$PATH"
+RUNTIME_PATH="$CARGO_HOME_DIR/bin:$HOME/.cargo/bin:$REPO_ROOT/bin:$PATH"
 MANAGED_CODEX_DIR="$REPO_ROOT/.threadbridge/codex"
 MANAGED_CODEX_BIN="$MANAGED_CODEX_DIR/codex"
 MANAGED_CODEX_SOURCE_FILE="$MANAGED_CODEX_DIR/source.txt"
@@ -28,6 +28,7 @@ Usage: local_threadbridge.sh <command> [--codex-source brew|source]
 
 Commands:
   build
+  bundle
   start
   stop
   restart
@@ -205,6 +206,14 @@ runtime_binary_name() {
   printf '%s\n' 'threadbridge_desktop'
 }
 
+bundle_app_path() {
+  printf '%s/bundle/osx/threadBridge.app\n' "$(profile_output_dir)"
+}
+
+bundle_runtime_binary_path() {
+  printf '%s/Contents/MacOS/%s\n' "$(bundle_app_path)" "$(runtime_binary_name)"
+}
+
 runtime_binary_names() {
   printf '%s\n' \
     'threadbridge_desktop' \
@@ -290,6 +299,65 @@ build_runtime_binaries() {
   done < <(runtime_binary_names)
 }
 
+build_app_icon_assets() {
+  require_desktop_runtime
+  local icon_script="$REPO_ROOT/scripts/build_macos_app_icon.sh"
+  if [[ ! -x "$icon_script" ]]; then
+    printf 'Missing app icon build script: %s\n' "$icon_script" >&2
+    exit 1
+  fi
+
+  log "building macOS app icon assets"
+  (
+    cd "$REPO_ROOT"
+    "$icon_script"
+  )
+}
+
+ensure_cargo_bundle_installed() {
+  require_command cargo
+  if [[ -x "$CARGO_HOME_DIR/bin/cargo-bundle" ]] || command -v cargo-bundle >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log "installing cargo-bundle into $CARGO_HOME_DIR/bin"
+  (
+    cd "$REPO_ROOT"
+    export PATH="$RUNTIME_PATH"
+    export CARGO_HOME="$CARGO_HOME_DIR"
+    export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
+    export RUSTUP_HOME="$RUSTUP_HOME_DIR"
+    cargo install cargo-bundle
+  )
+}
+
+build_runtime_bundle() {
+  require_desktop_runtime
+  ensure_cargo_bundle_installed
+
+  log "bundling threadBridge app ($BUILD_PROFILE)"
+  (
+    cd "$REPO_ROOT"
+    export PATH="$RUNTIME_PATH"
+    export CARGO_HOME="$CARGO_HOME_DIR"
+    export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_PATH"
+    export RUSTUP_HOME="$RUSTUP_HOME_DIR"
+    if [[ "$BUILD_PROFILE" == "release" ]]; then
+      cargo bundle --release --bin threadbridge_desktop
+    else
+      cargo bundle --bin threadbridge_desktop
+    fi
+  )
+
+  local app_path
+  app_path=$(bundle_app_path)
+  if [[ ! -d "$app_path" ]]; then
+    printf 'Expected app bundle at %s\n' "$app_path" >&2
+    exit 1
+  fi
+  log "bundle ready: $app_path"
+}
+
 build_local() {
   local codex_source=${1:-}
   ensure_layout
@@ -304,7 +372,28 @@ build_local() {
     log "using brew/system codex as primary local CLI source"
   fi
 
+  build_app_icon_assets
   build_runtime_binaries
+}
+
+bundle_local() {
+  local codex_source=${1:-}
+  ensure_layout
+  require_command cargo
+  require_desktop_runtime
+
+  codex_source=$(resolve_codex_source "$codex_source")
+  write_codex_source_preference "$codex_source"
+
+  if [[ "$codex_source" == "source" ]]; then
+    ensure_source_codex_binary
+  else
+    log "using brew/system codex as primary local CLI source"
+  fi
+
+  build_app_icon_assets
+  build_runtime_binaries
+  build_runtime_bundle
 }
 
 start_runtime() {
@@ -322,11 +411,13 @@ start_runtime() {
   else
     log "using brew/system codex as primary local CLI source"
   fi
+  build_app_icon_assets
   build_runtime_binaries
+  build_runtime_bundle
 
   local runtime_binary_name_value runtime_binary stdout_log stderr_log
   runtime_binary_name_value=$(runtime_binary_name)
-  runtime_binary=$(binary_path "$runtime_binary_name_value")
+  runtime_binary=$(bundle_runtime_binary_path)
   stdout_log=$(stdout_log_path)
   stderr_log=$(stderr_log_path)
 
@@ -460,6 +551,9 @@ main() {
   case "$command" in
     build)
       build_local "$codex_source"
+      ;;
+    bundle)
+      bundle_local "$codex_source"
       ;;
     start)
       start_runtime "$codex_source"

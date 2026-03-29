@@ -229,7 +229,7 @@
 - [macos-public-release-track.md](desktop-runtime-owner/macos-public-release-track.md)
   - doc kind: `plan`
   - 公開 macOS desktop RC 發佈草稿
-  - 固定 `signed + notarized`、`universal DMG + Homebrew cask`、與 dedicated tap 發佈路徑
+  - 固定 `signed + notarized`、`universal DMG + Homebrew cask`、dedicated tap 發佈路徑，與 release 版 `Application Support/threadBridge` 資料落點
 - [optional-agents-injection.md](runtime-control/optional-agents-injection.md)
   - doc kind: `plan`
   - appendix 注入可選化草稿

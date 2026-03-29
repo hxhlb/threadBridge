@@ -3,6 +3,16 @@ name = "threadbridge-rust"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.bundle]
+name = "threadBridge"
+identifier = "com.qoli.threadbridge"
+icon = ["rust/static/app_icon/threadBridge.icns"]
+
+[package.metadata.bundle.bin.threadbridge_desktop]
+name = "threadBridge"
+identifier = "com.qoli.threadbridge"
+icon = ["rust/static/app_icon/threadBridge.icns"]
+
 [lib]
 path = "rust/src/lib.rs"
 

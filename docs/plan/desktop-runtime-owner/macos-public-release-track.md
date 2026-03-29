@@ -15,6 +15,7 @@
 - 尚未有公開發佈用的 macOS app bundle / DMG 產物規格
 - 尚未有正式的 codesign / notarization release pipeline
 - 尚未有 GitHub Release + Homebrew cask 的雙線發佈契約
+- 尚未把 bot-local `data/` 從 repo/worktree 位置遷移到 macOS `Application Support` 目錄
 - 尚未有 release branch / RC 退出條件 / 回滾流程的統一規範文檔
 
 ## 問題
@@ -37,6 +38,7 @@
 - RC release discipline（branch、freeze、blocker policy、exit criteria）
 - public artifact 契約（universal DMG + Homebrew cask）
 - signed + notarized 的最低要求
+- public app 的資料落點契約（`Application Support/threadBridge`）
 - GitHub Release 與 dedicated tap 的分發關係
 - 回滾與撤回策略
 
@@ -99,7 +101,19 @@
   6. verify（codesign / spctl / staple 結果）
 - DMG 是 GitHub Release 與 Homebrew 共同引用的單一 canonical binary artifact，不維護第二套獨立二進位。
 
-### 4. Distribution Contract
+### 4. Runtime Data Location
+
+- 公開發佈前，bot-local runtime state 不再預設寫入 repo/worktree 下的 `data/`。
+- release build 的正式資料根目錄應遷移到：
+  - `~/Library/Application Support/threadBridge/`
+- 最低要求：
+  - thread metadata、session binding、transcript mirror、debug/event logs、image-state artifacts 都應落在 `Application Support` 內的受管子目錄
+  - 不得要求終端使用者從 app bundle 同層或 git worktree 啟動，才能保有正確的持久化狀態
+  - 本地開發模式仍可保留 repo-local `data/`，但必須與 public release path 明確區分
+- 這是 release gate，不是可選 polish：
+  - 若仍依賴 repo-local `data/`，則不得視為 public-ready macOS app bundle
+
+### 5. Distribution Contract
 
 - GitHub Release：
   - 上傳 notarized DMG
@@ -110,7 +124,7 @@
   - cask checksum 與 release artifact 一致
   - 不發佈與 GitHub artifact 不一致的替代包
 
-### 5. Rollback / Yank
+### 6. Rollback / Yank
 
 - 若 RC 出現 blocker：
   - 先更新 release notes 標記問題
@@ -127,6 +141,9 @@ RC 發佈前，至少滿足：
 - `cargo test`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - universal artifact 驗證（`arm64 + x86_64`）
+- release path 的 runtime state 驗證：
+  - 首次啟動會在 `~/Library/Application Support/threadBridge/` 建立資料根目錄
+  - repo/worktree 外啟動仍能正確讀寫持久化資料
 - codesign 驗證通過
 - notarization 成功且 stapled 驗證通過
 - 手動 smoke 測試：

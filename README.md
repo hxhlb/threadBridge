@@ -112,6 +112,7 @@ For local development on macOS, you can use:
 
 ```bash
 scripts/local_threadbridge.sh build
+scripts/local_threadbridge.sh bundle
 scripts/local_threadbridge.sh start
 scripts/local_threadbridge.sh restart
 scripts/local_threadbridge.sh status
@@ -129,6 +130,34 @@ scripts/local_threadbridge.sh build --codex-source source
 - `source`: build `codex-cli` from a local Codex Rust workspace and cache it under `.threadbridge/codex/codex`
 
 That preference is persisted in `.threadbridge/codex/source.txt`.
+On macOS, `build` also refreshes the app icon assets from [`icon/round-04-no-tile-dark-bg-v1.png`](/Volumes/Data/Github/threadBridge/icon/round-04-no-tile-dark-bg-v1.png). The icon pipeline first scales the source to `150%`, center-crops back to `1024x1024`, then applies the macOS rounded mask before bundling.
+`start` now launches the bundled app executable from `threadBridge.app`, so the running desktop process can inherit the bundle icon instead of showing the generic bare-binary `exec` icon.
+
+## Build macOS App Bundle Icon
+
+The app bundle icon is generated from [`icon/round-04-no-tile-dark-bg-v1.png`](/Volumes/Data/Github/threadBridge/icon/round-04-no-tile-dark-bg-v1.png). This is separate from the tray icon used by the running menu bar app.
+
+Generate the macOS iconset and `.icns` directly:
+
+```bash
+scripts/build_macos_app_icon.sh
+```
+
+Or use the local helper to bundle the desktop app with the generated icon:
+
+```bash
+scripts/local_threadbridge.sh bundle
+```
+
+Manual equivalent:
+
+```bash
+export CARGO_HOME="$PWD/.cargo" CARGO_TARGET_DIR="$PWD/target"
+cargo install cargo-bundle
+cargo bundle --bin threadbridge_desktop
+```
+
+The bundle metadata points to [`rust/static/app_icon/threadBridge.icns`](/Volumes/Data/Github/threadBridge/rust/static/app_icon/threadBridge.icns). The tray icon path in [`rust/src/bin/threadbridge_desktop.rs`](/Volumes/Data/Github/threadBridge/rust/src/bin/threadbridge_desktop.rs) stays unchanged.
 
 ## First Run Flow
 
