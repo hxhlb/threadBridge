@@ -14,6 +14,7 @@ const appState = {
     setupStatus: '',
     managedCodexStatus: '',
     launchOutputs: {},
+    showLaunchConfigStates: {},
     resumeSessionDrafts: {},
   },
   drafts: {
@@ -42,6 +43,7 @@ let renderScheduled = false
 let observabilityRefreshScheduled = false
 let fullRefreshScheduled = false
 let initialSnapshotLoaded = false
+const showLaunchConfigResetTimers = {}
 
 function parseRoute(hash) {
   const normalized = String(hash || '').trim().replace(/^#/, '')
@@ -101,6 +103,39 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+function serializeDataValue(value) {
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+  return String(value ?? '')
+}
+
+function toDataAttrName(key) {
+  return String(key)
+    .replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replaceAll(/[_\s]+/g, '-')
+    .toLowerCase()
+}
+
+function dataAttrs(values = {}) {
+  return Object.entries(values)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `data-${toDataAttrName(key)}="${escapeHtml(serializeDataValue(value))}"`)
+    .join(' ')
+}
+
+function stableDomKey(value) {
+  return String(value ?? '')
+    .trim()
+    .replaceAll(/[^a-zA-Z0-9_-]+/g, '-')
+    .replaceAll(/-+/g, '-')
+    .replaceAll(/^-|-$/g, '') || 'unknown'
+}
+
+function parseBooleanData(value) {
+  return value === 'true'
 }
 
 function formatMetaValue(value) {
@@ -255,6 +290,39 @@ function workspaceIndexByCwd(workspaceCwd) {
 
 function archivedThreadIndexByKey(threadKey) {
   return (appState.archived || []).findIndex(item => item.thread_key === threadKey)
+}
+
+function workspacePanelAnchorId(threadKey, panelKey) {
+  return `workspace-panel-${stableDomKey(threadKey)}-${stableDomKey(panelKey)}`
+}
+
+function scrollWorkspacePanelIntoView(threadKey, panelKey) {
+  const panelId = workspacePanelAnchorId(threadKey, panelKey)
+  window.setTimeout(() => {
+    const panel = document.getElementById(panelId)
+    panel?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 48)
+}
+
+function setShowLaunchConfigState(threadKey, state) {
+  if (!threadKey) {
+    return
+  }
+  appState.ui.showLaunchConfigStates[threadKey] = state
+  if (showLaunchConfigResetTimers[threadKey]) {
+    window.clearTimeout(showLaunchConfigResetTimers[threadKey])
+    delete showLaunchConfigResetTimers[threadKey]
+  }
+  if (state === 'ready') {
+    showLaunchConfigResetTimers[threadKey] = window.setTimeout(() => {
+      if (appState.ui.showLaunchConfigStates[threadKey] === 'ready') {
+        appState.ui.showLaunchConfigStates[threadKey] = 'idle'
+        scheduleRender()
+      }
+      delete showLaunchConfigResetTimers[threadKey]
+    }, 1800)
+  }
+  scheduleRender()
 }
 
 function upsertArrayItem(items, index, value) {
@@ -417,6 +485,119 @@ function workspaceSupportText(item) {
   return ''
 }
 
+function detailHeaderStatuses(item) {
+  const dominant = workspaceStatusDescriptor(item)
+  const tokens = [dominant]
+  if (item.runtime_readiness !== 'ready' && !dominant.label.startsWith('Runtime ')) {
+    tokens.push({
+      label: `Runtime ${prettyLabel(item.runtime_readiness)}`,
+      tone: toneForStatus(item.runtime_readiness),
+    })
+  }
+  if (item.run_status === 'running' && dominant.label !== 'Running') {
+    tokens.push({ label: 'Active Turn', tone: 'good' })
+  }
+  const aux = workspaceAuxDescriptor(item)
+  if (aux && !tokens.some(token => token.label === aux.label)) {
+    tokens.push(aux)
+  }
+  return tokens.slice(0, 3)
+}
+
+function detailPrimaryNote(item) {
+  if (item.recovery_hint) {
+    return { tone: 'hint', text: item.recovery_hint }
+  }
+  if (item.interrupt_note) {
+    return { tone: 'status-note', text: item.interrupt_note }
+  }
+  if (item.mode_drift) {
+    return {
+      tone: 'status-note',
+      text: `Mode drift. Next turn or resume restores ${item.workspace_execution_mode || 'full_auto'}.`,
+    }
+  }
+  return null
+}
+
+function detailRuntimeNotes(item, primaryNote) {
+  const notes = []
+  const pushNote = (tone, text) => {
+    if (!text || text === primaryNote?.text || notes.some(note => note.text === text)) {
+      return
+    }
+    notes.push({ tone, text })
+  }
+  pushNote('status-note', item.interrupt_note)
+  if (item.mode_drift) {
+    pushNote('status-note', `Mode drift. Next turn or resume restores ${item.workspace_execution_mode || 'full_auto'}.`)
+  }
+  return notes
+}
+
+function detailPanelSummary(panelKey, threadKey) {
+  switch (panelKey) {
+    case 'sessions': {
+      const cache = sessionCache(threadKey)
+      if (cache.loading && !cache.loaded) {
+        return 'Loading'
+      }
+      if (cache.error) {
+        return 'Error'
+      }
+      if (!cache.loaded) {
+        return 'Load on demand'
+      }
+      if (!cache.summaries.length) {
+        return 'No sessions'
+      }
+      return `${cache.summaries.length} sessions${cache.selectedSessionId ? ' · 1 selected' : ''}`
+    }
+    case 'transcript': {
+      const cache = transcriptCache(threadKey)
+      if (cache.loading && !cache.loaded) {
+        return 'Loading'
+      }
+      if (cache.error) {
+        return 'Error'
+      }
+      if (!cache.loaded) {
+        return 'Load on demand'
+      }
+      const processCount = transcriptEntriesForDelivery(cache.entries, 'process').length
+      const finalCount = transcriptEntriesForDelivery(cache.entries, 'final').length
+      if (!processCount && !finalCount) {
+        return 'No entries'
+      }
+      return `${processCount} process · ${finalCount} final`
+    }
+    case 'launch':
+      return appState.ui.launchOutputs[threadKey] ? 'Output available' : 'No output yet'
+    case 'advanced':
+      return 'Metadata and internals'
+    default:
+      return ''
+  }
+}
+
+function renderDetailDisclosurePanel(threadKey, panelKey, title, bodyHtml, { wide = false } = {}) {
+  const panels = workspacePanelState(threadKey)
+  const open = panels[panelKey]
+  const summary = detailPanelSummary(panelKey, threadKey)
+  return `
+    <section id="${workspacePanelAnchorId(threadKey, panelKey)}" class="matrix-panel ${wide ? 'matrix-panel-wide' : ''}">
+      <button class="summary-toggle" ${dataAttrs({ action: 'toggle-workspace-panel', threadKey, panelKey })}>
+        <span class="summary-toggle-copy">
+          <strong>${escapeHtml(title)}</strong>
+          ${summary ? `<span class="summary-toggle-summary">${escapeHtml(summary)}</span>` : ''}
+        </span>
+        <span class="summary-toggle-state">${open ? 'Hide' : 'Show'}</span>
+      </button>
+      ${open ? `<div class="collapsible-body">${bodyHtml}</div>` : ''}
+    </section>
+  `
+}
+
 function renderStatusToken(label, tone) {
   return `<span class="status-token status-token-${escapeHtml(tone)}">${escapeHtml(label)}</span>`
 }
@@ -485,7 +666,7 @@ function renderWorkspaceSummaryRow(item, { showOpenAction = false, emphasizeProb
       </div>
       <div class="action-slot">
         <a class="button button-secondary" href="#/workspaces/${encodeURIComponent(item.thread_key || '')}">View Detail</a>
-        ${showOpenAction ? `<button class="button button-secondary" onclick="openWorkspace(${JSON.stringify(item.thread_key)})">Open Workspace</button>` : ''}
+        ${showOpenAction ? `<button class="button button-secondary" ${dataAttrs({ action: 'open-workspace', threadKey: item.thread_key })}>Open Workspace</button>` : ''}
       </div>
     </article>
   `
@@ -620,12 +801,12 @@ function renderTopbar(route) {
         <h1>${escapeHtml(meta.title)}</h1>
       </div>
       <div class="page-header-actions">
-        <button class="button button-primary" onclick="reconcileRuntimeOwner()">Reconcile Runtime Owner</button>
+        <button class="button button-primary" ${dataAttrs({ action: 'reconcile-runtime-owner' })}>Reconcile Runtime Owner</button>
         ${route.page === 'workspaces'
-          ? `<button class="button button-secondary" onclick="pickAndAddWorkspace()" ${addWorkspaceState?.disabled ? 'disabled' : ''}>Add Workspace</button>`
+          ? `<button class="button button-secondary" ${dataAttrs({ action: 'pick-and-add-workspace' })} ${addWorkspaceState?.disabled ? 'disabled' : ''}>Add Workspace</button>`
           : ''}
         ${route.page === 'archive'
-          ? '<button class="button button-danger" onclick="purgeArchivedThreads()">Purge Archived Threads</button>'
+          ? `<button class="button button-danger" ${dataAttrs({ action: 'purge-archived-threads' })}>Purge Archived Threads</button>`
           : ''}
       </div>
     </header>
@@ -791,14 +972,14 @@ function renderSettingsPage() {
             ${pill('control chat', setup.control_chat_ready ? 'ready' : 'missing')}
           </div>
         </div>
-        <form class="form-grid" onsubmit="return submitSetupForm(event)">
+        <form class="form-grid" ${dataAttrs({ submitAction: 'submit-setup-form' })}>
           <div class="field">
             <span>Telegram Bot Token</span>
-            <input type="password" value="${escapeHtml(appState.drafts.setup.telegramToken)}" placeholder="Configured tokens stay masked." oninput="updateSetupDraft('telegramToken', this.value)" />
+            <input type="password" value="${escapeHtml(appState.drafts.setup.telegramToken)}" placeholder="Configured tokens stay masked." ${dataAttrs({ inputAction: 'update-setup-draft', field: 'telegramToken' })} />
           </div>
           <div class="field">
             <span>Authorized User IDs</span>
-            <input type="text" value="${escapeHtml(appState.drafts.setup.authorizedUserIds)}" placeholder="Comma separated Telegram user IDs" oninput="updateSetupDraft('authorizedUserIds', this.value)" />
+            <input type="text" value="${escapeHtml(appState.drafts.setup.authorizedUserIds)}" placeholder="Comma separated Telegram user IDs" ${dataAttrs({ inputAction: 'update-setup-draft', field: 'authorizedUserIds' })} />
           </div>
           <div class="button-row">
             <button class="button button-primary" type="submit">Save Setup</button>
@@ -820,33 +1001,33 @@ function renderSettingsPage() {
         <div class="form-grid">
           <div class="field">
             <span>Codex Source</span>
-            <select onchange="updateManagedCodexDraft('source', this.value)">
+            <select ${dataAttrs({ changeAction: 'update-managed-codex-draft', field: 'source' })}>
               <option value="brew" ${appState.drafts.managedCodex.source === 'brew' ? 'selected' : ''}>brew</option>
               <option value="source" ${appState.drafts.managedCodex.source === 'source' ? 'selected' : ''}>source</option>
             </select>
           </div>
           <div class="button-row">
-            <button class="button button-secondary" onclick="updateManagedCodexPreference()">Apply Codex Source</button>
-            <button class="button button-secondary" onclick="refreshManagedCodexCache()">Refresh Managed Cache</button>
-            <button class="button button-primary" onclick="buildManagedCodexSource()">Build Source Codex</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'update-managed-codex-preference' })}>Apply Codex Source</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'refresh-managed-codex-cache' })}>Refresh Managed Cache</button>
+            <button class="button button-primary" ${dataAttrs({ action: 'build-managed-codex-source' })}>Build Source Codex</button>
           </div>
           <div class="field">
             <span>Source Repo</span>
-            <input type="text" value="${escapeHtml(appState.drafts.managedCodex.sourceRepo)}" placeholder="/abs/codex/repo" oninput="updateManagedCodexDraft('sourceRepo', this.value)" />
+            <input type="text" value="${escapeHtml(appState.drafts.managedCodex.sourceRepo)}" placeholder="/abs/codex/repo" ${dataAttrs({ inputAction: 'update-managed-codex-draft', field: 'sourceRepo' })} />
           </div>
           <div class="field">
             <span>Source Rs Dir</span>
-            <input type="text" value="${escapeHtml(appState.drafts.managedCodex.sourceRsDir)}" placeholder="/abs/codex-rs" oninput="updateManagedCodexDraft('sourceRsDir', this.value)" />
+            <input type="text" value="${escapeHtml(appState.drafts.managedCodex.sourceRsDir)}" placeholder="/abs/codex-rs" ${dataAttrs({ inputAction: 'update-managed-codex-draft', field: 'sourceRsDir' })} />
           </div>
           <div class="field">
             <span>Build Profile</span>
-            <select onchange="updateManagedCodexDraft('buildProfile', this.value)">
+            <select ${dataAttrs({ changeAction: 'update-managed-codex-draft', field: 'buildProfile' })}>
               <option value="dev" ${appState.drafts.managedCodex.buildProfile === 'dev' ? 'selected' : ''}>dev</option>
               <option value="release" ${appState.drafts.managedCodex.buildProfile === 'release' ? 'selected' : ''}>release</option>
             </select>
           </div>
           <div class="button-row">
-            <button class="button button-secondary" onclick="saveManagedCodexBuildDefaults()">Save Build Defaults</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'save-managed-codex-build-defaults' })}>Save Build Defaults</button>
             <div class="muted">${escapeHtml(appState.ui.managedCodexStatus)}</div>
           </div>
           ${renderDefinitionGrid([
@@ -891,7 +1072,7 @@ function renderArchivePage() {
                 </div>
               </div>
               <div class="action-slot">
-                <button class="button button-secondary" onclick='restoreThread(${JSON.stringify(item.thread_key)}, ${JSON.stringify(item.title || item.thread_key)})'>Restore</button>
+                <button class="button button-secondary" ${dataAttrs({ action: 'restore-thread', threadKey: item.thread_key, label: item.title || item.thread_key })}>Restore</button>
               </div>
             </article>
           `).join('')}
@@ -913,11 +1094,14 @@ function renderWorkspaceDetailPage(threadKey) {
     `
   }
 
-  const panels = workspacePanelState(threadKey)
   const selectedExecutionMode = effectiveExecutionModeValue(item)
   const selectedCollaborationMode = effectiveCollaborationModeValue(item)
   const resumeDraft = appState.ui.resumeSessionDrafts[threadKey] || ''
+  const showLaunchConfigState = appState.ui.showLaunchConfigStates[threadKey] || 'idle'
   const interruptDisabled = item.conflict || item.interrupt_status !== 'available'
+  const headerStatuses = detailHeaderStatuses(item)
+  const primaryNote = detailPrimaryNote(item)
+  const runtimeNotes = detailRuntimeNotes(item, primaryNote)
 
   return `
     <div class="detail-shell">
@@ -926,69 +1110,62 @@ function renderWorkspaceDetailPage(threadKey) {
           <div class="detail-back-row">
             <a class="button button-secondary" href="#/workspaces">Back To Workspaces</a>
           </div>
-          <div>
+          <div class="detail-command-heading">
             <h1 class="detail-title">${escapeHtml(workspacePrimaryLabel(item))}</h1>
             ${workspaceSecondaryLabel(item) ? `<p class="muted">${escapeHtml(workspaceSecondaryLabel(item))}</p>` : ''}
             <div class="path-code">${escapeHtml(item.workspace_cwd)}</div>
           </div>
-          ${item.recovery_hint ? `<div class="hint">${escapeHtml(item.recovery_hint)}</div>` : ''}
-          ${item.mode_drift ? `<div class="status-note">Mode drift. Next turn or resume restores <code>${escapeHtml(item.workspace_execution_mode)}</code>.</div>` : ''}
-          ${item.interrupt_note ? `<div class="status-note">${escapeHtml(item.interrupt_note)}</div>` : ''}
         </div>
         <div class="detail-command-actions">
-          <div class="pill-row">
-            ${pill('binding', item.binding_status)}
-            ${pill('run', item.run_status)}
-            ${pill('phase', item.run_phase)}
-            ${pill('runtime', item.runtime_readiness)}
-            ${pill('interrupt', item.interrupt_status)}
-            ${item.conflict ? pill('conflict', 'conflict') : ''}
+          <div class="detail-status-row">
+            ${headerStatuses.map(token => renderStatusToken(token.label, token.tone)).join('')}
           </div>
-          <div class="button-row">
-            <button class="button button-primary" ${item.conflict ? 'disabled' : ''} onclick="startFreshSession(${JSON.stringify(threadKey)})">Start Fresh Session</button>
-            <button class="button button-secondary" ${interruptDisabled ? 'disabled' : ''} onclick="interruptRunningTurn(${JSON.stringify(threadKey)})">
+          <div class="button-row detail-primary-actions detail-actions-grid">
+            <button class="button button-primary" ${dataAttrs({ action: 'start-fresh-session', threadKey })} ${item.conflict ? 'disabled' : ''}>Start Fresh Session</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'interrupt-running-turn', threadKey })} ${interruptDisabled ? 'disabled' : ''}>
               ${item.interrupt_status === 'pending' ? 'Interrupt Requested' : 'Interrupt Active Turn'}
             </button>
-            <button class="button button-secondary" onclick="openWorkspace(${JSON.stringify(threadKey)})">Open Workspace</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'open-workspace', threadKey })}>Open Workspace</button>
           </div>
         </div>
+        ${primaryNote ? `<div class="${primaryNote.tone} detail-status-lane">${escapeHtml(primaryNote.text)}</div>` : ''}
       </section>
       <div class="detail-matrix">
         <section class="matrix-panel matrix-panel-wide">
           <div class="panel-head">
             <div class="section-copy">
-              <h2 class="section-title">Mode, Continuity, And Active Turn</h2>
+              <h2 class="section-title">Session Control</h2>
             </div>
           </div>
           <div class="form-split">
             <div class="field">
               <span>Execution Mode</span>
-              <select ${item.conflict ? 'disabled' : ''} onchange="setExecutionModeDraft(${JSON.stringify(threadKey)}, this.value); scheduleRender()">
+              <select ${dataAttrs({ changeAction: 'set-execution-mode-draft', threadKey })} ${item.conflict ? 'disabled' : ''}>
                 <option value="full_auto" ${selectedExecutionMode === 'full_auto' ? 'selected' : ''}>full_auto</option>
                 <option value="yolo" ${selectedExecutionMode === 'yolo' ? 'selected' : ''}>yolo</option>
               </select>
             </div>
             <div class="field">
               <span>Collaboration Mode</span>
-              <select ${item.conflict ? 'disabled' : ''} onchange="setCollaborationModeDraft(${JSON.stringify(threadKey)}, this.value); scheduleRender()">
+              <select ${dataAttrs({ changeAction: 'set-collaboration-mode-draft', threadKey })} ${item.conflict ? 'disabled' : ''}>
                 <option value="default" ${selectedCollaborationMode === 'default' ? 'selected' : ''}>default</option>
                 <option value="plan" ${selectedCollaborationMode === 'plan' ? 'selected' : ''}>plan</option>
               </select>
             </div>
           </div>
-          <div class="button-row">
-            <button class="button button-secondary" ${item.conflict ? 'disabled' : ''} onclick="updateExecutionMode(${JSON.stringify(threadKey)})">Save Execution Mode</button>
-            <button class="button button-secondary" ${item.conflict ? 'disabled' : ''} onclick="updateCollaborationMode(${JSON.stringify(threadKey)})">Save Collaboration Mode</button>
-            <button class="button button-secondary" ${item.conflict ? 'disabled' : ''} onclick="repairContinuity(${JSON.stringify(threadKey)}, ${JSON.stringify(item.binding_status)}, ${item.tui_session_adoption_pending ? 'true' : 'false'})">
+          <div class="button-row detail-actions-grid">
+            <button class="button button-secondary" ${dataAttrs({ action: 'update-execution-mode', threadKey })} ${item.conflict ? 'disabled' : ''}>Save Execution Mode</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'update-collaboration-mode', threadKey })} ${item.conflict ? 'disabled' : ''}>Save Collaboration Mode</button>
+            <button class="button button-secondary" ${dataAttrs({ action: 'repair-continuity', threadKey, bindingStatus: item.binding_status, adoptionPending: item.tui_session_adoption_pending })} ${item.conflict ? 'disabled' : ''}>
               ${item.tui_session_adoption_pending ? 'Adopt TUI' : 'Repair Session'}
             </button>
-            ${item.tui_active_codex_thread_id ? `<button class="button button-secondary" onclick="rejectTuiSession(${JSON.stringify(threadKey)})">Keep Original Binding</button>` : ''}
+            ${item.tui_active_codex_thread_id ? `<button class="button button-secondary" ${dataAttrs({ action: 'reject-tui-session', threadKey })}>Keep Original Binding</button>` : ''}
           </div>
         </section>
         <section class="matrix-panel">
           <div class="panel-head">
             <div class="section-copy">
-              <h2 class="section-title">Binding And Runtime</h2>
+              <h2 class="section-title">Runtime</h2>
             </div>
           </div>
           <div class="summary-strip compact">
@@ -1003,91 +1180,75 @@ function renderWorkspaceDetailPage(threadKey) {
             ['Run Phase', item.run_phase],
             ['Workspace Mode', item.workspace_execution_mode || 'full_auto'],
           ])}
+          ${runtimeNotes.length ? `
+            <div class="detail-runtime-notes">
+              ${runtimeNotes.map(note => `<div class="${note.tone}">${escapeHtml(note.text)}</div>`).join('')}
+            </div>
+          ` : ''}
         </section>
         <section class="matrix-panel">
           <div class="panel-head">
             <div class="section-copy">
-              <h2 class="section-title">Managed hcodex Entry</h2>
+              <h2 class="section-title">Local Session</h2>
             </div>
           </div>
-          <div class="button-row">
-            <button class="button button-primary" ${item.conflict ? 'disabled' : ''} onclick="launchHcodexNew(${JSON.stringify(threadKey)})">Launch Local Session (new)</button>
-            <button class="button button-secondary" ${item.conflict || !item.current_codex_thread_id ? 'disabled' : ''} onclick="launchHcodexContinueCurrent(${JSON.stringify(threadKey)})">Continue Current</button>
-            <button class="button button-secondary" ${item.conflict ? 'disabled' : ''} onclick="showLaunchConfig(${JSON.stringify(threadKey)})">Show Launch Commands</button>
+          <div class="detail-subsection">
+            <div class="field-caption">Launch</div>
+            <div class="button-row detail-actions-grid">
+              <button class="button button-primary" ${dataAttrs({ action: 'launch-hcodex-new', threadKey })} ${item.conflict ? 'disabled' : ''}>Launch Local Session</button>
+              <button class="button button-secondary" ${dataAttrs({ action: 'launch-hcodex-continue-current', threadKey })} ${item.conflict || !item.current_codex_thread_id ? 'disabled' : ''}>Continue Current</button>
+              <button class="button button-secondary ${showLaunchConfigState === 'ready' ? 'button-complete' : ''}" ${dataAttrs({ action: 'show-launch-config', threadKey })} ${item.conflict || showLaunchConfigState === 'loading' ? 'disabled' : ''}>${showLaunchConfigState === 'loading' ? 'Loading Commands…' : showLaunchConfigState === 'ready' ? 'Commands Ready' : 'Show Commands'}</button>
+            </div>
           </div>
-          <div class="field">
-            <span>Resume Specific Session</span>
-            <input type="text" value="${escapeHtml(resumeDraft)}" placeholder="session id to resume" oninput="updateResumeSessionDraft(${JSON.stringify(threadKey)}, this.value)" />
+          <div class="detail-subsection">
+            <div class="field-caption">Resume</div>
+            <div class="field">
+              <span>Resume Specific Session</span>
+              <input type="text" value="${escapeHtml(resumeDraft)}" placeholder="session id to resume" ${dataAttrs({ inputAction: 'update-resume-session-draft', threadKey })} />
+            </div>
+            <div class="button-row detail-actions-grid">
+              <button class="button button-secondary" ${dataAttrs({ action: 'launch-hcodex-resume', threadKey })} ${item.conflict ? 'disabled' : ''}>Launch Resume</button>
+            </div>
+            <div class="resume-strip">
+              <div class="field-caption">Recent Sessions</div>
+              <div class="resume-list">
+                ${(item.recent_codex_sessions || []).map(session => `
+                  <span class="session-chip">
+                    <code class="session-token">${escapeHtml(session.session_id)}</code>
+                    <span class="muted">${escapeHtml(session.execution_mode || 'unknown')}</span>
+                    <button class="button button-secondary btn-sm" ${dataAttrs({ action: 'launch-hcodex-resume-session', threadKey, sessionId: session.session_id })} ${item.conflict ? 'disabled' : ''}>Resume</button>
+                  </span>
+                `).join('') || '<span class="muted">No recent sessions to resume.</span>'}
+              </div>
+            </div>
           </div>
-          <div class="button-row">
-            <button class="button button-secondary" ${item.conflict ? 'disabled' : ''} onclick="launchHcodexResume(${JSON.stringify(threadKey)})">Launch Resume</button>
-            <button class="button button-secondary" onclick="repairRuntime(${JSON.stringify(threadKey)})">Repair Runtime</button>
-            <button class="button button-danger" onclick='archiveThread(${JSON.stringify(threadKey)}, ${JSON.stringify(workspacePrimaryLabel(item))})'>Archive</button>
-          </div>
-          <div class="resume-strip">
-            <div class="field-caption">Recent Sessions</div>
-            <div class="resume-list">
-              ${(item.recent_codex_sessions || []).map(session => `
-                <span class="session-chip">
-                  <code class="session-token">${escapeHtml(session.session_id)}</code>
-                  <span class="muted">${escapeHtml(session.execution_mode || 'unknown')}</span>
-                  <button class="button button-secondary btn-sm" ${item.conflict ? 'disabled' : ''} onclick="launchHcodexResumeWithSession(${JSON.stringify(threadKey)}, ${JSON.stringify(session.session_id)})">Resume</button>
-                </span>
-              `).join('') || '<span class="muted">No recent sessions to resume.</span>'}
+          <div class="detail-subsection">
+            <div class="field-caption">Maintenance</div>
+            <div class="button-row detail-actions-grid">
+              <button class="button button-secondary" ${dataAttrs({ action: 'repair-runtime', threadKey })}>Repair Runtime</button>
+              <button class="button button-danger" ${dataAttrs({ action: 'archive-thread', threadKey, label: workspacePrimaryLabel(item) })}>Archive</button>
             </div>
           </div>
         </section>
-        <section class="matrix-panel matrix-panel-wide">
-            <button class="summary-toggle" onclick="toggleWorkspacePanel(${JSON.stringify(threadKey)}, 'sessions')">
-              <strong>Sessions</strong>
-              <span>${panels.sessions ? 'Hide' : 'Show'}</span>
-            </button>
-            ${panels.sessions ? `<div class="collapsible-body">${renderWorkingSessions(threadKey)}</div>` : ''}
-        </section>
-        <section class="matrix-panel matrix-panel-wide">
-            <button class="summary-toggle" onclick="toggleWorkspacePanel(${JSON.stringify(threadKey)}, 'transcript')">
-              <strong>Transcript</strong>
-              <span>${panels.transcript ? 'Hide' : 'Show'}</span>
-            </button>
-            ${panels.transcript ? `<div class="collapsible-body">${renderWorkspaceTranscript(threadKey)}</div>` : ''}
-        </section>
-        <section class="matrix-panel">
-            <button class="summary-toggle" onclick="toggleWorkspacePanel(${JSON.stringify(threadKey)}, 'launch')">
-              <strong>Launch Output</strong>
-              <span>${panels.launch ? 'Hide' : 'Show'}</span>
-            </button>
-            ${panels.launch ? `
-              <div class="collapsible-body">
-                <pre class="raw-block">${escapeHtml(appState.ui.launchOutputs[threadKey] || 'No launch output yet.')}</pre>
-              </div>
-            ` : ''}
-        </section>
-        <section class="matrix-panel">
-            <button class="summary-toggle" onclick="toggleWorkspacePanel(${JSON.stringify(threadKey)}, 'advanced')">
-              <strong>Advanced Workspace Details</strong>
-              <span>${panels.advanced ? 'Hide' : 'Show'}</span>
-            </button>
-            ${panels.advanced ? `
-              <div class="collapsible-body">
-                ${renderDefinitionGrid([
-                  ['thread_key', item.thread_key || 'none'],
-                  ['workspace_execution_mode', item.workspace_execution_mode || 'full_auto'],
-                  ['current_execution_mode', item.current_execution_mode || 'unknown'],
-                  ['current_collaboration_mode', item.current_collaboration_mode || 'default'],
-                  ['current_approval_policy', item.current_approval_policy || 'unknown'],
-                  ['current_sandbox_policy', item.current_sandbox_policy || 'unknown'],
-                  ['runtime_source', item.runtime_health_source || 'unknown'],
-                  ['owner_checked_at', item.heartbeat_last_checked_at || 'n/a'],
-                  ['owner_last_error', item.heartbeat_last_error || 'none'],
-                  ['session_broken_reason', item.session_broken_reason || 'none'],
-                  ['current_codex_thread_id', item.current_codex_thread_id || 'none'],
-                  ['tui_active_codex_thread_id', item.tui_active_codex_thread_id || 'none'],
-                  ['hcodex_path', item.hcodex_path || 'none'],
-                  ['last_used_at', item.last_used_at || 'unknown'],
-                ])}
-              </div>
-            ` : ''}
-        </section>
+        ${renderDetailDisclosurePanel(threadKey, 'sessions', 'Sessions', renderWorkingSessions(threadKey), { wide: true })}
+        ${renderDetailDisclosurePanel(threadKey, 'transcript', 'Transcript', renderWorkspaceTranscript(threadKey), { wide: true })}
+        ${renderDetailDisclosurePanel(threadKey, 'launch', 'Launch Output', `<pre class="raw-block">${escapeHtml(appState.ui.launchOutputs[threadKey] || 'No launch output yet.')}</pre>`)}
+        ${renderDetailDisclosurePanel(threadKey, 'advanced', 'Advanced', renderDefinitionGrid([
+          ['thread_key', item.thread_key || 'none'],
+          ['workspace_execution_mode', item.workspace_execution_mode || 'full_auto'],
+          ['current_execution_mode', item.current_execution_mode || 'unknown'],
+          ['current_collaboration_mode', item.current_collaboration_mode || 'default'],
+          ['current_approval_policy', item.current_approval_policy || 'unknown'],
+          ['current_sandbox_policy', item.current_sandbox_policy || 'unknown'],
+          ['runtime_source', item.runtime_health_source || 'unknown'],
+          ['owner_checked_at', item.heartbeat_last_checked_at || 'n/a'],
+          ['owner_last_error', item.heartbeat_last_error || 'none'],
+          ['session_broken_reason', item.session_broken_reason || 'none'],
+          ['current_codex_thread_id', item.current_codex_thread_id || 'none'],
+          ['tui_active_codex_thread_id', item.tui_active_codex_thread_id || 'none'],
+          ['hcodex_path', item.hcodex_path || 'none'],
+          ['last_used_at', item.last_used_at || 'unknown'],
+        ]))}
       </div>
     </div>
   `
@@ -1127,13 +1288,13 @@ function renderWorkspaceTranscript(threadKey) {
   if (!cache.loaded) {
     return `
       <div class="button-row">
-        <button class="button button-secondary" onclick="loadTranscript(${JSON.stringify(threadKey)}, true)">Load Transcript</button>
+        <button class="button button-secondary" ${dataAttrs({ action: 'load-transcript', threadKey, userInitiated: true })}>Load Transcript</button>
       </div>
     `
   }
   return `
     <div class="button-row">
-      <button class="button button-secondary" onclick="loadTranscript(${JSON.stringify(threadKey)}, true)">Refresh Transcript</button>
+      <button class="button button-secondary" ${dataAttrs({ action: 'load-transcript', threadKey, userInitiated: true })}>Refresh Transcript</button>
     </div>
     <div class="subpanel">
       <strong>Process Transcript</strong>
@@ -1172,7 +1333,7 @@ function formatSessionSummary(summary, threadKey) {
       </div>
       ${summary.last_error ? `<div class="hint">Last error: ${escapeHtml(summary.last_error)}</div>` : ''}
       <div class="button-row">
-        <button class="button button-secondary btn-sm" onclick="selectWorkingSession(${JSON.stringify(threadKey)}, ${JSON.stringify(summary.session_id)})">View Records</button>
+        <button class="button button-secondary btn-sm" ${dataAttrs({ action: 'select-working-session', threadKey, sessionId: summary.session_id })}>View Records</button>
       </div>
     </div>
   `
@@ -1225,7 +1386,7 @@ function renderWorkingSessions(threadKey) {
   if (!cache.loaded) {
     return `
       <div class="button-row">
-        <button class="button button-secondary" onclick="loadWorkingSessions(${JSON.stringify(threadKey)}, true)">Load Sessions</button>
+        <button class="button button-secondary" ${dataAttrs({ action: 'load-working-sessions', threadKey, userInitiated: true })}>Load Sessions</button>
       </div>
     `
   }
@@ -1234,7 +1395,7 @@ function renderWorkingSessions(threadKey) {
   }
   return `
     <div class="button-row">
-      <button class="button button-secondary" onclick="loadWorkingSessions(${JSON.stringify(threadKey)}, true)">Refresh Sessions</button>
+      <button class="button button-secondary" ${dataAttrs({ action: 'load-working-sessions', threadKey, userInitiated: true })}>Refresh Sessions</button>
     </div>
     <div class="subpanel">
       <strong>Sessions</strong>
@@ -1467,6 +1628,7 @@ function openLaunchOutput(threadKey, data) {
   workspacePanelState(threadKey).launch = true
   appState.ui.launchOutputs[threadKey] = JSON.stringify(data, null, 2)
   scheduleRender()
+  scrollWorkspacePanelIntoView(threadKey, 'launch')
 }
 
 function updateResumeSessionDraft(threadKey, value) {
@@ -1494,6 +1656,140 @@ function updateManagedCodexDraft(field, value) {
   }
   if (field === 'buildProfile') {
     draft.dirtyBuildProfile = true
+  }
+}
+
+function handleDelegatedAction(target) {
+  const action = target.dataset.action || ''
+  const threadKey = target.dataset.threadKey || ''
+  switch (action) {
+    case 'reconcile-runtime-owner':
+      void reconcileRuntimeOwner()
+      return
+    case 'pick-and-add-workspace':
+      void pickAndAddWorkspace()
+      return
+    case 'purge-archived-threads':
+      void purgeArchivedThreads()
+      return
+    case 'restore-thread':
+      void restoreThread(threadKey, target.dataset.label || threadKey)
+      return
+    case 'toggle-workspace-panel':
+      toggleWorkspacePanel(threadKey, target.dataset.panelKey || '')
+      return
+    case 'open-workspace':
+      void openWorkspace(threadKey)
+      return
+    case 'start-fresh-session':
+      void startFreshSession(threadKey)
+      return
+    case 'interrupt-running-turn':
+      void interruptRunningTurn(threadKey)
+      return
+    case 'update-execution-mode':
+      void updateExecutionMode(threadKey)
+      return
+    case 'update-collaboration-mode':
+      void updateCollaborationMode(threadKey)
+      return
+    case 'repair-continuity':
+      void repairContinuity(threadKey, target.dataset.bindingStatus || '', parseBooleanData(target.dataset.adoptionPending || 'false'))
+      return
+    case 'reject-tui-session':
+      void rejectTuiSession(threadKey)
+      return
+    case 'launch-hcodex-new':
+      void launchHcodexNew(threadKey)
+      return
+    case 'launch-hcodex-continue-current':
+      void launchHcodexContinueCurrent(threadKey)
+      return
+    case 'show-launch-config':
+      void showLaunchConfig(threadKey)
+      return
+    case 'launch-hcodex-resume':
+      void launchHcodexResume(threadKey)
+      return
+    case 'launch-hcodex-resume-session':
+      void launchHcodexResumeWithSession(threadKey, target.dataset.sessionId || '')
+      return
+    case 'repair-runtime':
+      void repairRuntime(threadKey)
+      return
+    case 'archive-thread':
+      void archiveThread(threadKey, target.dataset.label || workspacePrimaryLabel(workspaceByThreadKey(threadKey) || { thread_key: threadKey }))
+      return
+    case 'load-transcript':
+      void loadTranscript(threadKey, parseBooleanData(target.dataset.userInitiated || 'false'))
+      return
+    case 'select-working-session':
+      void selectWorkingSession(threadKey, target.dataset.sessionId || '')
+      return
+    case 'load-working-sessions':
+      void loadWorkingSessions(threadKey, parseBooleanData(target.dataset.userInitiated || 'false'))
+      return
+    case 'update-managed-codex-preference':
+      void updateManagedCodexPreference()
+      return
+    case 'refresh-managed-codex-cache':
+      void refreshManagedCodexCache()
+      return
+    case 'build-managed-codex-source':
+      void buildManagedCodexSource()
+      return
+    case 'save-managed-codex-build-defaults':
+      void saveManagedCodexBuildDefaults()
+      return
+    default:
+      return
+  }
+}
+
+function handleDelegatedInput(target) {
+  const action = target.dataset.inputAction || ''
+  switch (action) {
+    case 'update-setup-draft':
+      updateSetupDraft(target.dataset.field || '', target.value)
+      return
+    case 'update-managed-codex-draft':
+      updateManagedCodexDraft(target.dataset.field || '', target.value)
+      return
+    case 'update-resume-session-draft':
+      updateResumeSessionDraft(target.dataset.threadKey || '', target.value)
+      return
+    default:
+      return
+  }
+}
+
+function handleDelegatedChange(target) {
+  const action = target.dataset.changeAction || ''
+  switch (action) {
+    case 'update-managed-codex-draft':
+      updateManagedCodexDraft(target.dataset.field || '', target.value)
+      return
+    case 'set-execution-mode-draft':
+      setExecutionModeDraft(target.dataset.threadKey || '', target.value)
+      scheduleRender()
+      return
+    case 'set-collaboration-mode-draft':
+      setCollaborationModeDraft(target.dataset.threadKey || '', target.value)
+      scheduleRender()
+      return
+    default:
+      return
+  }
+}
+
+function handleDelegatedSubmit(target, event) {
+  const action = target.dataset.submitAction || ''
+  switch (action) {
+    case 'submit-setup-form':
+      void submitSetupForm(event)
+      return
+    default:
+      return
   }
 }
 
@@ -1857,10 +2153,13 @@ async function refreshLoadedSessions() {
 }
 
 async function showLaunchConfig(threadKey) {
+  setShowLaunchConfigState(threadKey, 'loading')
   try {
     const data = await fetchJson(`/api/workspaces/${threadKey}/launch-config`, {}, 'Launch config fetch failed')
     openLaunchOutput(threadKey, data)
+    setShowLaunchConfigState(threadKey, 'ready')
   } catch (error) {
+    setShowLaunchConfigState(threadKey, 'idle')
     alert(error instanceof Error ? error.message : 'Launch config fetch failed')
   }
 }
@@ -1939,6 +2238,40 @@ async function purgeArchivedThreads() {
     alert(error instanceof Error ? error.message : 'Purge archived threads failed')
   }
 }
+
+document.addEventListener('click', event => {
+  const target = event.target.closest('[data-action]')
+  if (!target) {
+    return
+  }
+  event.preventDefault()
+  handleDelegatedAction(target)
+})
+
+document.addEventListener('input', event => {
+  const target = event.target.closest('[data-input-action]')
+  if (!target) {
+    return
+  }
+  handleDelegatedInput(target)
+})
+
+document.addEventListener('change', event => {
+  const target = event.target.closest('[data-change-action]')
+  if (!target) {
+    return
+  }
+  handleDelegatedChange(target)
+})
+
+document.addEventListener('submit', event => {
+  const target = event.target.closest('[data-submit-action]')
+  if (!target) {
+    return
+  }
+  event.preventDefault()
+  handleDelegatedSubmit(target, event)
+})
 
 window.addEventListener('hashchange', () => {
   appState.ui.route = parseRoute(window.location.hash)

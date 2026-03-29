@@ -232,6 +232,12 @@ button {
   color: var(--text-soft);
 }
 
+.detail-command-heading {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
 .page-body,
 .section-stack,
 .detail-shell {
@@ -286,6 +292,7 @@ button {
   font-weight: 600;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
+  text-transform: capitalize;
 }
 
 .surface,
@@ -598,7 +605,6 @@ button {
 button:not(.reset-button) {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 0.4rem;
   min-height: 2.15rem;
   padding: 0.36rem 0.7rem;
@@ -641,6 +647,11 @@ button:not(.reset-button):focus-visible {
 .btn-outline-danger {
   border-color: var(--line);
   background: none;
+}
+
+.button-complete {
+  border-color: rgba(24, 24, 22, 0.2);
+  background: var(--bg-soft);
 }
 
 .button-danger,
@@ -708,7 +719,7 @@ textarea:focus-visible,
 }
 
 .detail-command-header {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.82fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   padding-bottom: 1rem;
   border-bottom: 1px solid var(--line-strong);
@@ -717,28 +728,68 @@ textarea:focus-visible,
 .detail-command-copy,
 .detail-command-actions {
   display: grid;
-  gap: 0.72rem;
+}
+
+.detail-command-copy {
+  gap: 0.55rem;
+}
+
+.detail-command-actions {
+  gap: 0.85rem;
+  align-content: start;
+  justify-items: start;
 }
 
 .detail-back-row {
   display: flex;
 }
 
+.detail-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.7rem;
+  justify-content: flex-start;
+}
+
+.detail-status-lane {
+  grid-column: 1 / -1;
+}
+
 .detail-matrix {
   display: grid;
   gap: 1.5rem 2rem;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .matrix-panel {
   display: grid;
   gap: 0.9rem;
-  grid-column: span 4;
+  grid-column: span 1;
   align-content: start;
 }
 
 .matrix-panel-wide {
-  grid-column: span 8;
+  grid-column: span 1;
+}
+
+.detail-subsection,
+.detail-runtime-notes {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.detail-subsection {
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.detail-subsection:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.detail-actions-grid > * {
+  min-width: 0;
 }
 
 .subpanel,
@@ -767,9 +818,9 @@ textarea:focus-visible,
 
 .summary-toggle {
   width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 1rem;
   padding: 0;
   border: 0;
@@ -784,9 +835,25 @@ textarea:focus-visible,
   font-weight: 600;
 }
 
-.summary-toggle span {
+.summary-toggle-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  justify-items: start;
+  text-align: left;
+  flex: 1;
+}
+
+.summary-toggle-summary,
+.summary-toggle-state {
   color: var(--text-soft);
   font-size: 0.72rem;
+}
+
+.summary-toggle-state {
+  white-space: nowrap;
+  justify-self: end;
+  text-align: right;
 }
 
 .collapsible-body,
@@ -823,6 +890,7 @@ textarea:focus-visible,
 .definition-item dd {
   margin: 0.18rem 0 0;
   overflow-wrap: anywhere;
+  text-transform: capitalize;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -860,9 +928,22 @@ textarea:focus-visible,
 
 @media (max-width: 1180px) {
   .page-header,
-  .detail-command-header,
   .form-split {
     grid-template-columns: 1fr;
+  }
+
+  .detail-command-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.85rem;
+  }
+
+  .detail-command-actions {
+    justify-items: start;
+  }
+
+  .detail-status-row,
+  .detail-primary-actions {
+    justify-content: flex-start;
   }
 
   .summary-strip {
@@ -870,15 +951,12 @@ textarea:focus-visible,
   }
 
   .detail-matrix {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
-  .matrix-panel {
-    grid-column: span 1;
-  }
-
+  .matrix-panel,
   .matrix-panel-wide {
-    grid-column: span 2;
+    grid-column: span 1;
   }
 
   .summary-row,
@@ -1015,6 +1093,29 @@ textarea:focus-visible,
     gap: 0.35rem 0.55rem;
   }
 
+  .detail-command-actions {
+    justify-items: stretch;
+  }
+
+  .detail-status-row {
+    justify-content: flex-start;
+  }
+
+  .detail-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 0.55rem;
+  }
+
+  .detail-actions-grid > * {
+    width: 100%;
+  }
+
+  .detail-subsection {
+    gap: 0.62rem;
+  }
+
   .summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1043,5 +1144,9 @@ textarea:focus-visible,
   .page-header-main h1,
   .detail-title {
     font-size: 1.52rem;
+  }
+
+  .detail-actions-grid {
+    grid-template-columns: 1fr;
   }
 }
