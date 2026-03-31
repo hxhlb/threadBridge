@@ -1,21 +1,24 @@
-# macOS Public Release Track 草稿
+# macOS Public Release Track
 
 ## 目前進度
 
-這份文檔目前是「純草稿」。
+這份文檔目前是「部分落地」。
 
 目前代碼裡已經有的前置能力：
 
 - `threadbridge_desktop` 已是正式 macOS desktop runtime 入口
 - workspace-first runtime、management API、tray menu 與本地 helper 已可支撐日常開發運行
 - repo 已有 Rust build/test/lint 基礎命令與既有維運腳本
+- bot-local runtime data root 已落地成雙模式契約：
+  - debug build 預設 repo-local `./data`
+  - release build 預設 `~/Library/Application Support/threadBridge`
+- 已新增 `scripts/release_threadbridge.sh`，作為本地 operator 用的 public release pipeline 入口
 
 目前尚未完成：
 
-- 尚未有公開發佈用的 macOS app bundle / DMG 產物規格
-- 尚未有正式的 codesign / notarization release pipeline
-- 尚未有 GitHub Release + Homebrew cask 的雙線發佈契約
-- 尚未把 bot-local `data/` 從 repo/worktree 位置遷移到 macOS `Application Support` 目錄
+- 尚未有 CI 自動化承接 public release pipeline
+- 尚未完成第一輪真實 RC 演練與 smoke 測試回寫
+- 尚未驗證完整 GitHub Release + Homebrew cask 發佈憑證/權限流程
 - 尚未有 release branch / RC 退出條件 / 回滾流程的統一規範文檔
 
 ## 問題
@@ -29,6 +32,12 @@
 - DMG 與 Homebrew 可能形成兩套不一致 artifact 語義
 - RC 與主線開發難以穩定並行
 
+若繼續把 `local_threadbridge.sh` 與 public release 混為同一路徑：
+
+- 開發中的快速重啟腳本會承擔不必要的分發責任
+- release 所需的 codesign / notary / tap publish 前置檢查無法清楚 fail fast
+- README 與 operator runbook 會持續混淆「本地 dev helper」與「正式發佈流程」
+
 ## 定位
 
 這份文檔定義的是 `threadBridge` 公開 macOS desktop 發佈（RC）路徑。
@@ -36,6 +45,7 @@
 它處理：
 
 - RC release discipline（branch、freeze、blocker policy、exit criteria）
+- `local_threadbridge.sh` 與 `release_threadbridge.sh` 的責任邊界
 - public artifact 契約（universal DMG + Homebrew cask）
 - signed + notarized 的最低要求
 - public app 的資料落點契約（`Application Support/threadBridge`）
@@ -92,8 +102,21 @@
 
 ### 3. Packaging + Notarization Pipeline
 
+- `scripts/local_threadbridge.sh` 只作為本地開發 helper：
+  - 目標是快速 build / bundle / start 最新代碼
+  - 文件上不再把它視為 public release 入口
+- `scripts/release_threadbridge.sh` 是公開發佈的正式腳本入口：
+  - `build`
+  - `sign`
+  - `dmg`
+  - `notarize`
+  - `publish`
+  - `release`
+- `release` 是完整 orchestration path；public release 時不再鼓勵手動拼接零散命令
+
 - pipeline 產物流程固定為：
   1. 產生 universal app bundle
+     - app bundle 內需包含 `threadbridge_desktop` 與 `app_server_ws_worker`
   2. 對 app bundle 進行 codesign（hardened runtime）
   3. 建立 DMG
   4. 對 DMG 執行 notarization
@@ -124,6 +147,12 @@
   - cask 指向 GitHub Release 的 DMG URL
   - cask checksum 與 release artifact 一致
   - 不發佈與 GitHub artifact 不一致的替代包
+- release script operator inputs 固定至少包含：
+  - `--version`
+  - `--notes-file`
+  - `--codesign-identity`
+  - `--notary-profile`
+- notarization 憑證由 macOS Keychain 中已配置好的 notarytool profile 提供；repo 不管理 secrets 檔案
 
 ### 6. Rollback / Yank
 
@@ -168,5 +197,6 @@ RC 發佈前，至少滿足：
 ## 建議的下一步
 
 1. 先補齊 release discipline 文檔（本文件）與 `docs/plan/README.md` registry 對齊。
-2. 再補 CI/workflow 與本地腳本，使 signing/notarization/DMG/Homebrew 可重複執行。
-3. 以 `release/0.1.0-rc.1` 進行首次 RC 演練，將實際差異回寫本文件。
+2. 以 `scripts/release_threadbridge.sh` 做第一次真實 RC 演練，確認 codesign / notarize / GitHub / tap 權限與 artifact 內容。
+3. 再補 CI/workflow 或 release runbook 自動化，減少 operator 手動步驟。
+4. 以 `release/0.1.0-rc.1` 進行首次 RC 演練，將實際差異回寫本文件。

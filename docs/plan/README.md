@@ -201,6 +201,11 @@
   - doc kind: `historical`
   - observer contract 收斂進度快照（2026-03-28）
   - 記錄 `subscribeThread/unsubscribeThread` 落地、`observeThread` 移除、以及顯式 detach + timeout fallback
+- [macos-public-release-track.md](desktop-runtime-owner/macos-public-release-track.md)
+  - doc kind: `plan`
+  - macOS public release 已不再只是純草稿：release data-root gate 已落地，且 repo 已新增 `scripts/release_threadbridge.sh`
+  - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = public release pipeline`
+  - public artifact 契約仍是 `signed + notarized`、`universal DMG + Homebrew cask`、dedicated tap 發佈
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
   - 記錄 `hcodex` launch URL、local bridge、upstream Codex `--remote` 的實際契約
@@ -232,10 +237,6 @@
 - [desktop-runtime-tool-bridge.md](desktop-runtime-owner/desktop-runtime-tool-bridge.md)
   - doc kind: `plan`
   - desktop runtime 作為跨沙盒 capability host / tool bridge / 自定義 webview service 草稿
-- [macos-public-release-track.md](desktop-runtime-owner/macos-public-release-track.md)
-  - doc kind: `plan`
-  - 公開 macOS desktop RC 發佈草稿
-  - 固定 `signed + notarized`、`universal DMG + Homebrew cask`、dedicated tap 發佈路徑，與 release 版 `Application Support/threadBridge` 資料落點
 - [optional-agents-injection.md](runtime-control/optional-agents-injection.md)
   - doc kind: `plan`
   - appendix 注入可選化草稿

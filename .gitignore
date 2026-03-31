@@ -8,6 +8,7 @@ coverage
 target
 .cargo
 logs/
+dist/
 tools/__pycache__/**
 .threadbridge/
 .codex/

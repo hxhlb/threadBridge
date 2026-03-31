@@ -115,7 +115,9 @@ Override it with `THREADBRIDGE_MANAGEMENT_BIND_ADDR`.
 
 ## Local Helper Script
 
-For local development on macOS, you can use:
+`scripts/local_threadbridge.sh` is the supported macOS helper for day-to-day local development: build the latest code, bundle it locally, and restart the desktop runtime quickly.
+
+Typical usage:
 
 ```bash
 scripts/local_threadbridge.sh build
@@ -126,12 +128,9 @@ scripts/local_threadbridge.sh status
 scripts/local_threadbridge.sh logs
 ```
 
-The helper follows the same data-root defaults as the Rust runtime:
-
-- `BUILD_PROFILE=dev` uses repo-local `./data`
-- `BUILD_PROFILE=release` uses the platform app-data root
-- on macOS, the release default is `~/Library/Application Support/threadBridge`
-- set `DATA_ROOT` if you need a custom path in either mode
+Supported local-helper workflow assumes the default `BUILD_PROFILE=dev`, so bot-local runtime state stays in repo-local `./data`.
+If you need a different path during development, set `DATA_ROOT` explicitly.
+`BUILD_PROFILE=release` still exists as an implementation escape hatch, but public release packaging should use `scripts/release_threadbridge.sh` instead of `local_threadbridge.sh`.
 
 The helper also manages which Codex binary the managed `hcodex` path should prefer:
 
@@ -146,6 +145,35 @@ scripts/local_threadbridge.sh build --codex-source source
 That preference is persisted in `.threadbridge/codex/source.txt`.
 On macOS, `build` also refreshes the app icon assets from the single approved source [`icon/EXPORT_mac_icon.png`](/Volumes/Data/Github/threadBridge/icon/EXPORT_mac_icon.png). This image is already a finished `1024x1024` macOS tile with the intended rounded corners and padding, so the icon pipeline no longer applies any extra zoom or rounded-mask step.
 `start` now launches the bundled app executable from `threadBridge.app`, so the running desktop process can inherit the bundle icon instead of showing the generic bare-binary `exec` icon. The bundled desktop runtime is also marked as a menubar-only app, so normal operation stays out of the Dock.
+
+## Public Release Script
+
+Use `scripts/release_threadbridge.sh` for the public macOS release pipeline. This is separate from the local dev helper and is the supported path for signed, notarized, distributable artifacts.
+
+Typical subcommands:
+
+```bash
+scripts/release_threadbridge.sh build --version 0.1.0-rc.1
+scripts/release_threadbridge.sh sign --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
+scripts/release_threadbridge.sh dmg --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
+scripts/release_threadbridge.sh notarize --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)" --notary-profile threadbridge-notary
+scripts/release_threadbridge.sh release --version 0.1.0-rc.1 --notes-file docs/releases/0.1.0-rc.1.md --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)" --notary-profile threadbridge-notary
+```
+
+The `release` command performs the full build -> sign -> DMG -> notarize -> publish pipeline.
+Artifacts are written to `dist/release/<version>/`.
+
+Current pipeline contract:
+
+- builds a universal macOS app bundle for `arm64` and `x86_64`
+- copies `app_server_ws_worker` into the bundled app so the distributed runtime can launch its workspace worker
+- signs the app with hardened runtime
+- creates and notarizes a single canonical DMG
+- publishes that DMG and checksum to GitHub Releases
+- updates the Homebrew tap cask in `qoli/homebrew-threadbridge`
+
+The release script is macOS-only and fails fast if the worktree is dirty or required CLIs are missing.
+notarytool credentials are expected to already exist in Keychain under the named `--notary-profile`.
 
 ## Build macOS App Bundle Icon
 
