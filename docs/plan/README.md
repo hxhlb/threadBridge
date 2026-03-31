@@ -207,6 +207,7 @@
   - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = shell release orchestrator`
   - 私有 ignored fastlane 只作 Apple bootstrap / `match` helper，不再承擔正式 notarize happy path
   - 第一輪 RC 先收斂到 GitHub draft prerelease；Homebrew tap 仍待 dedicated repo 建立後再補回
+  - 截至 2026-03-31，現行已發佈 release 版本已確認無法正常運行；這是當前 public release track 的 blocker，需先修正並以替換 RC 驗證
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
   - 記錄 `hcodex` launch URL、local bridge、upstream Codex `--remote` 的實際契約

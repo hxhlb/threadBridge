@@ -21,6 +21,7 @@
 - 尚未驗證完整 GitHub draft prerelease 發佈權限與實際資產內容
 - 尚未建立 dedicated Homebrew tap repo 與 cask publish 流程
 - 尚未有 release branch / RC 退出條件 / 回滾流程的統一規範文檔
+- 截至 2026-03-31，已發布的 release 版本仍有「安裝後無法正常運行」的 blocker，尚未完成 root cause 收斂、替換 RC 與回寫驗證
 
 ## 問題
 
@@ -38,6 +39,12 @@
 - 開發中的快速重啟腳本會承擔不必要的分發責任
 - release 所需的 codesign / notary / tap publish 前置檢查無法清楚 fail fast
 - README 與 operator runbook 會持續混淆「本地 dev helper」與「正式發佈流程」
+
+目前還有一個已確認的公開發佈 blocker：
+
+- 截至 2026-03-31，現行已發佈的 release 版本無法正常運行
+- 這代表目前的 release pipeline 尚不能被視為「已驗證可公開交付」
+- 在找到 root cause 並用修正版 RC 完成 smoke 驗證前，不應把現行 release artifact 視為可用基線
 
 ## 定位
 
@@ -188,6 +195,7 @@ RC 發佈前，至少滿足：
   - Apple Silicon 安裝與啟動
   - Intel 安裝與啟動
   - Homebrew install / upgrade / uninstall 基本路徑
+- 若上一個已發佈版本被確認為無法運行，下一個 RC 必須先完成 blocker root cause 記錄、替換 artifact 驗證、與撤回/標記問題版的處置
 
 ## 與其他計劃的關係
 
@@ -204,8 +212,9 @@ RC 發佈前，至少滿足：
 
 ## 建議的下一步
 
-1. 先補齊 release discipline 文檔（本文件）與 `docs/plan/README.md` registry 對齊。
-2. 先完成本機 Apple release bootstrap：Developer ID Application identity + `threadbridge-notary` profile。
-3. 以 `scripts/release_threadbridge.sh release` 做第一次真實 RC 演練，確認 codesign / notarize / GitHub draft prerelease 權限與 artifact 內容。
-4. 建立 dedicated Homebrew tap repo，之後再把 cask publish 補回 `release` path。
-5. 再補 CI/workflow 或 release runbook 自動化，減少 operator 手動步驟。
+1. 先針對截至 2026-03-31 已發佈但無法運行的 release 版本補 root cause 與 blocker runbook，確認是 packaging、signing、runtime bootstrap，或 app bundle 內容問題。
+2. 產出替換 RC，並完成最小啟動 smoke 測試與結果回寫，避免再次發佈不可運行 artifact。
+3. 再補齊 release discipline 文檔（本文件）與 `docs/plan/README.md` registry 對齊。
+4. 完成本機 Apple release bootstrap：Developer ID Application identity + `threadbridge-notary` profile。
+5. 建立 dedicated Homebrew tap repo，之後再把 cask publish 補回 `release` path。
+6. 再補 CI/workflow 或 release runbook 自動化，減少 operator 手動步驟。
