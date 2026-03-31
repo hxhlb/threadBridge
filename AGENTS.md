@@ -29,9 +29,9 @@ Important repo areas:
 - `rust/src/telegram_runtime/`: Telegram command handling, message flows, image handling, preview rendering, and adapter-owned interaction bridging.
 - `templates/AGENTS.md`: managed runtime appendix appended to real workspace `AGENTS.md` files.
 - `tools/`: Python executors invoked from `.threadbridge/bin/*`.
-- `data/`: bot-local runtime state. `data/main-thread/` stores the control console state. Each thread maps to `data/<thread-key>/`.
+- bot-local runtime data root: debug builds default to `data/`; release builds default to the platform local app-data directory. In debug mode, `data/main-thread/` stores the control console state and each thread maps to `data/<thread-key>/`.
 
-Treat `target/` and most of `data/` as generated output.
+Treat `target/` and most bot-local runtime state as generated output.
 
 ## AGENTS.md Roles
 There are two relevant `AGENTS.md` roles now:
@@ -39,7 +39,7 @@ There are two relevant `AGENTS.md` roles now:
 - Root `AGENTS.md`: this maintainer guide.
 - `templates/AGENTS.md`: the workspace runtime appendix managed by threadBridge and appended into a real bound workspace `AGENTS.md`.
 
-There is no thread-local `data/<thread-key>/AGENTS.md` runtime surface anymore.
+There is no thread-local runtime-root `<thread-key>/AGENTS.md` surface anymore.
 
 The runtime appendix block embedded later in this root file is a checked-in copy of the managed appendix for reference. Treat `templates/AGENTS.md` as the canonical source for appendix wording and behavior; do not hand-edit the root appendix block when maintaining the guide above it.
 
@@ -55,7 +55,7 @@ From a maintainer perspective:
 - `session-binding.json` stores the mapping between the Telegram thread, the real workspace path, and the current Codex `thread.id`.
 - `.threadbridge/state/workspace-config.json` stores the workspace-local execution mode that all fresh and resumed Codex sessions should converge to for that workspace.
 - Normal thread messages resume the saved Codex thread through app-server and run turns in the bound workspace.
-- Uploaded images are stored under `data/<thread-key>/state/`, accumulated into a pending batch, and analyzed by Codex in the same bound workspace context.
+- Uploaded images are stored under the bot-local runtime data root, for example `data/<thread-key>/state/` in debug builds, accumulated into a pending batch, and analyzed by Codex in the same bound workspace context.
 - If Codex session continuity breaks or the returned `thread.cwd` no longer matches the stored workspace path, the binding is marked broken and requires `/repair_session` or `/new_session`.
 - Runtime health is owner-canonical: desktop owner heartbeat and reconcile state are the authority for whether a managed workspace runtime is healthy; workspace shared status remains an activity/observation surface.
 - `hcodex` is a managed local TUI entrypoint into the shared workspace runtime. It depends on the desktop runtime owner and does not self-heal the workspace runtime by itself.
@@ -131,7 +131,7 @@ Pull requests should explain the user-visible behavior change, note any config o
 ## Security & Configuration Tips
 Keep secrets in `.env.local`; never commit real tokens. Start from `.env.example`, and avoid checking generated workspace files, debug logs, or image outputs into Git unless they are intentional fixtures.
 
-Treat bot-local `data/` and workspace-local generated files as potentially sensitive because they can contain prompts, transcripts, image references, provider payloads, and output metadata.
+Treat bot-local runtime state and workspace-local generated files as potentially sensitive because they can contain prompts, transcripts, image references, provider payloads, and output metadata.
 
 <!-- threadbridge:runtime:start -->
 ## threadBridge Runtime Appendix
@@ -142,7 +142,7 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 
 - The current working directory is the real bound workspace, not a projected copy.
 - Preserve this workspace's own conventions and instructions. This appendix adds bot/runtime behavior; it does not replace project-local rules.
-- threadBridge tracks Telegram-thread metadata outside the workspace under its own `data/` store. That bot-local state is not the source of truth for project files.
+- threadBridge tracks Telegram-thread metadata outside the workspace under its own bot-local runtime data root. In debug builds this defaults to repo-local `data/`; in release builds it defaults to the platform local app-data directory. That bot-local state is not the source of truth for project files.
 - Use the current Codex thread context as the primary continuity source. Do not rebuild long transcript replays unless a workflow explicitly requires it.
 
 ### Runtime Surface

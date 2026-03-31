@@ -120,6 +120,11 @@
   - management API / launch-config / web UI 已開始暴露 workspace mode、current session mode 與 `mode_drift`
   - `hcodex` 與 Telegram turn/resume 已開始按 workspace mode 收斂到 `full_auto` 或 `yolo`
   - Telegram 已補上 `/execution_mode` command surface，但 user-facing naming、owner vocabulary、以及 `Codex 工作模型` 是否與 mode 分離對外暴露，仍未收斂
+- [runtime-data-root.md](runtime-control/runtime-data-root.md)
+  - doc kind: `plan`
+  - bot-local runtime state 已有 shared `data_root_path` plumbing，但預設值原本仍寫死 repo-local `./data`
+  - 現在已固定成雙模式：debug build 預設 `./data`，release build 預設平台 local app-data dir，且兩者不搬移、不複製、不互相探測
+  - `DATA_ROOT` / `DEBUG_LOG_PATH` override 與 `BOT_DATA_PATH` compatibility 已被保留；README、helper script 與 maintainer guide 也已改成 mode-aware 語義
 - [workspace-runtime-surface.md](runtime-control/workspace-runtime-surface.md)
   - doc kind: `plan`
   - `.threadbridge/`、managed appendix、`hcodex`、tool request/result lane 已形成實際 workspace runtime surface

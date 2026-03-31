@@ -48,9 +48,9 @@ The current runtime is organized like this:
 3. Shared runtime control handles workspace runtime ensure, session bind/new/repair, and Telegram-to-live-TUI routing.
 4. App-server observer owns transcript/process projection; Telegram interaction UI is bridged separately from observer read-side logic.
 5. Telegram is an adapter on top of that runtime, not the owner.
-6. Each managed workspace is a real local directory, not a mirrored copy under `data/`.
+6. Each managed workspace is a real local directory, not a mirrored copy under the bot-local runtime data root.
 7. Each workspace gets a managed `.threadbridge/` surface plus an appended runtime block in `AGENTS.md`.
-8. Codex continuity is stored in bot-local metadata under `data/<thread-key>/session-binding.json`.
+8. Codex continuity is stored in bot-local metadata under the runtime data root, for example `data/<thread-key>/session-binding.json` in debug builds.
 
 The supported startup path is desktop-first. Headless or self-managed paths still exist as internal fallback/probe surfaces, but they are not the intended operating model.
 
@@ -98,6 +98,13 @@ cargo run --bin threadbridge_desktop
 
 The desktop runtime can also start without Telegram credentials. In that state, the tray and local management UI still work, and you can finish setup before polling is active.
 
+Bot-local runtime state defaults by build profile:
+
+- debug builds use repo-local `./data`
+- release builds use the platform local app-data directory
+- on macOS, the release default is `~/Library/Application Support/threadBridge`
+- `DATA_ROOT` and `DEBUG_LOG_PATH` can override either mode explicitly
+
 Default local management address:
 
 ```text
@@ -118,6 +125,13 @@ scripts/local_threadbridge.sh restart
 scripts/local_threadbridge.sh status
 scripts/local_threadbridge.sh logs
 ```
+
+The helper follows the same data-root defaults as the Rust runtime:
+
+- `BUILD_PROFILE=dev` uses repo-local `./data`
+- `BUILD_PROFILE=release` uses the platform app-data root
+- on macOS, the release default is `~/Library/Application Support/threadBridge`
+- set `DATA_ROOT` if you need a custom path in either mode
 
 The helper also manages which Codex binary the managed `hcodex` path should prefer:
 
@@ -241,10 +255,12 @@ Important current behavior:
 
 ## Runtime Layout
 
-Bot-local state lives under `data/`:
+Bot-local state lives under the runtime data root:
 
-- `data/main-thread/` for the control console
-- `data/<thread-key>/` for metadata, transcripts, session binding, and image-state artifacts
+- debug builds default this root to `data/`
+- release builds default this root to the platform local app-data directory
+- for example, debug mode stores `data/main-thread/` for the control console
+- debug mode also stores `data/<thread-key>/` for metadata, transcripts, session binding, and image-state artifacts
 
 Workspace-local managed runtime surface:
 
@@ -260,7 +276,7 @@ Workspace-local managed runtime surface:
 - `.threadbridge/tool_requests/`
 - `.threadbridge/tool_results/`
 
-The real workspace is authoritative for project files. `data/` is threadBridge runtime state, not a projected copy of the repo.
+The real workspace is authoritative for project files. The bot-local runtime data root is threadBridge state, not a projected copy of the repo.
 
 ## Management Surface
 
@@ -315,5 +331,5 @@ The plan directory contains a mix of landed work, partial work, and pure drafts.
 ## Security
 
 - Keep secrets in `.env.local`.
-- Do not commit `data/`, logs, generated images, or provider payloads unless they are intentional fixtures.
+- Do not commit repo-local `data/`, logs, generated images, or provider payloads unless they are intentional fixtures.
 - Bot-local state and workspace-local runtime artifacts may contain prompts, transcripts, image references, and provider metadata.

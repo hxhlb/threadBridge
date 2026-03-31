@@ -5,7 +5,6 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd -P)
 ENV_FILE="$REPO_ROOT/.env.local"
 LOG_DIR="$REPO_ROOT/logs"
-EVENT_LOG_DIR="$REPO_ROOT/data/debug"
 CARGO_HOME_DIR="${CARGO_HOME:-$REPO_ROOT/.cargo}"
 CARGO_TARGET_DIR_PATH="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 BUILD_PROFILE="${BUILD_PROFILE:-dev}"
@@ -45,6 +44,8 @@ Environment overrides:
                                  Build profile for source-built Codex. Default: BUILD_PROFILE
   CODEX_SOURCE_REPO=/abs/path    Codex repo root. Default: /Volumes/Data/Github/codex
   CODEX_SOURCE_RS_DIR=/abs/path  Codex Rust workspace. Default: $CODEX_SOURCE_REPO/codex-rs
+  DATA_ROOT=/abs/path            Override the runtime data root for either build profile
+  DEBUG_LOG_PATH=/abs/path       Override the runtime event log path for either build profile
 EOF
 }
 
@@ -253,7 +254,75 @@ tmux_session_name() {
 }
 
 latest_event_log() {
-  find "$EVENT_LOG_DIR" -maxdepth 1 -type f -name 'events-*.jsonl' -print 2>/dev/null | sort | tail -n 1
+  local event_log_dir
+  event_log_dir=$(runtime_event_log_dir)
+  find "$event_log_dir" -maxdepth 1 -type f -name 'events-*.jsonl' -print 2>/dev/null | sort | tail -n 1
+}
+
+default_runtime_data_root() {
+  if [[ "$BUILD_PROFILE" == "release" ]]; then
+    printf '%s/Library/Application Support/threadBridge\n' "$HOME"
+  else
+    printf '%s/data\n' "$REPO_ROOT"
+  fi
+}
+
+default_runtime_debug_log_path() {
+  printf '%s/debug/events.jsonl\n' "$(default_runtime_data_root)"
+}
+
+resolve_runtime_path() {
+  local raw_path=$1
+  case "$raw_path" in
+    /*)
+      printf '%s\n' "$raw_path"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${raw_path#~/}"
+      ;;
+    ./*)
+      printf '%s/%s\n' "$REPO_ROOT" "${raw_path#./}"
+      ;;
+    *)
+      printf '%s/%s\n' "$REPO_ROOT" "$raw_path"
+      ;;
+  esac
+}
+
+runtime_env_override() {
+  local name=$1
+  if [[ -n "${!name:-}" ]]; then
+    printf '%s\n' "${!name}"
+    return 0
+  fi
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+  /bin/bash -lc 'set -a; source "$1" >/dev/null 2>&1; printf "%s" "${!2:-}"' _ "$ENV_FILE" "$name"
+}
+
+runtime_data_root() {
+  local override
+  override=$(runtime_env_override DATA_ROOT)
+  if [[ -n "$override" ]]; then
+    resolve_runtime_path "$override"
+    return 0
+  fi
+  default_runtime_data_root
+}
+
+runtime_debug_log_path() {
+  local override
+  override=$(runtime_env_override DEBUG_LOG_PATH)
+  if [[ -n "$override" ]]; then
+    resolve_runtime_path "$override"
+    return 0
+  fi
+  default_runtime_debug_log_path
+}
+
+runtime_event_log_dir() {
+  dirname "$(runtime_debug_log_path)"
 }
 
 tmux_session_exists() {
@@ -267,7 +336,7 @@ tmux_session_pid() {
 }
 
 ensure_layout() {
-  mkdir -p "$LOG_DIR" "$REPO_ROOT/data/debug" "$MANAGED_CODEX_DIR"
+  mkdir -p "$LOG_DIR" "$(runtime_event_log_dir)" "$MANAGED_CODEX_DIR"
   touch \
     "$(stdout_log_path)" \
     "$(stderr_log_path)"
@@ -430,7 +499,7 @@ start_runtime() {
   fi
 
   local launch_command
-  launch_command=$(printf 'cd %q && export PATH=%q CARGO_HOME=%q CARGO_TARGET_DIR=%q RUSTUP_HOME=%q && if [[ -f %q ]]; then set -a && source %q && set +a; fi && exec %q >>%q 2>>%q' \
+  launch_command=$(printf 'cd %q && export PATH=%q CARGO_HOME=%q CARGO_TARGET_DIR=%q RUSTUP_HOME=%q && if [[ -f %q ]]; then set -a && source %q && set +a; fi && export DATA_ROOT="${DATA_ROOT:-%q}" DEBUG_LOG_PATH="${DEBUG_LOG_PATH:-%q}" && exec %q >>%q 2>>%q' \
     "$REPO_ROOT" \
     "$RUNTIME_PATH" \
     "$CARGO_HOME_DIR" \
@@ -438,6 +507,8 @@ start_runtime() {
     "$RUSTUP_HOME_DIR" \
     "$ENV_FILE" \
     "$ENV_FILE" \
+    "$(default_runtime_data_root)" \
+    "$(default_runtime_debug_log_path)" \
     "$runtime_binary" \
     "$stdout_log" \
     "$stderr_log")

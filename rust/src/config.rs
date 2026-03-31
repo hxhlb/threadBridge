@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::runtime_paths::{RuntimePathOverrides, resolve_runtime_paths};
+
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub data_root_path: PathBuf,
@@ -94,22 +96,15 @@ fn resolve_from_cwd(input: Option<String>, fallback: &str) -> Result<PathBuf> {
 pub fn load_runtime_config() -> Result<RuntimeConfig> {
     load_dotenv();
 
-    let bot_data_path = resolve_from_cwd(env::var("BOT_DATA_PATH").ok(), "./data/state.json")?;
-    let data_root_path = if let Ok(root) = env::var("DATA_ROOT") {
-        resolve_from_cwd(Some(root), "./data")?
-    } else {
-        bot_data_path
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("./data"))
-    };
+    let runtime_paths = resolve_runtime_paths(RuntimePathOverrides {
+        data_root: env::var("DATA_ROOT").ok(),
+        bot_data_path: env::var("BOT_DATA_PATH").ok(),
+        debug_log_path: env::var("DEBUG_LOG_PATH").ok(),
+    })?;
 
     Ok(RuntimeConfig {
-        data_root_path,
-        debug_log_path: resolve_from_cwd(
-            env::var("DEBUG_LOG_PATH").ok(),
-            "./data/debug/events.jsonl",
-        )?,
+        data_root_path: runtime_paths.data_root_path,
+        debug_log_path: runtime_paths.debug_log_path,
         codex_working_directory: resolve_from_cwd(env::var("CODEX_WORKING_DIRECTORY").ok(), ".")?,
         codex_model: env::var("CODEX_MODEL")
             .ok()

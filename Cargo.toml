@@ -43,6 +43,7 @@ async-stream = "0.3"
 axum = { version = "0.7", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 crossterm = "0.28"
+directories = "6.0"
 dotenvy = "0.15"
 futures-util = "0.3"
 pulldown-cmark = "0.9"

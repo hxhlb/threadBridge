@@ -104,6 +104,7 @@
 ### 4. Runtime Data Location
 
 - 公開發佈前，bot-local runtime state 不再預設寫入 repo/worktree 下的 `data/`。
+- 低層 path contract 與 override precedence 以 [runtime-data-root.md](../runtime-control/runtime-data-root.md) 為準；本節只保留 release gate。
 - release build 的正式資料根目錄應遷移到：
   - `~/Library/Application Support/threadBridge/`
 - 最低要求：

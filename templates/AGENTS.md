@@ -6,7 +6,7 @@ This managed block is appended by threadBridge to a real project workspace `AGEN
 
 - The current working directory is the real bound workspace, not a projected copy.
 - Preserve this workspace's own conventions and instructions. This appendix adds bot/runtime behavior; it does not replace project-local rules.
-- threadBridge tracks Telegram-thread metadata outside the workspace under its own `data/` store. That bot-local state is not the source of truth for project files.
+- threadBridge tracks Telegram-thread metadata outside the workspace under its own bot-local runtime data root. In debug builds this defaults to repo-local `data/`; in release builds it defaults to the platform local app-data directory. That bot-local state is not the source of truth for project files.
 - Use the current Codex thread context as the primary continuity source. Do not rebuild long transcript replays unless a workflow explicitly requires it.
 
 ### Runtime Surface

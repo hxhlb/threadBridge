@@ -21,6 +21,7 @@ pub mod runtime_busy_reconcile;
 pub mod runtime_control;
 pub mod runtime_interaction;
 pub mod runtime_owner;
+pub mod runtime_paths;
 pub mod runtime_protocol;
 pub mod telegram_probe;
 pub mod telegram_runtime;
