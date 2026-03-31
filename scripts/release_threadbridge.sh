@@ -69,6 +69,10 @@ require_macos() {
 }
 
 ensure_clean_worktree() {
+  if [[ "${THREADBRIDGE_RELEASE_ALLOW_DIRTY:-0}" == "1" ]]; then
+    log "skipping clean worktree check because THREADBRIDGE_RELEASE_ALLOW_DIRTY=1"
+    return 0
+  fi
   if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
     fail "working tree must be clean before publish/release"
   fi
