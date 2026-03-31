@@ -1,23 +1,21 @@
-# Release Notes
+# Releases
 
-This directory stores the release notes files consumed by `scripts/release_threadbridge.sh`.
+This directory contains:
 
-Use one markdown file per version, for example:
+- per-version release notes, for example `docs/releases/0.1.0-rc.1.md`
+- the repo release runbook at [repo-release-runbook.md](/Volumes/Data/Github/threadBridge/docs/releases/repo-release-runbook.md)
 
-- `docs/releases/0.1.0-rc.1.md`
-- `docs/releases/0.1.0-rc.2.md`
-
-First RC operator flow:
+Use the runbook when you need to publish a new macOS prerelease from this repo:
 
 ```bash
-scripts/release_threadbridge.sh release --version 0.1.0-rc.1 --notes-file docs/releases/0.1.0-rc.1.md --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
+scripts/release_threadbridge.sh release \
+  --version 0.1.0-rc.1 \
+  --notes-file docs/releases/0.1.0-rc.1.md \
+  --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
 ```
 
-For the first RC path, `release_threadbridge.sh` handles build/sign/dmg/notarize/publish and creates a GitHub draft prerelease. Homebrew tap publication is intentionally deferred.
+Current committed contract:
 
-If you personally prefer `fastlane` for local Apple bootstrap, keep that Fastfile private and ignored.
-The committed repo contract stays shell-first:
-
-- ensure `Developer ID Application` is visible to `codesign`
-- create the local `threadbridge-notary` profile with `xcrun notarytool store-credentials`
-- run `scripts/release_threadbridge.sh release`
+- `release_threadbridge.sh` handles build, sign, DMG, notarize, and GitHub draft prerelease upload
+- git tag creation and final draft publication are separate maintainer steps
+- Homebrew tap publication is still out of scope for the first RC path
