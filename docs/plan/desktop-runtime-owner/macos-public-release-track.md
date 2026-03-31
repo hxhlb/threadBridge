@@ -18,7 +18,8 @@
 
 - 尚未有 CI 自動化承接 public release pipeline
 - 尚未完成第一輪真實 RC 演練與 smoke 測試回寫
-- 尚未驗證完整 GitHub Release + Homebrew cask 發佈憑證/權限流程
+- 尚未驗證完整 GitHub draft prerelease 發佈權限與實際資產內容
+- 尚未建立 dedicated Homebrew tap repo 與 cask publish 流程
 - 尚未有 release branch / RC 退出條件 / 回滾流程的統一規範文檔
 
 ## 問題
@@ -105,7 +106,7 @@
 - `scripts/local_threadbridge.sh` 只作為本地開發 helper：
   - 目標是快速 build / bundle / start 最新代碼
   - 文件上不再把它視為 public release 入口
-- `scripts/release_threadbridge.sh` 是公開發佈的正式腳本入口：
+- `scripts/release_threadbridge.sh` 是公開發佈的正式 shell orchestrator：
   - `build`
   - `sign`
   - `dmg`
@@ -113,6 +114,10 @@
   - `publish`
   - `release`
 - `release` 是完整 orchestration path；public release 時不再鼓勵手動拼接零散命令
+- `threadBridge` 不新增 Xcode wrapper 專案；release build 保持 `cargo bundle + explicit codesign`，而不是切到 Xcode `signingStyle: automatic`
+- 若 operator 想保留 `fastlane` 作為私有本機 helper，可以自行維持 ignored Fastfile：
+  - 但 repo 不提交任何 `fastlane/` 內容
+  - committed contract 仍以 shell/notarytool 為準
 
 - pipeline 產物流程固定為：
   1. 產生 universal app bundle
@@ -143,16 +148,19 @@
   - 上傳 notarized DMG
   - 上傳 checksum
   - 發布 RC release notes（包含已知限制）
+  - 第一輪 RC 固定採用 `draft prerelease`
 - Homebrew（dedicated tap）：
   - cask 指向 GitHub Release 的 DMG URL
   - cask checksum 與 release artifact 一致
   - 不發佈與 GitHub artifact 不一致的替代包
+- 第一輪 mixed-mode RC 不要求 Homebrew 發佈：
+  - 先完成 GitHub draft prerelease
+  - 等 dedicated tap repo 建好後，再把 Homebrew 補回 `release` happy path
 - release script operator inputs 固定至少包含：
   - `--version`
   - `--notes-file`
   - `--codesign-identity`
-  - `--notary-profile`
-- notarization 憑證由 macOS Keychain 中已配置好的 notarytool profile 提供；repo 不管理 secrets 檔案
+- notarization 憑證由本機 `threadbridge-notary` Keychain profile 提供；repo 不管理 secrets 檔案
 
 ### 6. Rollback / Yank
 
@@ -197,6 +205,7 @@ RC 發佈前，至少滿足：
 ## 建議的下一步
 
 1. 先補齊 release discipline 文檔（本文件）與 `docs/plan/README.md` registry 對齊。
-2. 以 `scripts/release_threadbridge.sh` 做第一次真實 RC 演練，確認 codesign / notarize / GitHub / tap 權限與 artifact 內容。
-3. 再補 CI/workflow 或 release runbook 自動化，減少 operator 手動步驟。
-4. 以 `release/0.1.0-rc.1` 進行首次 RC 演練，將實際差異回寫本文件。
+2. 先完成本機 Apple release bootstrap：Developer ID Application identity + `threadbridge-notary` profile。
+3. 以 `scripts/release_threadbridge.sh` 做第一次真實 RC 演練，確認 codesign / notarize / GitHub draft prerelease 權限與 artifact 內容。
+4. 建立 dedicated Homebrew tap repo，之後再把 cask publish 補回 `release` path。
+5. 再補 CI/workflow 或 release runbook 自動化，減少 operator 手動步驟。

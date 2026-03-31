@@ -149,6 +149,7 @@ On macOS, `build` also refreshes the app icon assets from the single approved so
 ## Public Release Script
 
 Use `scripts/release_threadbridge.sh` for the public macOS release pipeline. This is separate from the local dev helper and is the supported path for signed, notarized, distributable artifacts.
+It stays on the existing Rust/cargo packaging route; there is no Xcode wrapper project and no `signingStyle: automatic` release path in this repo.
 
 Typical subcommands:
 
@@ -156,8 +157,8 @@ Typical subcommands:
 scripts/release_threadbridge.sh build --version 0.1.0-rc.1
 scripts/release_threadbridge.sh sign --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
 scripts/release_threadbridge.sh dmg --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
-scripts/release_threadbridge.sh notarize --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)" --notary-profile threadbridge-notary
-scripts/release_threadbridge.sh release --version 0.1.0-rc.1 --notes-file docs/releases/0.1.0-rc.1.md --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)" --notary-profile threadbridge-notary
+scripts/release_threadbridge.sh notarize --version 0.1.0-rc.1 --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
+scripts/release_threadbridge.sh release --version 0.1.0-rc.1 --notes-file docs/releases/0.1.0-rc.1.md --codesign-identity "Developer ID Application: Example, Inc. (TEAMID)"
 ```
 
 The `release` command performs the full build -> sign -> DMG -> notarize -> publish pipeline.
@@ -169,11 +170,31 @@ Current pipeline contract:
 - copies `app_server_ws_worker` into the bundled app so the distributed runtime can launch its workspace worker
 - signs the app with hardened runtime
 - creates and notarizes a single canonical DMG
-- publishes that DMG and checksum to GitHub Releases
-- updates the Homebrew tap cask in `qoli/homebrew-threadbridge`
+- publishes that DMG and checksum to a GitHub draft prerelease
+- does not include Homebrew tap publication in the first RC path
 
 The release script is macOS-only and fails fast if the worktree is dirty or required CLIs are missing.
-notarytool credentials are expected to already exist in Keychain under the named `--notary-profile`.
+It performs the release path directly with `codesign`, `notarytool`, `stapler`, and `gh`.
+
+## Private Fastfile Pattern
+
+If you prefer using `fastlane` for your own local Apple bootstrap, keep it private and ignored. This repo does not commit `fastlane/` files.
+
+Recommended private helper responsibilities:
+
+```bash
+apple_audit
+bootstrap_notary_profile
+notarize_dmg
+```
+
+A private/local Fastfile can help with:
+
+- preflighting `Developer ID Application` visibility
+- creating the local `threadbridge-notary` profile with Apple ID + app-specific password
+- wrapping `notarytool` / `stapler` as your own operator convenience layer
+
+The committed release contract does not depend on any tracked Fastfile.
 
 ## Build macOS App Bundle Icon
 

@@ -13,8 +13,7 @@ APP_BUNDLE_NAME="threadBridge.app"
 APP_EXECUTABLE_NAME="threadbridge_desktop"
 WORKER_BINARY_NAME="app_server_ws_worker"
 DEFAULT_GITHUB_REPO="qoli/threadBridge"
-DEFAULT_TAP_REPO="qoli/homebrew-threadbridge"
-DEFAULT_CASK_NAME="threadbridge"
+DEFAULT_NOTARY_PROFILE="${THREADBRIDGE_NOTARY_PROFILE:-threadbridge-notary}"
 APPLE_TARGETS=(
   "aarch64-apple-darwin"
   "x86_64-apple-darwin"
@@ -29,7 +28,7 @@ Commands:
   sign        Build and codesign the universal release app
   dmg         Build, sign, and package the DMG
   notarize    Build, sign, package, notarize, and staple the DMG
-  publish     Publish the existing notarized DMG to GitHub Release and the Homebrew tap
+  publish     Publish the existing notarized DMG to a GitHub draft prerelease
   release     Run the full build -> sign -> dmg -> notarize -> publish pipeline
   help        Show this help
 
@@ -40,15 +39,13 @@ Options for sign/dmg/notarize/release:
   --codesign-identity <identity>         Developer ID Application identity name
 
 Options for notarize/release:
-  --notary-profile <profile>             notarytool Keychain profile name
+  --notary-profile <profile>             Default: threadbridge-notary
 
 Options for publish/release:
   --notes-file <path>                    Release notes markdown file
 
 Optional publication overrides:
   --github-repo <owner/repo>             Default: qoli/threadBridge
-  --tap-repo <owner/repo>                Default: qoli/homebrew-threadbridge
-  --cask-name <name>                     Default: threadbridge
 EOF
 }
 
@@ -215,10 +212,6 @@ require_codesign_identity() {
   [[ -n "${CODESIGN_IDENTITY:-}" ]] || fail "--codesign-identity is required for $COMMAND"
 }
 
-require_notary_profile() {
-  [[ -n "${NOTARY_PROFILE:-}" ]] || fail "--notary-profile is required for $COMMAND"
-}
-
 require_notes_file() {
   [[ -n "${NOTES_FILE:-}" ]] || fail "--notes-file is required for $COMMAND"
   [[ -f "$NOTES_FILE" ]] || fail "missing release notes file: $NOTES_FILE"
@@ -226,6 +219,8 @@ require_notes_file() {
 
 verify_codesign_identity_available() {
   require_command security
+  [[ "$CODESIGN_IDENTITY" == *"Developer ID Application:"* ]] \
+    || fail "--codesign-identity must be a Developer ID Application identity"
   security find-identity -v -p codesigning | grep -F "$CODESIGN_IDENTITY" >/dev/null 2>&1 \
     || fail "codesign identity not found in keychain: $CODESIGN_IDENTITY"
 }
@@ -275,15 +270,12 @@ create_release_dmg() {
 }
 
 notarize_release_dmg() {
-  require_notary_profile
   require_command spctl
   verify_notary_profile_available
   [[ -f "$(dmg_path)" ]] || create_release_dmg
 
   log "submitting DMG for notarization"
   xcrun notarytool submit "$(dmg_path)" --keychain-profile "$NOTARY_PROFILE" --wait
-
-  log "stapling notarization ticket"
   xcrun stapler staple "$(dmg_path)"
   xcrun stapler validate "$(dmg_path)"
   spctl -a -vv --type open "$(dmg_path)"
@@ -295,19 +287,8 @@ write_checksum() {
   printf '%s  %s\n' "$checksum" "$(basename "$(dmg_path)")" > "$(checksum_path)"
 }
 
-read_checksum() {
-  awk '{print $1}' "$(checksum_path)"
-}
-
 release_tag() {
   printf 'v%s\n' "$VERSION"
-}
-
-release_asset_url() {
-  printf 'https://github.com/%s/releases/download/%s/%s\n' \
-    "$GITHUB_REPO" \
-    "$(release_tag)" \
-    "$(basename "$(dmg_path)")"
 }
 
 ensure_gh_authenticated() {
@@ -324,64 +305,25 @@ publish_github_release() {
   ensure_gh_authenticated
 
   if gh release view "$(release_tag)" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
-    log "updating existing GitHub Release $(release_tag)"
+    log "updating existing GitHub draft prerelease $(release_tag)"
     gh release upload "$(release_tag)" "$(dmg_path)" "$(checksum_path)" --repo "$GITHUB_REPO" --clobber
-    gh release edit "$(release_tag)" --repo "$GITHUB_REPO" --title "$APP_NAME $VERSION" --notes-file "$NOTES_FILE"
+    gh release edit "$(release_tag)" \
+      --repo "$GITHUB_REPO" \
+      --title "$APP_NAME $VERSION" \
+      --notes-file "$NOTES_FILE" \
+      --draft \
+      --prerelease
   else
-    log "creating GitHub Release $(release_tag)"
+    log "creating GitHub draft prerelease $(release_tag)"
     gh release create "$(release_tag)" \
       "$(dmg_path)" \
       "$(checksum_path)" \
       --repo "$GITHUB_REPO" \
       --title "$APP_NAME $VERSION" \
-      --notes-file "$NOTES_FILE"
+      --notes-file "$NOTES_FILE" \
+      --draft \
+      --prerelease
   fi
-}
-
-write_tap_cask() {
-  local cask_path=$1
-  local checksum=$2
-  cat > "$cask_path" <<EOF
-cask "$CASK_NAME" do
-  version "$VERSION"
-  sha256 "$checksum"
-
-  url "$(release_asset_url)"
-  name "$APP_NAME"
-  desc "Workspace-first Codex runtime with Telegram and a local desktop management surface"
-  homepage "https://github.com/$GITHUB_REPO"
-
-  app "$APP_BUNDLE_NAME"
-end
-EOF
-}
-
-publish_homebrew_tap() {
-  require_command git
-  local tap_dir
-  tap_dir=$(mktemp -d "${TMPDIR:-/tmp}/threadbridge-tap.XXXXXX")
-
-  log "cloning tap repo: $TAP_REPO"
-  git clone "https://github.com/$TAP_REPO.git" "$tap_dir" >/dev/null 2>&1
-
-  local cask_dir="$tap_dir/Casks"
-  local cask_path="$cask_dir/$CASK_NAME.rb"
-  mkdir -p "$cask_dir"
-  write_tap_cask "$cask_path" "$(read_checksum)"
-
-  (
-    cd "$tap_dir"
-    if [[ -n "$(git status --porcelain)" ]]; then
-      git add "$cask_path"
-      git commit -m "$CASK_NAME $VERSION" >/dev/null
-      git push origin HEAD >/dev/null
-      log "updated tap repo: $TAP_REPO"
-    else
-      log "tap repo already matches current release metadata"
-    fi
-  )
-
-  rm -rf "$tap_dir"
 }
 
 publish_release() {
@@ -389,12 +331,10 @@ publish_release() {
   ensure_clean_worktree
   ensure_release_assets_exist
   publish_github_release
-  publish_homebrew_tap
 }
 
 run_release() {
   require_codesign_identity
-  require_notary_profile
   require_notes_file
   ensure_clean_worktree
   build_universal_release_bundle
@@ -411,10 +351,8 @@ parse_args() {
   VERSION=""
   NOTES_FILE=""
   CODESIGN_IDENTITY=""
-  NOTARY_PROFILE=""
+  NOTARY_PROFILE="$DEFAULT_NOTARY_PROFILE"
   GITHUB_REPO="$DEFAULT_GITHUB_REPO"
-  TAP_REPO="$DEFAULT_TAP_REPO"
-  CASK_NAME="$DEFAULT_CASK_NAME"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -442,16 +380,6 @@ parse_args() {
         shift
         [[ $# -gt 0 ]] || fail "missing value for --github-repo"
         GITHUB_REPO=$1
-        ;;
-      --tap-repo)
-        shift
-        [[ $# -gt 0 ]] || fail "missing value for --tap-repo"
-        TAP_REPO=$1
-        ;;
-      --cask-name)
-        shift
-        [[ $# -gt 0 ]] || fail "missing value for --cask-name"
-        CASK_NAME=$1
         ;;
       help|-h|--help)
         COMMAND="help"

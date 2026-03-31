@@ -203,9 +203,9 @@
   - 記錄 `subscribeThread/unsubscribeThread` 落地、`observeThread` 移除、以及顯式 detach + timeout fallback
 - [macos-public-release-track.md](desktop-runtime-owner/macos-public-release-track.md)
   - doc kind: `plan`
-  - macOS public release 已不再只是純草稿：release data-root gate 已落地，且 repo 已新增 `scripts/release_threadbridge.sh`
-  - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = public release pipeline`
-  - public artifact 契約仍是 `signed + notarized`、`universal DMG + Homebrew cask`、dedicated tap 發佈
+  - macOS public release 已不再只是純草稿：release data-root gate 已落地，repo 已新增 `scripts/release_threadbridge.sh`
+  - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = shell orchestrator`
+  - 第一輪 RC 先收斂到 GitHub draft prerelease；Homebrew tap 仍待 dedicated repo 建立後再補回
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
   - 記錄 `hcodex` launch URL、local bridge、upstream Codex `--remote` 的實際契約
