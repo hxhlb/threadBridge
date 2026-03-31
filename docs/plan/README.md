@@ -204,7 +204,8 @@
 - [macos-public-release-track.md](desktop-runtime-owner/macos-public-release-track.md)
   - doc kind: `plan`
   - macOS public release 已不再只是純草稿：release data-root gate 已落地，repo 已新增 `scripts/release_threadbridge.sh`
-  - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = shell orchestrator`
+  - 固定 `local_threadbridge.sh = dev helper`、`release_threadbridge.sh = shell packaging/publish orchestrator`
+  - DMG notarization 保留在私有 ignored Fastfile，而不是 repo 內 tracked automation
   - 第一輪 RC 先收斂到 GitHub draft prerelease；Homebrew tap 仍待 dedicated repo 建立後再補回
 - [hcodex-launch-contract.md](hcodex-local-ingress-launcher/hcodex-launch-contract.md)
   - doc kind: `plan`
