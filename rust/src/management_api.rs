@@ -1015,7 +1015,7 @@ impl ManagementApiState {
                 continue;
             }
             ensure_workspace_runtime(
-                &self.runtime.runtime_assets_root_path,
+                &self.runtime.runtime_support_root_path,
                 &self.runtime.data_root_path,
                 &seed_template_path,
                 Path::new(&workspace_cwd),
@@ -2212,8 +2212,8 @@ mod tests {
         RuntimeConfig {
             data_root_path: root.join("data"),
             debug_log_path: root.join("debug.log"),
-            runtime_assets_root_path: root.join("runtime_assets"),
-            runtime_assets_seed_root_path: root.join("runtime_assets"),
+            runtime_support_root_path: root.join("runtime_support"),
+            runtime_support_seed_root_path: root.join("runtime_support"),
             codex_model: None,
             management_bind_addr: "127.0.0.1:0".parse().unwrap(),
         }
@@ -2224,7 +2224,7 @@ mod tests {
     }
 
     async fn install_shared_control(handle: &ManagementApiHandle, root: &PathBuf) {
-        let template_dir = root.join("runtime_assets").join("templates");
+        let template_dir = root.join("runtime_support").join("templates");
         fs::create_dir_all(&template_dir).await.unwrap();
         fs::write(template_dir.join("AGENTS.md"), "test template")
             .await

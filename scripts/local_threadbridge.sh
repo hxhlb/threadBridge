@@ -445,7 +445,7 @@ build_runtime_bundle() {
     printf 'Expected app bundle at %s\n' "$app_path" >&2
     exit 1
   fi
-  sync_runtime_assets_into_bundle "$app_path"
+  sync_runtime_support_into_bundle "$app_path"
   local worker_binary worker_dest
   worker_binary=$(binary_path "app_server_ws_worker")
   worker_dest="$app_path/Contents/MacOS/app_server_ws_worker"
@@ -453,14 +453,14 @@ build_runtime_bundle() {
   log "bundle ready: $app_path"
 }
 
-sync_runtime_assets_into_bundle() {
+sync_runtime_support_into_bundle() {
   local app_path=$1
-  local resources_dir runtime_assets_dest
+  local resources_dir runtime_support_dest
   resources_dir="$app_path/Contents/Resources"
-  runtime_assets_dest="$resources_dir/runtime_assets"
+  runtime_support_dest="$resources_dir/runtime_support"
   mkdir -p "$resources_dir"
-  rm -rf "$runtime_assets_dest"
-  cp -R "$REPO_ROOT/runtime_assets" "$runtime_assets_dest"
+  rm -rf "$runtime_support_dest"
+  cp -R "$REPO_ROOT/runtime_support" "$runtime_support_dest"
 }
 
 build_local() {

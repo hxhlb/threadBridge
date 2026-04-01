@@ -158,8 +158,8 @@ universal_worker_binary_path() {
   printf '%s/Contents/MacOS/%s\n' "$(universal_app_path)" "$WORKER_BINARY_NAME"
 }
 
-universal_runtime_assets_path() {
-  printf '%s/Contents/Resources/runtime_assets\n' "$(universal_app_path)"
+universal_runtime_support_path() {
+  printf '%s/Contents/Resources/runtime_support\n' "$(universal_app_path)"
 }
 
 ensure_release_layout() {
@@ -217,19 +217,19 @@ build_universal_release_bundle() {
     "$(worker_binary_path_for_target "${APPLE_TARGETS[1]}")" \
     -output "$(universal_worker_binary_path)"
 
-  sync_runtime_assets_into_app "$(universal_app_path)"
+  sync_runtime_support_into_app "$(universal_app_path)"
   chmod +x "$(universal_main_binary_path)" "$(universal_worker_binary_path)"
   log "universal app ready: $(universal_app_path)"
 }
 
-sync_runtime_assets_into_app() {
+sync_runtime_support_into_app() {
   local app_path=$1
-  local resources_dir runtime_assets_dest
+  local resources_dir runtime_support_dest
   resources_dir="$app_path/Contents/Resources"
-  runtime_assets_dest="$resources_dir/runtime_assets"
+  runtime_support_dest="$resources_dir/runtime_support"
   mkdir -p "$resources_dir"
-  rm -rf "$runtime_assets_dest"
-  cp -R "$REPO_ROOT/runtime_assets" "$runtime_assets_dest"
+  rm -rf "$runtime_support_dest"
+  cp -R "$REPO_ROOT/runtime_support" "$runtime_support_dest"
 }
 
 require_codesign_identity() {

@@ -11,8 +11,8 @@ use crate::runtime_paths::{RuntimePathOverrides, resolve_runtime_paths};
 pub struct RuntimeConfig {
     pub data_root_path: PathBuf,
     pub debug_log_path: PathBuf,
-    pub runtime_assets_root_path: PathBuf,
-    pub runtime_assets_seed_root_path: PathBuf,
+    pub runtime_support_root_path: PathBuf,
+    pub runtime_support_seed_root_path: PathBuf,
     pub codex_model: Option<String>,
     pub management_bind_addr: SocketAddr,
 }
@@ -31,13 +31,13 @@ impl RuntimeConfig {
     }
 
     pub fn runtime_template_path(&self) -> PathBuf {
-        self.runtime_assets_root_path
+        self.runtime_support_root_path
             .join("templates")
             .join("AGENTS.md")
     }
 
-    pub fn supports_runtime_assets_rebuild(&self) -> bool {
-        self.runtime_assets_root_path != self.runtime_assets_seed_root_path
+    pub fn supports_runtime_support_rebuild(&self) -> bool {
+        self.runtime_support_root_path != self.runtime_support_seed_root_path
     }
 }
 
@@ -124,8 +124,8 @@ pub fn load_runtime_config() -> Result<RuntimeConfig> {
     Ok(RuntimeConfig {
         data_root_path: runtime_paths.data_root_path,
         debug_log_path: runtime_paths.debug_log_path,
-        runtime_assets_root_path: runtime_paths.runtime_assets_root_path,
-        runtime_assets_seed_root_path: runtime_paths.runtime_assets_seed_root_path,
+        runtime_support_root_path: runtime_paths.runtime_support_root_path,
+        runtime_support_seed_root_path: runtime_paths.runtime_support_seed_root_path,
         codex_model: env::var("CODEX_MODEL")
             .ok()
             .map(|value| value.trim().to_owned())

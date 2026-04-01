@@ -29,11 +29,11 @@ mod macos_app {
         LaunchLocalSessionTarget, ManagedWorkspaceView, ManagementApiHandle,
         RuntimeControlActionRequest, RuntimeHealthView, SetupStateView, spawn_management_api,
     };
-    use threadbridge_rust::runtime_assets::{ensure_runtime_assets, rebuild_runtime_assets};
     use threadbridge_rust::runtime_control::{
         RuntimeControlContext, RuntimeOwnershipMode, SharedControlHandle,
     };
     use threadbridge_rust::runtime_owner::DesktopRuntimeOwner;
+    use threadbridge_rust::runtime_support::{ensure_runtime_support, rebuild_runtime_support};
 
     const TRAY_ICON_SIZE: u32 = 32;
     const TRAY_ICON_RGBA: &[u8] =
@@ -74,7 +74,7 @@ mod macos_app {
         OpenSettings,
         OpenAddWorkspace,
         PurgeArchivedThreads,
-        RebuildRuntimeAssets,
+        RebuildRuntimeSupport,
         Quit,
         LaunchNew { thread_key: String },
         ContinueCurrent { thread_key: String },
@@ -112,7 +112,7 @@ mod macos_app {
         }
 
         let runtime_config = load_runtime_config()?;
-        runtime.block_on(ensure_runtime_assets(&runtime_config))?;
+        runtime.block_on(ensure_runtime_support(&runtime_config))?;
         let _guard = init_runtime_json_logs(&runtime_config.debug_log_path)?;
         let management_api = runtime.block_on(spawn_management_api(runtime_config.clone()))?;
         runtime.block_on(management_api.set_native_workspace_picker_available(true));
@@ -358,7 +358,7 @@ mod macos_app {
         }
         let model = build_menu_model(
             snapshot,
-            app.runtime_config.supports_runtime_assets_rebuild(),
+            app.runtime_config.supports_runtime_support_rebuild(),
         )?;
         if let Some(tray_icon) = app.tray_icon.as_ref() {
             tray_icon.set_menu(Some(Box::new(model.menu)));
@@ -371,7 +371,7 @@ mod macos_app {
 
     fn build_menu_model(
         snapshot: &DesktopSnapshot,
-        supports_runtime_assets_rebuild: bool,
+        supports_runtime_support_rebuild: bool,
     ) -> Result<MenuModel> {
         let menu = Menu::new();
         let mut actions = HashMap::new();
@@ -415,13 +415,13 @@ mod macos_app {
             purge_archived.id().clone(),
             TrayAction::PurgeArchivedThreads,
         );
-        if supports_runtime_assets_rebuild {
-            let rebuild_assets = MenuItem::new("Rebuild Runtime Assets", true, None);
+        if supports_runtime_support_rebuild {
+            let rebuild_support = MenuItem::new("Rebuild Runtime Support", true, None);
             actions.insert(
-                rebuild_assets.id().clone(),
-                TrayAction::RebuildRuntimeAssets,
+                rebuild_support.id().clone(),
+                TrayAction::RebuildRuntimeSupport,
             );
-            menu.append(&rebuild_assets)?;
+            menu.append(&rebuild_support)?;
         }
         let settings = MenuItem::new("Settings", true, None);
         actions.insert(settings.id().clone(), TrayAction::OpenSettings);
@@ -551,20 +551,20 @@ mod macos_app {
                     let _ = proxy.send_event(UserEvent::Refresh);
                 });
             }
-            TrayAction::RebuildRuntimeAssets => {
+            TrayAction::RebuildRuntimeSupport => {
                 let runtime = app.runtime.clone();
                 let runtime_config = app.runtime_config.clone();
                 let proxy = proxy.clone();
                 runtime.spawn(async move {
-                    if let Err(error) = rebuild_runtime_assets_via_tray(&runtime_config).await {
+                    if let Err(error) = rebuild_runtime_support_via_tray(&runtime_config).await {
                         warn!(
-                            event = "desktop_runtime.rebuild_runtime_assets.failed",
+                            event = "desktop_runtime.rebuild_runtime_support.failed",
                             error = %error
                         );
                         let _ = show_desktop_notification(
                             "threadBridge",
                             &format!(
-                                "Rebuild runtime assets failed: {}",
+                                "Rebuild runtime support failed: {}",
                                 short_error_message(&error)
                             ),
                         );
@@ -672,16 +672,16 @@ mod macos_app {
         Ok(())
     }
 
-    async fn rebuild_runtime_assets_via_tray(runtime: &RuntimeConfig) -> Result<()> {
-        let confirmed = tokio::task::spawn_blocking(confirm_rebuild_runtime_assets).await??;
+    async fn rebuild_runtime_support_via_tray(runtime: &RuntimeConfig) -> Result<()> {
+        let confirmed = tokio::task::spawn_blocking(confirm_rebuild_runtime_support).await??;
         if !confirmed {
-            info!(event = "desktop_runtime.rebuild_runtime_assets.cancelled");
+            info!(event = "desktop_runtime.rebuild_runtime_support.cancelled");
             return Ok(());
         }
-        rebuild_runtime_assets(runtime).await?;
+        rebuild_runtime_support(runtime).await?;
         show_desktop_notification(
             "threadBridge",
-            "Rebuilt runtime assets from the bundled app resources.",
+            "Rebuilt runtime support from the bundled app resources.",
         )?;
         Ok(())
     }
@@ -759,8 +759,8 @@ mod macos_app {
         ))
     }
 
-    fn confirm_rebuild_runtime_assets() -> Result<bool> {
-        let script = r#"button returned of (display dialog "Delete installed runtime assets and rebuild them from the bundled app resources? Your data and config will be kept." buttons {"Cancel", "Rebuild"} default button "Cancel" cancel button "Cancel" with icon caution)"#;
+    fn confirm_rebuild_runtime_support() -> Result<bool> {
+        let script = r#"button returned of (display dialog "Delete installed runtime support and rebuild it from the bundled app resources? Your data and config will be kept." buttons {"Cancel", "Rebuild"} default button "Cancel" cancel button "Cancel" with icon caution)"#;
         let output = Command::new("/usr/bin/osascript")
             .arg("-e")
             .arg(script)
@@ -773,7 +773,7 @@ mod macos_app {
             return Ok(false);
         }
         Err(anyhow!(
-            "runtime-assets rebuild confirmation failed: {}",
+            "runtime-support rebuild confirmation failed: {}",
             stderr.trim().if_empty("unknown osascript error")
         ))
     }

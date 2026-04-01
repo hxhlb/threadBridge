@@ -19,8 +19,8 @@ fn runtime_config(root: &PathBuf) -> RuntimeConfig {
     RuntimeConfig {
         data_root_path: root.join("data"),
         debug_log_path: root.join("debug.log"),
-        runtime_assets_root_path: root.join("runtime_assets"),
-        runtime_assets_seed_root_path: root.join("runtime_assets"),
+        runtime_support_root_path: root.join("runtime_support"),
+        runtime_support_seed_root_path: root.join("runtime_support"),
         codex_model: None,
         management_bind_addr: "127.0.0.1:0".parse().unwrap(),
     }
@@ -58,7 +58,7 @@ async fn owner_managed_control_runtime_bootstraps_missing_state_file() {
     fs::create_dir_all(&root).await.unwrap();
 
     let runtime = runtime_config(&root);
-    let template_dir = runtime.runtime_assets_root_path.join("templates");
+    let template_dir = runtime.runtime_support_root_path.join("templates");
     fs::create_dir_all(&template_dir).await.unwrap();
     let seed_template_path = template_dir.join("AGENTS.md");
     fs::write(&seed_template_path, "test template")
@@ -68,7 +68,7 @@ async fn owner_managed_control_runtime_bootstraps_missing_state_file() {
     let workspace = root.join("workspace");
     fs::create_dir_all(&workspace).await.unwrap();
     ensure_workspace_runtime(
-        &runtime.runtime_assets_root_path,
+        &runtime.runtime_support_root_path,
         &runtime.data_root_path,
         &seed_template_path,
         &workspace,
@@ -112,7 +112,7 @@ async fn owner_managed_bind_workspace_record_creates_session_binding() {
     fs::create_dir_all(&root).await.unwrap();
 
     let runtime = runtime_config(&root);
-    let template_dir = runtime.runtime_assets_root_path.join("templates");
+    let template_dir = runtime.runtime_support_root_path.join("templates");
     fs::create_dir_all(&template_dir).await.unwrap();
     let seed_template_path = template_dir.join("AGENTS.md");
     fs::write(&seed_template_path, "test template")

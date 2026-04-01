@@ -135,7 +135,7 @@ impl DesktopRuntimeOwner {
             );
             let step = async {
                 ensure_workspace_runtime(
-                    &self.runtime.runtime_assets_root_path,
+                    &self.runtime.runtime_support_root_path,
                     &self.runtime.data_root_path,
                     &self.seed_template_path,
                     workspace_path,

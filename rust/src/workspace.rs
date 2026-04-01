@@ -24,10 +24,11 @@ fn shell_single_quote(value: &str) -> String {
 
 fn build_wrapper_script(
     tool_file_name: &str,
-    runtime_assets_root: &Path,
+    runtime_support_root: &Path,
     config_env_path: &Path,
 ) -> String {
-    let quoted_runtime_assets_root = shell_single_quote(&runtime_assets_root.display().to_string());
+    let quoted_runtime_support_root =
+        shell_single_quote(&runtime_support_root.display().to_string());
     let quoted_config_env_path = shell_single_quote(&config_env_path.display().to_string());
     [
         "#!/bin/sh",
@@ -35,11 +36,11 @@ fn build_wrapper_script(
         "SCRIPT_DIR=\"$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\"",
         "RUNTIME_DIR=\"$(CDPATH= cd -- \"$SCRIPT_DIR/..\" && pwd)\"",
         "WORKSPACE_DIR=\"$(CDPATH= cd -- \"$RUNTIME_DIR/..\" && pwd)\"",
-        &format!("THREADBRIDGE_RUNTIME_ASSETS_ROOT={quoted_runtime_assets_root}"),
+        &format!("THREADBRIDGE_RUNTIME_SUPPORT_ROOT={quoted_runtime_support_root}"),
         &format!("THREADBRIDGE_CONFIG_ENV={quoted_config_env_path}"),
         "cd \"$WORKSPACE_DIR\"",
         &format!(
-            "exec python3 \"$THREADBRIDGE_RUNTIME_ASSETS_ROOT/tools/{tool_file_name}\" --config-env \"$THREADBRIDGE_CONFIG_ENV\" \"$@\""
+            "exec python3 \"$THREADBRIDGE_RUNTIME_SUPPORT_ROOT/tools/{tool_file_name}\" --config-env \"$THREADBRIDGE_CONFIG_ENV\" \"$@\""
         ),
         "",
     ]
@@ -275,7 +276,7 @@ async fn set_mode(path: &Path, mode: u32) -> Result<()> {
 }
 
 pub async fn ensure_workspace_runtime(
-    runtime_assets_root: &Path,
+    runtime_support_root: &Path,
     data_root: &Path,
     seed_template_path: &Path,
     workspace_path: &Path,
@@ -340,7 +341,7 @@ pub async fn ensure_workspace_runtime(
         ("send_telegram_media.py", "send_telegram_media"),
     ] {
         let wrapper_path = bin_dir.join(filename);
-        let wrapper = build_wrapper_script(tool, runtime_assets_root, &config_env_path);
+        let wrapper = build_wrapper_script(tool, runtime_support_root, &config_env_path);
         write_text_file(&wrapper_path, &wrapper).await?;
         #[cfg(unix)]
         {
@@ -442,7 +443,7 @@ mod tests {
             .unwrap();
 
         ensure_workspace_runtime(
-            Path::new("/runtime_assets"),
+            Path::new("/runtime_support"),
             Path::new("/data"),
             &template,
             &workspace,
@@ -467,7 +468,7 @@ mod tests {
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
         let runtime_root = ensure_workspace_runtime(
-            Path::new("/runtime_assets"),
+            Path::new("/runtime_support"),
             Path::new("/data"),
             &template,
             &workspace,
@@ -542,7 +543,7 @@ mod tests {
         assert!(hcodex_launcher.contains("if [ \"${#codex_args[@]}\" -gt 0 ]; then"));
         assert!(hcodex_launcher.contains("codex_bin=\"$(command -v codex 2>/dev/null || true)\""));
         assert!(!hcodex_launcher.contains("THREADBRIDGE_HCODEX_RESOLVER"));
-        assert!(build_prompt_wrapper.contains("THREADBRIDGE_RUNTIME_ASSETS_ROOT"));
+        assert!(build_prompt_wrapper.contains("THREADBRIDGE_RUNTIME_SUPPORT_ROOT"));
         assert!(build_prompt_wrapper.contains("THREADBRIDGE_CONFIG_ENV"));
         assert!(build_prompt_wrapper.contains("tools/build_prompt_config.py"));
         assert!(build_prompt_wrapper.contains("--config-env \"$THREADBRIDGE_CONFIG_ENV\""));
@@ -553,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_runtime_copies_managed_codex_binary_when_available() {
         let root = temp_path();
-        let runtime_assets_root = root.join("runtime_assets");
+        let runtime_support_root = root.join("runtime_support");
         let data_root = root.join("data");
         let workspace = root.join("workspace");
         let template = root.join("template.md");
@@ -565,10 +566,10 @@ mod tests {
         fs::write(&managed_codex, "managed codex binary")
             .await
             .unwrap();
-        fs::create_dir_all(&runtime_assets_root).await.unwrap();
+        fs::create_dir_all(&runtime_support_root).await.unwrap();
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
-        ensure_workspace_runtime(&runtime_assets_root, &data_root, &template, &workspace)
+        ensure_workspace_runtime(&runtime_support_root, &data_root, &template, &workspace)
             .await
             .unwrap();
 
@@ -588,7 +589,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_runtime_respects_source_codex_source_preference() {
         let root = temp_path();
-        let runtime_assets_root = root.join("runtime_assets");
+        let runtime_support_root = root.join("runtime_support");
         let data_root = root.join("data");
         let workspace = root.join("workspace");
         let template = root.join("template.md");
@@ -598,10 +599,10 @@ mod tests {
             .await
             .unwrap();
         fs::write(&source_file, "source\n").await.unwrap();
-        fs::create_dir_all(&runtime_assets_root).await.unwrap();
+        fs::create_dir_all(&runtime_support_root).await.unwrap();
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
-        ensure_workspace_runtime(&runtime_assets_root, &data_root, &template, &workspace)
+        ensure_workspace_runtime(&runtime_support_root, &data_root, &template, &workspace)
             .await
             .unwrap();
 
@@ -621,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_runtime_maps_legacy_alpha_codex_source_to_source() {
         let root = temp_path();
-        let runtime_assets_root = root.join("runtime_assets");
+        let runtime_support_root = root.join("runtime_support");
         let data_root = root.join("data");
         let workspace = root.join("workspace");
         let template = root.join("template.md");
@@ -631,10 +632,10 @@ mod tests {
             .await
             .unwrap();
         fs::write(&source_file, "alpha\n").await.unwrap();
-        fs::create_dir_all(&runtime_assets_root).await.unwrap();
+        fs::create_dir_all(&runtime_support_root).await.unwrap();
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
-        ensure_workspace_runtime(&runtime_assets_root, &data_root, &template, &workspace)
+        ensure_workspace_runtime(&runtime_support_root, &data_root, &template, &workspace)
             .await
             .unwrap();
 
@@ -660,7 +661,7 @@ mod tests {
         fs::write(&template, "runtime appendix\n").await.unwrap();
 
         ensure_workspace_runtime(
-            Path::new("/runtime_assets"),
+            Path::new("/runtime_support"),
             Path::new("/data"),
             &template,
             &workspace,

@@ -877,7 +877,7 @@ impl WorkspaceRuntimeService {
     ) -> Result<PathBuf> {
         let workspace = workspace_path_from_binding(binding)?;
         ensure_workspace_runtime(
-            &self.ctx.runtime.runtime_assets_root_path,
+            &self.ctx.runtime.runtime_support_root_path,
             &self.ctx.runtime.data_root_path,
             &self.ctx.seed_template_path,
             &workspace,
@@ -1097,7 +1097,7 @@ impl WorkspaceSessionService {
         }
 
         ensure_workspace_runtime(
-            &self.ctx.runtime.runtime_assets_root_path,
+            &self.ctx.runtime.runtime_support_root_path,
             &self.ctx.runtime.data_root_path,
             &self.ctx.seed_template_path,
             &workspace_path,
@@ -1126,7 +1126,7 @@ impl WorkspaceSessionService {
         workspace_path: PathBuf,
     ) -> Result<ThreadRecord> {
         ensure_workspace_runtime(
-            &self.ctx.runtime.runtime_assets_root_path,
+            &self.ctx.runtime.runtime_support_root_path,
             &self.ctx.runtime.data_root_path,
             &self.ctx.seed_template_path,
             &workspace_path,

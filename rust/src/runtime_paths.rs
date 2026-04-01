@@ -5,7 +5,7 @@ use directories::BaseDirs;
 
 const DEBUG_DATA_DIR_NAME: &str = "data";
 const APP_DATA_DIR_NAME: &str = "threadBridge";
-const RUNTIME_ASSETS_DIR_NAME: &str = "runtime_assets";
+const RUNTIME_SUPPORT_DIR_NAME: &str = "runtime_support";
 const DEBUG_EVENTS_RELATIVE_PATH: &str = "debug/events.jsonl";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -35,8 +35,8 @@ pub struct RuntimePathOverrides {
 pub struct RuntimePaths {
     pub data_root_path: PathBuf,
     pub debug_log_path: PathBuf,
-    pub runtime_assets_root_path: PathBuf,
-    pub runtime_assets_seed_root_path: PathBuf,
+    pub runtime_support_root_path: PathBuf,
+    pub runtime_support_seed_root_path: PathBuf,
 }
 
 pub fn resolve_runtime_paths(overrides: RuntimePathOverrides) -> Result<RuntimePaths> {
@@ -74,13 +74,13 @@ fn resolve_runtime_paths_with(
         Some(path) => resolve_from_base(cwd, path),
         None => data_root_path.join(DEBUG_EVENTS_RELATIVE_PATH),
     };
-    let (runtime_assets_root_path, runtime_assets_seed_root_path) =
-        resolve_runtime_assets_roots(current_exe, cwd, &data_root_path)?;
+    let (runtime_support_root_path, runtime_support_seed_root_path) =
+        resolve_runtime_support_roots(current_exe, cwd, &data_root_path)?;
     Ok(RuntimePaths {
         data_root_path,
         debug_log_path,
-        runtime_assets_root_path,
-        runtime_assets_seed_root_path,
+        runtime_support_root_path,
+        runtime_support_seed_root_path,
     })
 }
 
@@ -116,33 +116,35 @@ fn resolve_data_root(
     }
 }
 
-fn resolve_runtime_assets_roots(
+fn resolve_runtime_support_roots(
     current_exe: &Path,
     cwd: &Path,
     data_root_path: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
-    if let Some(seed_root) = resolve_bundle_seed_runtime_assets_root(current_exe) {
+    if let Some(seed_root) = resolve_bundle_seed_runtime_support_root(current_exe) {
         let runtime_home = data_root_path.parent().context(
-            "failed to resolve runtime assets root because data root has no parent directory",
+            "failed to resolve runtime support root because data root has no parent directory",
         )?;
-        return Ok((runtime_home.join(RUNTIME_ASSETS_DIR_NAME), seed_root));
+        return Ok((runtime_home.join(RUNTIME_SUPPORT_DIR_NAME), seed_root));
     }
 
     if let Some(source_tree_root) = resolve_source_tree_root(current_exe, cwd) {
-        let runtime_assets_root = source_tree_root.join(RUNTIME_ASSETS_DIR_NAME);
-        return Ok((runtime_assets_root.clone(), runtime_assets_root));
+        let runtime_support_root = source_tree_root.join(RUNTIME_SUPPORT_DIR_NAME);
+        return Ok((runtime_support_root.clone(), runtime_support_root));
     }
 
     bail!(
-        "failed to resolve runtime assets root; expected `{}` beside the source checkout or inside the app bundle resources",
-        RUNTIME_ASSETS_DIR_NAME
+        "failed to resolve runtime support root; expected `{}` beside the source checkout or inside the app bundle resources",
+        RUNTIME_SUPPORT_DIR_NAME
     );
 }
 
-fn resolve_bundle_seed_runtime_assets_root(current_exe: &Path) -> Option<PathBuf> {
+fn resolve_bundle_seed_runtime_support_root(current_exe: &Path) -> Option<PathBuf> {
     let resources_dir = current_exe.parent()?.parent()?.join("Resources");
-    let runtime_assets_root = resources_dir.join(RUNTIME_ASSETS_DIR_NAME);
-    runtime_assets_root.is_dir().then_some(runtime_assets_root)
+    let runtime_support_root = resources_dir.join(RUNTIME_SUPPORT_DIR_NAME);
+    runtime_support_root
+        .is_dir()
+        .then_some(runtime_support_root)
 }
 
 fn resolve_source_tree_root(current_exe: &Path, cwd: &Path) -> Option<PathBuf> {
@@ -152,7 +154,7 @@ fn resolve_source_tree_root(current_exe: &Path, cwd: &Path) -> Option<PathBuf> {
 fn find_source_tree_root(start: Option<&Path>) -> Option<PathBuf> {
     let mut current = start;
     while let Some(path) = current {
-        if path.join(RUNTIME_ASSETS_DIR_NAME).is_dir() && path.join("Cargo.toml").is_file() {
+        if path.join(RUNTIME_SUPPORT_DIR_NAME).is_dir() && path.join("Cargo.toml").is_file() {
             return Some(path.to_path_buf());
         }
         current = path.parent();
@@ -194,7 +196,7 @@ mod tests {
 
     fn create_source_tree() -> (PathBuf, PathBuf) {
         let root = temp_path("source-tree");
-        fs::create_dir_all(root.join("runtime_assets")).unwrap();
+        fs::create_dir_all(root.join("runtime_support")).unwrap();
         fs::write(
             root.join("Cargo.toml"),
             "[package]\nname = \"threadbridge-test\"\n",
@@ -223,21 +225,21 @@ mod tests {
             source_root.join("data").join(DEBUG_EVENTS_RELATIVE_PATH)
         );
         assert_eq!(
-            paths.runtime_assets_root_path,
-            source_root.join("runtime_assets")
+            paths.runtime_support_root_path,
+            source_root.join("runtime_support")
         );
         assert_eq!(
-            paths.runtime_assets_seed_root_path,
-            source_root.join("runtime_assets")
+            paths.runtime_support_seed_root_path,
+            source_root.join("runtime_support")
         );
     }
 
     #[test]
-    fn release_build_defaults_to_platform_data_dir_and_bundle_runtime_assets() {
+    fn release_build_defaults_to_platform_data_dir_and_bundle_runtime_support() {
         let cwd = temp_path("release-default");
         let platform_root = temp_path("platform");
         let app_root = temp_path("bundle-root").join("threadBridge.app");
-        let bundle_seed_root = app_root.join("Contents/Resources/runtime_assets");
+        let bundle_seed_root = app_root.join("Contents/Resources/runtime_support");
         fs::create_dir_all(&bundle_seed_root).unwrap();
         let current_exe = app_root.join("Contents/MacOS/threadbridge_desktop");
         fs::create_dir_all(current_exe.parent().unwrap()).unwrap();
@@ -260,10 +262,10 @@ mod tests {
                 .join(DEBUG_EVENTS_RELATIVE_PATH)
         );
         assert_eq!(
-            paths.runtime_assets_root_path,
-            platform_root.join("threadBridge/runtime_assets")
+            paths.runtime_support_root_path,
+            platform_root.join("threadBridge/runtime_support")
         );
-        assert_eq!(paths.runtime_assets_seed_root_path, bundle_seed_root);
+        assert_eq!(paths.runtime_support_seed_root_path, bundle_seed_root);
     }
 
     #[test]
@@ -288,8 +290,8 @@ mod tests {
             cwd.join("custom-data").join(DEBUG_EVENTS_RELATIVE_PATH)
         );
         assert_eq!(
-            paths.runtime_assets_root_path,
-            source_root.join("runtime_assets")
+            paths.runtime_support_root_path,
+            source_root.join("runtime_support")
         );
     }
 

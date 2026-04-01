@@ -99,7 +99,7 @@ Bot-local runtime state defaults by build profile:
 - debug builds use repo-local `./data`
 - release builds use the platform local app-data directory
 - on macOS, the bundled release data root is `~/Library/Application Support/threadBridge/data`
-- bundled releases install runtime assets under `~/Library/Application Support/threadBridge/runtime_assets`
+- bundled releases install runtime support under `~/Library/Application Support/threadBridge/runtime_support`
 - `DATA_ROOT` and `DEBUG_LOG_PATH` can override either mode explicitly
 
 Default local management address:
@@ -269,7 +269,7 @@ The real workspace is authoritative for project files. The bot-local runtime dat
 
 - plan registry and design references: [docs/plan/README.md](docs/plan/README.md)
 - maintainer guide: [AGENTS.md](AGENTS.md)
-- workspace runtime appendix source: [runtime_assets/templates/AGENTS.md](runtime_assets/templates/AGENTS.md)
+- workspace runtime appendix source: [runtime_support/templates/AGENTS.md](runtime_support/templates/AGENTS.md)
 - slash-command reference: [docs/telegram-slash-commands.md](docs/telegram-slash-commands.md)
 - release notes index: [docs/releases/README.md](docs/releases/README.md)
 
