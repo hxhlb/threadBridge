@@ -164,6 +164,21 @@ impl WorkspaceRuntimeManager {
         write_workspace_runtime_state_file(&runtime.workspace_path, &state).await?;
         Ok(state)
     }
+
+    pub async fn restart_workspace_daemon(
+        &self,
+        workspace_path: &Path,
+    ) -> Result<WorkspaceRuntimeState> {
+        let key = canonical_workspace_key(workspace_path)?;
+        let existing = {
+            let mut inner = self.inner.lock().await;
+            inner.remove(&key)
+        };
+        if let Some(runtime) = existing {
+            stop_workspace_runtime(runtime).await?;
+        }
+        self.ensure_workspace_daemon(workspace_path).await
+    }
 }
 
 fn canonical_workspace_key(workspace_path: &Path) -> Result<String> {
@@ -258,6 +273,26 @@ async fn spawn_workspace_runtime(
         child,
     };
     Ok(runtime)
+}
+
+async fn stop_workspace_runtime(runtime: WorkspaceRuntime) -> Result<()> {
+    let mut child = runtime.child.lock().await;
+    match child
+        .try_wait()
+        .context("failed to poll shared app-server worker process")?
+    {
+        Some(_) => Ok(()),
+        None => {
+            child
+                .start_kill()
+                .context("failed to stop shared app-server worker process")?;
+            let _ = child
+                .wait()
+                .await
+                .context("failed waiting for shared app-server worker process to exit")?;
+            Ok(())
+        }
+    }
 }
 
 fn normalize_non_empty_url(url: Option<String>) -> Option<String> {
@@ -490,13 +525,17 @@ async fn cleanup_partial_workspace_runtime_state_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        HcodexReuseStrategy, daemon_endpoint_is_live, normalize_non_empty_url,
+        HcodexReuseStrategy, WorkspaceRuntime, daemon_endpoint_is_live, normalize_non_empty_url,
         resolve_worker_binary_path_from, reuse_hcodex_strategy, spawned_hcodex_url,
+        stop_workspace_runtime,
     };
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::net::TcpListener;
+    use tokio::process::Command;
+    use tokio::sync::Mutex;
 
     fn unique_temp_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -626,6 +665,25 @@ mod tests {
 
         drop(listener);
         assert!(!daemon_endpoint_is_live(&url).await);
+    }
+
+    #[tokio::test]
+    async fn stop_workspace_runtime_terminates_cached_child() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let runtime = WorkspaceRuntime {
+            workspace_path: unique_temp_dir("stop-runtime"),
+            daemon_url: "ws://127.0.0.1:62000".to_owned(),
+            worker_url: "ws://127.0.0.1:62001".to_owned(),
+            hcodex_url: None,
+            child: Arc::new(Mutex::new(child)),
+        };
+
+        stop_workspace_runtime(runtime)
+            .await
+            .expect("stop runtime child");
     }
 }
 

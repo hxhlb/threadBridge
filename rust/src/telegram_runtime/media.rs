@@ -571,7 +571,11 @@ pub(crate) async fn queue_image_for_thread(
             bot,
             msg.chat.id,
             Some(thread_id),
-            session_binding_hint_for_state(resolved_state, session.as_ref()),
+            session_binding_access_hint(
+                resolved_state,
+                session.as_ref(),
+                blocking_snapshot.as_ref(),
+            ),
         )
         .await?;
         return Ok(());
@@ -682,9 +686,10 @@ pub(crate) async fn analyze_pending_image_batch(
     let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
         if let Some(callback_query_id) = callback_query_id {
             bot.answer_callback_query(callback_query_id.clone())
-                .text(session_binding_hint_for_state(
+                .text(session_binding_access_hint(
                     resolved_state,
                     session.as_ref(),
+                    blocking_snapshot.as_ref(),
                 ))
                 .show_alert(true)
                 .await?;

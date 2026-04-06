@@ -201,6 +201,9 @@ pub enum RuntimeControlActionResult {
     RepairSessionBinding {
         thread_key: String,
         verified: bool,
+        runtime_restarted: bool,
+        stale_busy_cleared: bool,
+        stale_tui_cleared: bool,
         session_broken_reason: Option<String>,
     },
     SetWorkspaceExecutionMode {

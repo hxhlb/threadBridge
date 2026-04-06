@@ -725,7 +725,11 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    session_binding_hint_for_state(resolved_state, session.as_ref()),
+                    session_binding_access_hint(
+                        resolved_state,
+                        session.as_ref(),
+                        blocking_snapshot.as_ref(),
+                    ),
                 )
                 .await?;
                 return Ok(());
@@ -764,7 +768,7 @@ pub(crate) async fn run_command(
                             bot,
                             msg.chat.id,
                             Some(thread_id),
-                            "Codex session continuity verified for this workspace.",
+                            "Workspace runtime restarted and the saved Codex session was verified.",
                         )
                         .await?;
                     } else {
@@ -772,7 +776,7 @@ pub(crate) async fn run_command(
                             bot,
                             msg.chat.id,
                             Some(thread_id),
-                            "Codex session repair failed. Use /start_fresh_session to start fresh or /repair_session_binding to retry.",
+                            "Workspace runtime restarted, but the saved Codex session still could not be verified. Use /start_fresh_session to start fresh or /repair_session_binding to retry.",
                         )
                         .await?;
                     }
@@ -1312,7 +1316,11 @@ pub(crate) async fn run_command(
                     bot,
                     msg.chat.id,
                     Some(thread_id),
-                    session_binding_hint_for_state(resolved_state, session.as_ref()),
+                    session_binding_access_hint(
+                        resolved_state,
+                        session.as_ref(),
+                        blocking_snapshot.as_ref(),
+                    ),
                 )
                 .await?;
                 return Ok(());
@@ -1568,7 +1576,11 @@ pub(crate) async fn run_text_message(
             bot,
             msg.chat.id,
             Some(thread_id),
-            session_binding_hint_for_state(resolved_state, session.as_ref()),
+            session_binding_access_hint(
+                resolved_state,
+                session.as_ref(),
+                blocking_snapshot.as_ref(),
+            ),
         )
         .await?;
         return Ok(());

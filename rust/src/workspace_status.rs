@@ -463,6 +463,33 @@ pub async fn remove_local_tui_session_claim(workspace_path: &Path) -> Result<()>
     Ok(())
 }
 
+pub async fn clear_stale_local_tui_session_claim(workspace_path: &Path) -> Result<bool> {
+    let Some(local_tui_claim) = read_local_tui_session_claim(workspace_path).await? else {
+        return Ok(false);
+    };
+    if local_tui_claim_is_live(&local_tui_claim) {
+        return Ok(false);
+    }
+
+    remove_local_tui_session_claim(workspace_path).await?;
+    if let Some(session_id) = local_tui_claim.session_id.as_deref()
+        && let Some(mut current) = read_session_status(workspace_path, session_id).await?
+        && current.activity_source == SessionActivitySource::Tui
+    {
+        let was_busy = current.phase.is_turn_busy();
+        current.live = false;
+        if was_busy {
+            current.phase = WorkspaceStatusPhase::Idle;
+            current.turn_id = None;
+        }
+        current.updated_at = now_iso();
+        write_session_status(workspace_path, &current).await?;
+    }
+    let aggregate = read_workspace_aggregate_status(workspace_path).await?;
+    let _ = refresh_workspace_aggregate_status(workspace_path, aggregate).await?;
+    Ok(true)
+}
+
 pub async fn append_status_event(
     workspace_path: &Path,
     event: &WorkspaceStatusEventRecord,
@@ -1275,13 +1302,13 @@ mod tests {
         HCODEX_INGRESS_CLIENT, LEGACY_TUI_PROXY_CLIENT, ObserverAttachMode, SessionActivitySource,
         SessionCurrentStatus, WorkspaceAggregateStatus, WorkspaceEventLogRead,
         WorkspaceStatusCache, WorkspaceStatusEventRecord, WorkspaceStatusPhase,
-        append_status_event, busy_selected_session_status, current_status_path,
-        default_local_tui_session_claim, ensure_workspace_status_surface, events_path,
-        legacy_current_status_path, legacy_events_path, legacy_local_tui_session_claim_path,
-        legacy_session_status_path, list_live_local_sessions, local_tui_session_claim_path,
-        read_local_tui_session_claim, read_session_status, read_workspace_aggregate_status,
-        read_workspace_event_log_repairing, record_bot_status_event,
-        record_hcodex_ingress_completed, record_hcodex_ingress_connected,
+        append_status_event, busy_selected_session_status, clear_stale_local_tui_session_claim,
+        current_status_path, default_local_tui_session_claim, ensure_workspace_status_surface,
+        events_path, legacy_current_status_path, legacy_events_path,
+        legacy_local_tui_session_claim_path, legacy_session_status_path, list_live_local_sessions,
+        local_tui_session_claim_path, read_local_tui_session_claim, read_session_status,
+        read_workspace_aggregate_status, read_workspace_event_log_repairing,
+        record_bot_status_event, record_hcodex_ingress_completed, record_hcodex_ingress_connected,
         record_hcodex_ingress_preview_text, record_hcodex_ingress_prompt,
         record_hcodex_ingress_turn_started, record_hcodex_launcher_ended,
         record_hcodex_launcher_started, session_status_path,
@@ -1713,6 +1740,62 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn clear_stale_local_tui_session_claim_marks_session_idle_and_not_live() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let mut claim = default_local_tui_session_claim(&workspace, "thread-key", 999_999);
+        claim.session_id = Some("thr_stale".to_owned());
+        super::write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
+
+        super::write_session_status(
+            &workspace,
+            &SessionCurrentStatus {
+                schema_version: 2,
+                workspace_cwd: workspace.display().to_string(),
+                session_id: "thr_stale".to_owned(),
+                activity_source: SessionActivitySource::Tui,
+                live: true,
+                phase: WorkspaceStatusPhase::TurnRunning,
+                shell_pid: Some(999_999),
+                child_pid: None,
+                child_pgid: None,
+                child_command: None,
+                client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
+                turn_id: Some("turn-1".to_owned()),
+                summary: None,
+                pending_interrupt_turn_id: None,
+                pending_interrupt_requested_at: None,
+                observer_attach_mode: None,
+                updated_at: "2026-03-25T00:00:00.000Z".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            clear_stale_local_tui_session_claim(&workspace)
+                .await
+                .unwrap()
+        );
+
+        assert!(
+            read_local_tui_session_claim(&workspace)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let session = read_session_status(&workspace, "thr_stale")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!session.live);
+        assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
+        assert_eq!(session.turn_id, None);
     }
 
     #[tokio::test]

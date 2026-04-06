@@ -27,8 +27,9 @@ use crate::runtime_protocol::{
 use crate::thread_state::{effective_busy_snapshot_for_binding, resolve_thread_state};
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 use crate::workspace_status::{
-    SessionActivitySource, read_local_tui_session_claim, read_session_status,
-    record_managed_runtime_interrupt_requested,
+    SessionActivitySource, clear_stale_local_tui_session_claim, read_local_tui_session_claim,
+    read_session_status, record_managed_runtime_interrupt_requested,
+    recover_stale_tui_busy_session, stale_tui_busy_session_needs_recovery,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -572,9 +573,9 @@ impl SharedControlHandle {
                 &result.record,
                 LogDirection::System,
                 if result.verified {
-                    format!("Codex session revalidated from {origin}.")
+                    format!("Codex session force-recovered and revalidated from {origin}.")
                 } else {
-                    format!("Codex session revalidation failed from {origin}.")
+                    format!("Codex session force-recovery failed verification from {origin}.")
                 },
                 None,
             )
@@ -732,6 +733,9 @@ impl SharedControlHandle {
                     result: RuntimeControlActionResult::RepairSessionBinding {
                         thread_key: repaired.record.metadata.thread_key,
                         verified: repaired.verified,
+                        runtime_restarted: repaired.runtime_restarted,
+                        stale_busy_cleared: repaired.stale_busy_cleared,
+                        stale_tui_cleared: repaired.stale_tui_cleared,
                         session_broken_reason: updated_binding
                             .and_then(|binding| binding.session_broken_reason),
                     },
@@ -918,6 +922,50 @@ impl WorkspaceRuntimeService {
         Ok(self.codex_workspace_from_runtime_state(workspace, &runtime_state))
     }
 
+    pub async fn restart_workspace_runtime_for_control(
+        &self,
+        workspace: PathBuf,
+    ) -> Result<CodexWorkspace> {
+        info!(
+            event = "runtime_control.workspace.restart_control_runtime",
+            workspace = %workspace.display(),
+            owner_managed = self.ctx.runtime_is_owner_managed(),
+            "runtime control requested forced workspace runtime restart"
+        );
+        ensure_workspace_runtime(
+            &self.ctx.runtime.runtime_support_root_path,
+            &self.ctx.runtime.data_root_path,
+            &self.ctx.seed_template_path,
+            &workspace,
+        )
+        .await?;
+        let runtime_state = if self.ctx.runtime_is_owner_managed() {
+            self.ctx
+                .app_server_runtime
+                .restart_workspace_daemon(&workspace)
+                .await?
+        } else {
+            let runtime_state = self
+                .ctx
+                .app_server_runtime
+                .restart_workspace_daemon(&workspace)
+                .await?;
+            let _ = self
+                .ctx
+                .hcodex_ingress
+                .as_ref()
+                .context("self-managed control runtime is missing hcodex ingress manager")?
+                .ensure_workspace_ingress(
+                    &workspace,
+                    runtime_state.client_ws_url(),
+                    runtime_state.client_ws_url(),
+                )
+                .await?;
+            runtime_state
+        };
+        Ok(self.codex_workspace_from_runtime_state(workspace, &runtime_state))
+    }
+
     async fn resolve_control_runtime_state(
         &self,
         workspace: &Path,
@@ -1051,6 +1099,15 @@ pub enum WorkspaceAddResolution {
 pub struct SessionRepairResult {
     pub record: ThreadRecord,
     pub verified: bool,
+    pub runtime_restarted: bool,
+    pub stale_busy_cleared: bool,
+    pub stale_tui_cleared: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SessionRepairCleanup {
+    stale_busy_cleared: bool,
+    stale_tui_cleared: bool,
 }
 
 #[derive(Clone)]
@@ -1165,8 +1222,13 @@ impl WorkspaceSessionService {
         let codex_workspace = self
             .ctx
             .workspace_runtime_service()
-            .prepare_workspace_runtime_for_control(workspace_path)
+            .restart_workspace_runtime_for_control(workspace_path.clone())
             .await?;
+        let cleanup = repair_stale_session_state(&workspace_path, binding).await?;
+        let mut record = record;
+        if cleanup.stale_tui_cleared {
+            record = self.ctx.repository.clear_tui_adoption_state(record).await?;
+        }
         match self
             .ctx
             .codex
@@ -1180,6 +1242,9 @@ impl WorkspaceSessionService {
                     .mark_session_binding_verified(record)
                     .await?,
                 verified: true,
+                runtime_restarted: true,
+                stale_busy_cleared: cleanup.stale_busy_cleared,
+                stale_tui_cleared: cleanup.stale_tui_cleared,
             }),
             Err(error) => Ok(SessionRepairResult {
                 record: self
@@ -1188,9 +1253,39 @@ impl WorkspaceSessionService {
                     .mark_session_binding_broken(record, error.to_string())
                     .await?,
                 verified: false,
+                runtime_restarted: true,
+                stale_busy_cleared: cleanup.stale_busy_cleared,
+                stale_tui_cleared: cleanup.stale_tui_cleared,
             }),
         }
     }
+}
+
+async fn repair_stale_session_state(
+    workspace_path: &Path,
+    binding: &SessionBinding,
+) -> Result<SessionRepairCleanup> {
+    let mut cleanup = SessionRepairCleanup::default();
+
+    if let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref()
+        && let Some(snapshot) = read_session_status(workspace_path, tui_session_id).await?
+        && snapshot.activity_source == SessionActivitySource::Tui
+        && stale_tui_busy_session_needs_recovery(workspace_path, &snapshot).await?
+    {
+        if recover_stale_tui_busy_session(workspace_path, tui_session_id)
+            .await?
+            .is_some()
+        {
+            cleanup.stale_busy_cleared = true;
+            cleanup.stale_tui_cleared = true;
+        }
+    }
+
+    if clear_stale_local_tui_session_claim(workspace_path).await? {
+        cleanup.stale_tui_cleared = true;
+    }
+
+    Ok(cleanup)
 }
 
 #[derive(Debug, Clone)]
@@ -1553,13 +1648,21 @@ fn apple_script_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        preflight_workspace_add, probe_workspace_surface, reset_workspace_runtime_surface,
+        preflight_workspace_add, probe_workspace_surface, repair_stale_session_state,
+        reset_workspace_runtime_surface,
     };
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::fs;
 
+    use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
+    use crate::repository::SessionBinding;
     use crate::repository::ThreadRepository;
+    use crate::workspace_status::{
+        SessionActivitySource, SessionCurrentStatus, WorkspaceStatusPhase,
+        default_local_tui_session_claim, ensure_workspace_status_surface,
+        read_local_tui_session_claim, read_session_status, write_local_tui_session_claim,
+    };
 
     fn temp_dir(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1727,6 +1830,72 @@ mod tests {
                 .unwrap()
         );
         assert!(fs::try_exists(workspace.join("AGENTS.md")).await.unwrap());
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn repair_stale_session_state_clears_dead_tui_claim_and_busy_snapshot() {
+        let workspace = temp_dir("repair-stale-session");
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let mut claim = default_local_tui_session_claim(&workspace, "thread-1", 999_999);
+        claim.session_id = Some("thr_tui".to_owned());
+        write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
+        let session = SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: workspace.display().to_string(),
+            session_id: "thr_tui".to_owned(),
+            activity_source: SessionActivitySource::Tui,
+            live: true,
+            phase: WorkspaceStatusPhase::TurnRunning,
+            shell_pid: Some(999_999),
+            child_pid: None,
+            child_pgid: None,
+            child_command: None,
+            client: Some("threadbridge-hcodex-ingress".to_owned()),
+            turn_id: Some("turn-1".to_owned()),
+            summary: None,
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
+            observer_attach_mode: None,
+            updated_at: "2026-04-06T00:00:00.000Z".to_owned(),
+        };
+        fs::create_dir_all(workspace.join(".threadbridge/state/runtime-observer/sessions"))
+            .await
+            .unwrap();
+        fs::write(
+            workspace.join(".threadbridge/state/runtime-observer/sessions/thr_tui.json"),
+            format!("{}\n", serde_json::to_string_pretty(&session).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let mut binding = SessionBinding::fresh(
+            Some(workspace.display().to_string()),
+            Some("thr_current".to_owned()),
+            SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+        );
+        binding.tui_active_codex_thread_id = Some("thr_tui".to_owned());
+
+        let cleanup = repair_stale_session_state(&workspace, &binding)
+            .await
+            .unwrap();
+        assert!(cleanup.stale_busy_cleared);
+        assert!(cleanup.stale_tui_cleared);
+        assert!(
+            read_local_tui_session_claim(&workspace)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let updated = read_session_status(&workspace, "thr_tui")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.phase, WorkspaceStatusPhase::Idle);
+        assert!(!updated.live);
 
         let _ = fs::remove_dir_all(workspace).await;
     }

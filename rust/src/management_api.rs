@@ -17,9 +17,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(not(test))]
-use teloxide::requests::Requester;
-#[cfg(not(test))]
 use teloxide::Bot;
+#[cfg(not(test))]
+use teloxide::requests::Requester;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -951,7 +951,9 @@ impl ManagementApiState {
     async fn refresh_cached_bot_identity(&self) -> Result<()> {
         let telegram = load_optional_telegram_config_from_path(&self.runtime.config_env_path())?;
         self.refresh_cached_bot_identity_for_token(
-            telegram.as_ref().map(|config| config.telegram_token.as_str()),
+            telegram
+                .as_ref()
+                .map(|config| config.telegram_token.as_str()),
         )
         .await;
         Ok(())
@@ -963,10 +965,7 @@ impl ManagementApiState {
         *current = next;
     }
 
-    async fn ensure_cached_bot_identity(
-        &self,
-        token: Option<&str>,
-    ) -> CachedTelegramBotIdentity {
+    async fn ensure_cached_bot_identity(&self, token: Option<&str>) -> CachedTelegramBotIdentity {
         let needs_refresh = {
             let current = self.bot_identity.read().await;
             current.token.as_deref() != token
@@ -999,7 +998,9 @@ impl ManagementApiState {
         let config_env_path = self.runtime.config_env_path();
         let bot_identity = self
             .ensure_cached_bot_identity(
-                telegram.as_ref().map(|config| config.telegram_token.as_str()),
+                telegram
+                    .as_ref()
+                    .map(|config| config.telegram_token.as_str()),
             )
             .await;
         Ok(SetupStateView {
@@ -1630,11 +1631,6 @@ impl ManagementApiState {
         thread_key: &str,
         request: RuntimeControlActionRequest,
     ) -> Result<RuntimeControlActionEnvelope> {
-        if matches!(&request, RuntimeControlActionRequest::RepairSessionBinding) {
-            let config = self.workspace_launch_config(thread_key).await?;
-            self.maybe_reconcile_owner_workspace(&config.workspace_cwd)
-                .await?;
-        }
         let control = self.shared_control().await?;
         let result = control
             .execute_runtime_control_action(thread_key, request, "local management UI")
@@ -1767,21 +1763,10 @@ impl ManagementApiState {
         })
     }
 
-    async fn maybe_reconcile_owner_workspace(&self, workspace_cwd: &str) -> Result<()> {
-        let Some(owner) = self.runtime_owner.read().await.clone() else {
-            return Ok(());
-        };
-        let _ = owner.reconcile_managed_workspaces([workspace_cwd]).await?;
-        Ok(())
-    }
-
     async fn write_telegram_setup(&self, payload: UpdateTelegramSetupRequest) -> Result<()> {
         let mut updates = BTreeMap::new();
         let telegram_token = payload.telegram_token.trim().to_owned();
-        updates.insert(
-            "TELEGRAM_BOT_TOKEN".to_owned(),
-            telegram_token.clone(),
-        );
+        updates.insert("TELEGRAM_BOT_TOKEN".to_owned(), telegram_token.clone());
         let authorized = payload
             .authorized_user_ids
             .iter()
@@ -1817,9 +1802,7 @@ async fn resolve_cached_bot_identity(token: Option<&str>) -> CachedTelegramBotId
     }
 }
 
-async fn resolve_telegram_bot_identity(
-    token: &str,
-) -> Result<(Option<String>, Option<String>)> {
+async fn resolve_telegram_bot_identity(token: &str) -> Result<(Option<String>, Option<String>)> {
     let username = fetch_telegram_bot_username(token).await?;
     let url = username
         .as_deref()
@@ -1829,9 +1812,12 @@ async fn resolve_telegram_bot_identity(
 
 #[cfg(not(test))]
 async fn fetch_telegram_bot_username(token: &str) -> Result<Option<String>> {
-    let me = timeout(TokioDuration::from_secs(5), Bot::new(token.to_owned()).get_me())
-        .await
-        .context("Telegram getMe timed out")??;
+    let me = timeout(
+        TokioDuration::from_secs(5),
+        Bot::new(token.to_owned()).get_me(),
+    )
+    .await
+    .context("Telegram getMe timed out")??;
     Ok(me.user.username.clone())
 }
 
@@ -2317,9 +2303,9 @@ impl IntoResponse for ManagementApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MANAGEMENT_UI_JS, ManagementApiHandle, ManagementEventSnapshot,
-        UpdateTelegramSetupRequest, WorkingSessionRecordView, WorkingSessionSummaryView,
-        diff_management_event_snapshots, spawn_management_api, write_env_file,
+        MANAGEMENT_UI_JS, ManagementApiHandle, ManagementEventSnapshot, UpdateTelegramSetupRequest,
+        WorkingSessionRecordView, WorkingSessionSummaryView, diff_management_event_snapshots,
+        spawn_management_api, write_env_file,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
     use crate::collaboration_mode::CollaborationMode;
@@ -2436,7 +2422,10 @@ mod tests {
             &root_b.join("data").join("config.env.local"),
             &BTreeMap::from([
                 ("TELEGRAM_BOT_TOKEN".to_owned(), "222:bbb".to_owned()),
-                ("AUTHORIZED_TELEGRAM_USER_IDS".to_owned(), "41,99".to_owned()),
+                (
+                    "AUTHORIZED_TELEGRAM_USER_IDS".to_owned(),
+                    "41,99".to_owned(),
+                ),
             ]),
         )
         .await

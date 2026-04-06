@@ -940,19 +940,57 @@ pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static
 pub(crate) fn session_binding_hint_for_state(
     state: ResolvedThreadState,
     session: Option<&SessionBinding>,
-) -> &'static str {
+) -> String {
     match state.binding_status {
         BindingStatus::Broken => {
-            "This workspace's Codex session is invalid. Use /repair_session_binding to verify it again or /start_fresh_session to start a fresh one for the same workspace."
+            let has_tui_residue = session
+                .and_then(|binding| binding.tui_active_codex_thread_id.as_deref())
+                .is_some();
+            if has_tui_residue {
+                "This workspace's Codex session is invalid, and a shared TUI session is still recorded for this workspace. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again.".to_owned()
+            } else {
+                "This workspace's Codex session is invalid. Use /repair_session_binding to force-restart the workspace runtime and verify it again, or /start_fresh_session to start a fresh one for the same workspace.".to_owned()
+            }
         }
         BindingStatus::Unbound => {
-            "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>."
+            "This workspace thread is not bound yet. Archive it and re-add the workspace from the control chat with /add_workspace <absolute-path>.".to_owned()
         }
         BindingStatus::Healthy if usable_bound_session_id(state, session).is_none() => {
-            healthy_binding_hint(session)
+            healthy_binding_hint(session).to_owned()
         }
-        BindingStatus::Healthy => session_binding_hint(session),
+        BindingStatus::Healthy => session_binding_hint(session).to_owned(),
     }
+}
+
+pub(crate) fn session_binding_access_hint(
+    state: ResolvedThreadState,
+    session: Option<&SessionBinding>,
+    blocking_snapshot: Option<&SessionCurrentStatus>,
+) -> String {
+    if state.binding_status == BindingStatus::Broken
+        && let Some(snapshot) = blocking_snapshot
+    {
+        let activity = match (snapshot.activity_source, snapshot.phase) {
+            (
+                crate::workspace_status::SessionActivitySource::Tui,
+                crate::workspace_status::WorkspaceStatusPhase::TurnFinalizing,
+            ) => "a shared TUI session is still settling after an interrupt request",
+            (crate::workspace_status::SessionActivitySource::Tui, _) => {
+                "a shared TUI session is still recorded as running"
+            }
+            (
+                crate::workspace_status::SessionActivitySource::ManagedRuntime,
+                crate::workspace_status::WorkspaceStatusPhase::TurnFinalizing,
+            ) => "a Telegram-owned turn is still settling after an interrupt request",
+            (crate::workspace_status::SessionActivitySource::ManagedRuntime, _) => {
+                "a Telegram-owned turn is still recorded as running"
+            }
+        };
+        return format!(
+            "This workspace's Codex session is invalid, and {activity}. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again."
+        );
+    }
+    session_binding_hint_for_state(state, session)
 }
 
 pub(crate) async fn resolve_busy_gate_state(
@@ -1006,9 +1044,9 @@ mod tests {
     use super::{
         AppState, Command, TelegramSystemIntent, TelegramTextRole, command_list,
         current_bound_session_id, format_role_text, format_system_text,
-        normalize_slash_command_text, parse_fallback_command_text, session_binding_hint_for_state,
-        should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
-        usable_bound_session_id,
+        normalize_slash_command_text, parse_fallback_command_text, session_binding_access_hint,
+        session_binding_hint_for_state, should_cleanup_topic_rename_service_message,
+        topic_rename_service_message_thread_id, usable_bound_session_id,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
     use crate::app_server_runtime::WorkspaceRuntimeState;
@@ -1019,8 +1057,9 @@ mod tests {
     use crate::runtime_control::{RuntimeControlContext, RuntimeOwnershipMode};
     use crate::thread_state::{BindingStatus, LifecycleStatus, ResolvedThreadState, RunStatus};
     use crate::workspace_status::{
-        ObserverAttachMode, SessionActivitySource, WorkspaceStatusCache, WorkspaceStatusPhase,
-        read_session_status, record_hcodex_ingress_connected, record_hcodex_launcher_started,
+        ObserverAttachMode, SessionActivitySource, SessionCurrentStatus, WorkspaceStatusCache,
+        WorkspaceStatusPhase, read_session_status, record_hcodex_ingress_connected,
+        record_hcodex_launcher_started,
     };
     use anyhow::Context;
     use serde_json::json;
@@ -1289,6 +1328,40 @@ mod tests {
         let hint = session_binding_hint_for_state(state, None);
         assert!(hint.contains("/repair_session_binding"));
         assert!(hint.contains("/start_fresh_session"));
+        assert!(hint.contains("force-restart"));
+    }
+
+    #[test]
+    fn binding_access_hint_prefers_combined_broken_and_busy_message() {
+        let state = ResolvedThreadState {
+            lifecycle_status: LifecycleStatus::Active,
+            binding_status: BindingStatus::Broken,
+            run_status: RunStatus::Running,
+            run_phase: crate::workspace_status::WorkspaceStatusPhase::TurnRunning,
+        };
+        let snapshot = SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: "/tmp/workspace".to_owned(),
+            session_id: "thr_tui".to_owned(),
+            activity_source: SessionActivitySource::Tui,
+            live: true,
+            phase: crate::workspace_status::WorkspaceStatusPhase::TurnRunning,
+            shell_pid: None,
+            child_pid: None,
+            child_pgid: None,
+            child_command: None,
+            client: None,
+            turn_id: Some("turn-1".to_owned()),
+            summary: None,
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
+            observer_attach_mode: None,
+            updated_at: "2026-04-06T00:00:00.000Z".to_owned(),
+        };
+        let hint = session_binding_access_hint(state, None, Some(&snapshot));
+        assert!(hint.contains("shared TUI session"));
+        assert!(hint.contains("/repair_session_binding"));
+        assert!(!hint.contains("/start_fresh_session"));
     }
 
     #[test]
