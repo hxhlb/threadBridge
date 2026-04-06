@@ -40,14 +40,15 @@ use crate::runtime_control::{
 use crate::runtime_owner::{DesktopRuntimeOwner, RuntimeOwnerStatus};
 pub use crate::runtime_protocol::{
     ArchivedThreadView, LaunchLocalSessionTarget, ManagedCodexBuildDefaultsView,
-    ManagedCodexBuildInfoView, ManagedCodexView, ManagedWorkspaceView, RuntimeControlAction,
-    RuntimeControlActionEnvelope, RuntimeControlActionRequest, RuntimeControlActionResult,
-    RuntimeEvent, RuntimeEventKind, RuntimeEventOperation, RuntimeHealthView, ThreadStateView,
-    WorkingSessionRecordView, WorkingSessionSummaryView,
+    ManagedCodexBuildInfoView, ManagedCodexView, ManagedWorkspaceView, MirrorPreviewDebugEventView,
+    RuntimeControlAction, RuntimeControlActionEnvelope, RuntimeControlActionRequest,
+    RuntimeControlActionResult, RuntimeEvent, RuntimeEventKind, RuntimeEventOperation,
+    RuntimeHealthView, ThreadStateView, WorkingSessionRecordView, WorkingSessionSummaryView,
 };
 use crate::runtime_protocol::{
     build_archived_thread_views, build_runtime_health, build_thread_views,
-    build_working_session_records, build_working_session_summaries, build_workspace_views,
+    build_working_session_mirror_debug_events, build_working_session_records,
+    build_working_session_summaries, build_workspace_views,
 };
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 
@@ -135,6 +136,17 @@ impl ManagementApiHandle {
     ) -> Result<Vec<WorkingSessionRecordView>> {
         self.state
             .working_session_records(thread_key, session_id)
+            .await
+            .map_err(|error| error.error)
+    }
+
+    pub async fn working_session_mirror_debug_events(
+        &self,
+        thread_key: &str,
+        session_id: &str,
+    ) -> Result<Vec<MirrorPreviewDebugEventView>> {
+        self.state
+            .working_session_mirror_debug_events(thread_key, session_id)
             .await
             .map_err(|error| error.error)
     }
@@ -411,6 +423,10 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             "/api/threads/:thread_key/sessions/:session_id/records",
             get(get_working_session_records),
         )
+        .route(
+            "/api/threads/:thread_key/sessions/:session_id/mirror-preview-events",
+            get(get_working_session_mirror_debug_events),
+        )
         .route("/api/workspaces", get(get_workspaces))
         .route(
             "/api/workspaces/pick-and-add",
@@ -602,6 +618,17 @@ async fn get_working_session_records(
     Ok(Json(
         state
             .working_session_records(&thread_key, &session_id)
+            .await?,
+    ))
+}
+
+async fn get_working_session_mirror_debug_events(
+    State(state): State<Arc<ManagementApiState>>,
+    AxumPath((thread_key, session_id)): AxumPath<(String, String)>,
+) -> Result<Json<Vec<MirrorPreviewDebugEventView>>, ManagementApiError> {
+    Ok(Json(
+        state
+            .working_session_mirror_debug_events(&thread_key, &session_id)
             .await?,
     ))
 }
@@ -1368,6 +1395,32 @@ impl ManagementApiState {
             .await?
             .context("managed workspace is missing session binding")?;
         build_working_session_records(&self.repository, &record, &binding, session_id)
+            .await?
+            .ok_or_else(|| {
+                ManagementApiError::not_found(anyhow!(
+                    "session `{session_id}` not found for active thread `{thread_key}`"
+                ))
+            })
+    }
+
+    async fn working_session_mirror_debug_events(
+        &self,
+        thread_key: &str,
+        session_id: &str,
+    ) -> Result<Vec<MirrorPreviewDebugEventView>, ManagementApiError> {
+        let record = self
+            .repository
+            .find_active_thread_by_key(thread_key)
+            .await?
+            .ok_or_else(|| {
+                ManagementApiError::not_found(anyhow!("active thread `{thread_key}` not found"))
+            })?;
+        let binding = self
+            .repository
+            .read_session_binding(&record)
+            .await?
+            .context("managed workspace is missing session binding")?;
+        build_working_session_mirror_debug_events(&self.repository, &record, &binding, session_id)
             .await?
             .ok_or_else(|| {
                 ManagementApiError::not_found(anyhow!(
@@ -2303,9 +2356,10 @@ impl IntoResponse for ManagementApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MANAGEMENT_UI_JS, ManagementApiHandle, ManagementEventSnapshot, UpdateTelegramSetupRequest,
-        WorkingSessionRecordView, WorkingSessionSummaryView, diff_management_event_snapshots,
-        spawn_management_api, write_env_file,
+        MANAGEMENT_UI_JS, ManagementApiHandle, ManagementEventSnapshot,
+        MirrorPreviewDebugEventView, UpdateTelegramSetupRequest, WorkingSessionRecordView,
+        WorkingSessionSummaryView, diff_management_event_snapshots, spawn_management_api,
+        write_env_file,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
     use crate::collaboration_mode::CollaborationMode;
@@ -2321,6 +2375,7 @@ mod tests {
     use crate::runtime_protocol::{
         RuntimeEventKind, RuntimeEventOperation, WorkingSessionRecordKind,
     };
+    use crate::workspace_status::record_tui_mirror_preview_sync;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -2516,6 +2571,42 @@ mod tests {
         assert_eq!(records[0].kind, WorkingSessionRecordKind::UserPrompt);
         assert_eq!(records[1].kind, WorkingSessionRecordKind::AssistantFinal);
 
+        record_tui_mirror_preview_sync(
+            &workspace,
+            "thr_current",
+            Some("turn-1"),
+            "2026-04-07T10:00:00.000Z",
+            "skipped_regressive",
+            Some("already_owned"),
+            Some("turn-1"),
+            Some("turn-1"),
+            false,
+            true,
+            "Drafting",
+            "Drafting a longer preview",
+            11,
+        )
+        .await
+        .unwrap();
+
+        let mirror_debug = client
+            .get(format!(
+                "{}/api/threads/{}/sessions/thr_current/mirror-preview-events",
+                handle.base_url, record.metadata.thread_key
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(mirror_debug.status().is_success());
+        let mirror_debug: Vec<MirrorPreviewDebugEventView> = mirror_debug.json().await.unwrap();
+        assert_eq!(mirror_debug.len(), 1);
+        assert_eq!(mirror_debug[0].decision, "skipped_regressive");
+        assert_eq!(
+            mirror_debug[0].claim_status.as_deref(),
+            Some("already_owned")
+        );
+        assert_eq!(mirror_debug[0].draft_id, Some(11));
+
         let missing = client
             .get(format!(
                 "{}/api/threads/{}/sessions/missing/records",
@@ -2525,6 +2616,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+
+        let missing_debug = client
+            .get(format!(
+                "{}/api/threads/{}/sessions/missing/mirror-preview-events",
+                handle.base_url, record.metadata.thread_key
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_debug.status(), reqwest::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

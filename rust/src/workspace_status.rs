@@ -1129,6 +1129,58 @@ pub async fn record_hcodex_ingress_preview_text(
     Ok(())
 }
 
+pub async fn record_tui_mirror_preview_sync(
+    workspace_path: &Path,
+    session_id: &str,
+    turn_id: Option<&str>,
+    source_event_at: &str,
+    decision: &str,
+    claim_status: Option<&str>,
+    previous_turn_id: Option<&str>,
+    active_turn_id: Option<&str>,
+    turn_transition: bool,
+    owns_active_turn: bool,
+    preview_text: &str,
+    previous_latest_preview_text: &str,
+    draft_id: i32,
+) -> Result<()> {
+    ensure_workspace_status_surface(workspace_path).await?;
+    let preview_text = preview_text.trim();
+    let previous_latest_preview_text = previous_latest_preview_text.trim();
+    let preview_chars = preview_text.chars().count();
+    let previous_latest_preview_chars = previous_latest_preview_text.chars().count();
+    let preview_head: String = preview_text.chars().take(80).collect();
+    let previous_latest_preview_head: String =
+        previous_latest_preview_text.chars().take(80).collect();
+    let record = WorkspaceStatusEventRecord {
+        schema_version: STATUS_SCHEMA_VERSION,
+        event: "mirror_preview_sync".to_owned(),
+        source: SessionActivitySource::Tui,
+        workspace_cwd: canonical_workspace_string(workspace_path),
+        occurred_at: now_iso(),
+        payload: json!({
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "source_event_at": source_event_at,
+            "decision": decision,
+            "claim_status": claim_status,
+            "previous_turn_id": previous_turn_id,
+            "active_turn_id": active_turn_id,
+            "turn_transition": turn_transition,
+            "owns_active_turn": owns_active_turn,
+            "draft_id": draft_id,
+            "preview_chars": preview_chars,
+            "previous_latest_preview_chars": previous_latest_preview_chars,
+            "preview_head": preview_head,
+            "previous_latest_preview_head": previous_latest_preview_head,
+            "preview_is_prefix_of_previous_latest": previous_latest_preview_text.starts_with(preview_text),
+            "client": HCODEX_INGRESS_CLIENT,
+        }),
+    };
+    append_status_event(workspace_path, &record).await?;
+    Ok(())
+}
+
 pub async fn record_hcodex_ingress_completed(
     workspace_path: &Path,
     session_id: &str,
@@ -1336,7 +1388,7 @@ mod tests {
         record_bot_status_event, record_hcodex_ingress_completed, record_hcodex_ingress_connected,
         record_hcodex_ingress_preview_text, record_hcodex_ingress_prompt,
         record_hcodex_ingress_turn_started, record_hcodex_launcher_ended,
-        record_hcodex_launcher_started, session_status_path,
+        record_hcodex_launcher_started, record_tui_mirror_preview_sync, session_status_path,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -2385,6 +2437,43 @@ mod tests {
         assert_eq!(event.event, "preview_text");
         assert_eq!(event.payload["turn_id"], "turn-7");
         assert_eq!(event.payload["session_id"], "thr_same");
+    }
+
+    #[tokio::test]
+    async fn tui_mirror_preview_sync_persists_debug_payload() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+
+        record_tui_mirror_preview_sync(
+            &workspace,
+            "thr_same",
+            Some("turn-7"),
+            "2026-04-07T10:00:00.000Z",
+            "skipped_regressive",
+            Some("already_owned"),
+            Some("turn-7"),
+            Some("turn-7"),
+            false,
+            true,
+            "Drafting",
+            "Drafting a longer preview",
+            42,
+        )
+        .await
+        .unwrap();
+
+        let lines = fs::read_to_string(events_path(&workspace)).await.unwrap();
+        let event: WorkspaceStatusEventRecord =
+            serde_json::from_str(lines.lines().next().expect("mirror debug event")).unwrap();
+        assert_eq!(event.event, "mirror_preview_sync");
+        assert_eq!(event.payload["session_id"], "thr_same");
+        assert_eq!(event.payload["turn_id"], "turn-7");
+        assert_eq!(event.payload["decision"], "skipped_regressive");
+        assert_eq!(event.payload["claim_status"], "already_owned");
+        assert_eq!(event.payload["draft_id"], 42);
+        assert_eq!(event.payload["preview_chars"], 8);
+        assert_eq!(event.payload["previous_latest_preview_chars"], 25);
+        assert_eq!(event.payload["preview_is_prefix_of_previous_latest"], true);
     }
 
     #[tokio::test]

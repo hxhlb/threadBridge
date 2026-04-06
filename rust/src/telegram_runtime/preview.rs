@@ -451,6 +451,10 @@ impl TurnPreviewController {
         self.last_update_at = None;
     }
 
+    pub(crate) fn draft_id(&self) -> i32 {
+        self.draft_id
+    }
+
     async fn flush_render(&mut self) {
         let render_text = self.renderer.get_render_text().trim();
         if render_text.is_empty() || render_text == self.last_sent_text {

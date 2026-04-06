@@ -22,12 +22,15 @@
 - management API 已提供：
   - `GET /api/threads/:thread_key/sessions`
   - `GET /api/threads/:thread_key/sessions/:session_id/records`
+  - `GET /api/threads/:thread_key/sessions/:session_id/mirror-preview-events`
 - management UI 已有：
   - transcript observability pane，可查看 `final` / `process` transcript
   - workspace card 內的 `Sessions` pane，可直接打開 session summary 與 records timeline
 - `Sessions` / `Transcript` / `Launch Output` / `Advanced Workspace Details` 的展開狀態現在會在 refresh 後保留
 - process transcript 已開始覆蓋 `Plan` / `Tool` 摘要
 - session summary / records 已開始從 transcript mirror、recent session history、workspace session-status、以及 session binding broken 狀態即時計算
+- TUI mirror draft 的調試事件已開始寫入 `./.threadbridge/state/runtime-observer/events.jsonl` 的 `mirror_preview_sync`
+- management API 已可按 `session_id` 讀出 mirror draft 的 decision timeline，方便調查只在 TUI mirror path 出現的 preview replay / reset 問題
 
 目前尚未完成：
 

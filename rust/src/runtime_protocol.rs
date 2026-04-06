@@ -18,7 +18,8 @@ use crate::thread_state::{
     resolve_lifecycle_status, resolve_thread_state,
 };
 use crate::workspace_status::{
-    WorkspaceStatusPhase, has_live_local_tui_session, read_session_status,
+    WorkspaceStatusEventRecord, WorkspaceStatusPhase, has_live_local_tui_session,
+    read_session_status, read_workspace_event_log_repairing,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -415,6 +416,27 @@ pub struct WorkingSessionRecordView {
     pub text: String,
     pub delivery: Option<TranscriptMirrorDelivery>,
     pub phase: Option<TranscriptMirrorPhase>,
+    pub source_ref: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MirrorPreviewDebugEventView {
+    pub timestamp: String,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub source_event_at: Option<String>,
+    pub decision: String,
+    pub claim_status: Option<String>,
+    pub previous_turn_id: Option<String>,
+    pub active_turn_id: Option<String>,
+    pub turn_transition: bool,
+    pub owns_active_turn: bool,
+    pub draft_id: Option<i32>,
+    pub preview_chars: usize,
+    pub previous_latest_preview_chars: usize,
+    pub preview_head: String,
+    pub previous_latest_preview_head: String,
+    pub preview_is_prefix_of_previous_latest: bool,
     pub source_ref: String,
 }
 
@@ -864,6 +886,33 @@ pub async fn build_working_session_records(
     Ok(Some(records))
 }
 
+pub async fn build_working_session_mirror_debug_events(
+    repository: &ThreadRepository,
+    record: &ThreadRecord,
+    binding: &SessionBinding,
+    session_id: &str,
+) -> Result<Option<Vec<MirrorPreviewDebugEventView>>> {
+    let aggregates = build_working_session_aggregates(repository, record, binding).await?;
+    if !aggregates.contains_key(session_id) {
+        return Ok(None);
+    }
+    let workspace_cwd = binding
+        .workspace_cwd
+        .clone()
+        .context("managed workspace is missing workspace_cwd")?;
+    let workspace_path = Path::new(&workspace_cwd);
+    let Some(event_log) = read_workspace_event_log_repairing(workspace_path).await? else {
+        return Ok(Some(Vec::new()));
+    };
+    let mut records = event_log
+        .events
+        .iter()
+        .filter_map(|event| mirror_preview_debug_event_from_workspace_event(event, session_id))
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    Ok(Some(records))
+}
+
 async fn build_working_session_aggregates(
     repository: &ThreadRepository,
     record: &ThreadRecord,
@@ -1019,6 +1068,98 @@ fn working_session_record_from_entry(
         delivery: Some(entry.delivery.clone()),
         phase: entry.phase.clone(),
         source_ref: "transcript_mirror".to_owned(),
+    })
+}
+
+fn mirror_preview_debug_event_from_workspace_event(
+    event: &WorkspaceStatusEventRecord,
+    session_id: &str,
+) -> Option<MirrorPreviewDebugEventView> {
+    if event.event != "mirror_preview_sync" {
+        return None;
+    }
+    if event.payload.get("session_id").and_then(Value::as_str) != Some(session_id) {
+        return None;
+    }
+    Some(MirrorPreviewDebugEventView {
+        timestamp: event.occurred_at.clone(),
+        session_id: session_id.to_owned(),
+        turn_id: event
+            .payload
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        source_event_at: event
+            .payload
+            .get("source_event_at")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        decision: event
+            .payload
+            .get("decision")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned(),
+        claim_status: event
+            .payload
+            .get("claim_status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        previous_turn_id: event
+            .payload
+            .get("previous_turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        active_turn_id: event
+            .payload
+            .get("active_turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        turn_transition: event
+            .payload
+            .get("turn_transition")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        owns_active_turn: event
+            .payload
+            .get("owns_active_turn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        draft_id: event
+            .payload
+            .get("draft_id")
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok()),
+        preview_chars: event
+            .payload
+            .get("preview_chars")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_default(),
+        previous_latest_preview_chars: event
+            .payload
+            .get("previous_latest_preview_chars")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_default(),
+        preview_head: event
+            .payload
+            .get("preview_head")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        previous_latest_preview_head: event
+            .payload
+            .get("previous_latest_preview_head")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        preview_is_prefix_of_previous_latest: event
+            .payload
+            .get("preview_is_prefix_of_previous_latest")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        source_ref: "runtime_observer".to_owned(),
     })
 }
 
@@ -1313,8 +1454,9 @@ mod tests {
         LaunchLocalSessionTarget, ManagedCodexBuildDefaultsView, ManagedCodexView,
         ManagedWorkspaceView, RuntimeControlActionRequest, ThreadStateView,
         WorkingSessionRecordKind, WorkspaceRuntimeHealth, aggregate_runtime_readiness,
-        build_runtime_health, build_thread_views, build_working_session_records,
-        build_working_session_summaries, build_workspace_views, workspace_recovery_hint,
+        build_runtime_health, build_thread_views, build_working_session_mirror_debug_events,
+        build_working_session_records, build_working_session_summaries, build_workspace_views,
+        workspace_recovery_hint,
     };
     use crate::app_server_runtime::WorkspaceRuntimeState;
     use crate::collaboration_mode::CollaborationMode;
@@ -1324,7 +1466,7 @@ mod tests {
         TranscriptMirrorOrigin, TranscriptMirrorPhase, TranscriptMirrorRole,
     };
     use crate::runtime_owner::RuntimeOwnerStatus;
-    use crate::workspace_status::record_bot_status_event;
+    use crate::workspace_status::{record_bot_status_event, record_tui_mirror_preview_sync};
     use futures_util::{SinkExt, StreamExt};
     use std::path::PathBuf;
     use tokio::fs;
@@ -1983,6 +2125,58 @@ mod tests {
                 .iter()
                 .any(|record| { record.kind == WorkingSessionRecordKind::UserPrompt })
         );
+    }
+
+    #[tokio::test]
+    async fn working_session_mirror_debug_events_read_runtime_observer_records() {
+        let root = temp_path();
+        let workspace = temp_path();
+        fs::create_dir_all(&workspace).await.unwrap();
+        let repo = ThreadRepository::open(&root).await.unwrap();
+        let record = repo
+            .create_thread(1, 7, "Workspace".to_owned())
+            .await
+            .unwrap();
+        let record = repo
+            .bind_workspace(
+                record,
+                workspace.display().to_string(),
+                "thr_current".to_owned(),
+                full_auto_snapshot(),
+            )
+            .await
+            .unwrap();
+        let binding = repo.read_session_binding(&record).await.unwrap().unwrap();
+
+        record_tui_mirror_preview_sync(
+            &workspace,
+            "thr_current",
+            Some("turn-1"),
+            "2026-04-07T10:00:00.000Z",
+            "skipped_regressive",
+            Some("already_owned"),
+            Some("turn-1"),
+            Some("turn-1"),
+            false,
+            true,
+            "Drafting",
+            "Drafting a longer preview",
+            17,
+        )
+        .await
+        .unwrap();
+
+        let events =
+            build_working_session_mirror_debug_events(&repo, &record, &binding, "thr_current")
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].decision, "skipped_regressive");
+        assert_eq!(events[0].claim_status.as_deref(), Some("already_owned"));
+        assert_eq!(events[0].draft_id, Some(17));
+        assert!(events[0].preview_is_prefix_of_previous_latest);
+        assert_eq!(events[0].source_ref, "runtime_observer");
     }
 
     #[test]

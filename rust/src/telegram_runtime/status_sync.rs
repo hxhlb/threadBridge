@@ -38,6 +38,7 @@ use crate::workspace_status::{
     LocalTuiSessionClaim, WorkspaceAggregateStatus, WorkspaceEventLogRead,
     WorkspaceStatusEventRecord, events_path, is_hcodex_ingress_client,
     read_local_tui_session_claim, read_workspace_event_log_repairing,
+    record_tui_mirror_preview_sync,
 };
 
 struct MirrorPreviewState {
@@ -64,14 +65,15 @@ impl MirrorPreviewState {
         self.latest_preview_text.clear();
     }
 
-    fn begin_turn(&mut self, turn_id: Option<&str>) {
+    fn begin_turn(&mut self, turn_id: Option<&str>) -> bool {
         if self.active_turn_id.as_deref() == turn_id {
-            return;
+            return false;
         }
         self.preview.reset_for_new_turn();
         self.active_turn_id = turn_id.map(str::to_owned);
         self.owns_active_turn = false;
         self.latest_preview_text.clear();
+        true
     }
 
     fn set_ownership(&mut self, turn_id: Option<&str>, owns_active_turn: bool) {
@@ -493,7 +495,11 @@ async fn sync_local_transcript_mirrors_once(
                         &owner_record,
                         message_thread_id,
                     );
-                    preview.begin_turn(turn_id.as_deref());
+                    let previous_turn_id = preview.active_turn_id.clone();
+                    let previous_latest_preview_text = preview.latest_preview_text.clone();
+                    let turn_transition = preview.begin_turn(turn_id.as_deref());
+                    let mut decision = "applied";
+                    let mut claim_status = None;
                     if let Some(turn_id) = turn_id.as_deref() {
                         if !preview.owns_turn(Some(turn_id)) {
                             let claim = state
@@ -509,21 +515,82 @@ async fn sync_local_transcript_mirrors_once(
                                     owner: "status_sync".to_owned(),
                                 })
                                 .await?;
+                            claim_status = Some(match &claim {
+                                ClaimStatus::Claimed(_) => "claimed",
+                                ClaimStatus::Existing(_) => "existing",
+                            });
                             preview.set_ownership(
                                 Some(turn_id),
                                 matches!(claim, ClaimStatus::Claimed(_)),
                             );
+                        } else {
+                            claim_status = Some("already_owned");
                         }
                         if !preview.owns_turn(Some(turn_id)) {
+                            decision = "skipped_claim_denied";
+                            record_tui_mirror_preview_sync(
+                                &workspace_path,
+                                session_id,
+                                Some(turn_id),
+                                &event.occurred_at,
+                                decision,
+                                claim_status,
+                                previous_turn_id.as_deref(),
+                                preview.active_turn_id.as_deref(),
+                                turn_transition,
+                                preview.owns_active_turn,
+                                text,
+                                &previous_latest_preview_text,
+                                preview.preview.draft_id(),
+                            )
+                            .await?;
                             continue;
                         }
                     } else {
                         if preview.active_turn_id.is_some() {
+                            decision = "skipped_missing_turn_id";
+                            record_tui_mirror_preview_sync(
+                                &workspace_path,
+                                session_id,
+                                None,
+                                &event.occurred_at,
+                                decision,
+                                claim_status,
+                                previous_turn_id.as_deref(),
+                                preview.active_turn_id.as_deref(),
+                                turn_transition,
+                                preview.owns_active_turn,
+                                text,
+                                &previous_latest_preview_text,
+                                preview.preview.draft_id(),
+                            )
+                            .await?;
                             continue;
                         }
                         preview.set_ownership(None, true);
+                        claim_status = Some("not_applicable");
                     }
-                    preview.consume_preview_text(turn_id.as_deref(), text).await;
+                    if preview.should_skip_regressive_preview(turn_id.as_deref(), text) {
+                        decision = "skipped_regressive";
+                    } else {
+                        preview.consume_preview_text(turn_id.as_deref(), text).await;
+                    }
+                    record_tui_mirror_preview_sync(
+                        &workspace_path,
+                        session_id,
+                        turn_id.as_deref(),
+                        &event.occurred_at,
+                        decision,
+                        claim_status,
+                        previous_turn_id.as_deref(),
+                        preview.active_turn_id.as_deref(),
+                        turn_transition,
+                        preview.owns_active_turn,
+                        text,
+                        &previous_latest_preview_text,
+                        preview.preview.draft_id(),
+                    )
+                    .await?;
                     continue;
                 }
                 "turn_completed" => {
@@ -1011,10 +1078,9 @@ mod tests {
         preview.latest_preview_text = "Drafting a longer preview".to_owned();
 
         assert!(preview.should_skip_regressive_preview(Some("turn-1"), "Drafting"));
-        assert!(!preview.should_skip_regressive_preview(
-            Some("turn-1"),
-            "Drafting a longer preview"
-        ));
+        assert!(
+            !preview.should_skip_regressive_preview(Some("turn-1"), "Drafting a longer preview")
+        );
         assert!(!preview.should_skip_regressive_preview(
             Some("turn-1"),
             "Drafting a longer preview with more detail"
