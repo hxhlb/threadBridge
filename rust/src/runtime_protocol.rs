@@ -17,7 +17,9 @@ use crate::thread_state::{
     BindingStatus, effective_busy_snapshot_for_binding, resolve_binding_status,
     resolve_lifecycle_status, resolve_thread_state,
 };
-use crate::workspace_status::{WorkspaceStatusPhase, read_session_status};
+use crate::workspace_status::{
+    WorkspaceStatusPhase, has_live_local_tui_session, read_session_status,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeHealthView {
@@ -557,9 +559,6 @@ pub async fn build_workspace_views(
             .join("bin")
             .join("hcodex");
         let mut runtime_status = read_workspace_runtime_health(workspace_path, runtime_owner).await;
-        if binding.tui_session_adoption_pending && runtime_status.runtime_readiness == "ready" {
-            runtime_status.runtime_readiness = "pending_adoption";
-        }
         let recent_sessions = repository
             .read_recent_workspace_sessions(&workspace_cwd)
             .await
@@ -583,13 +582,25 @@ pub async fn build_workspace_views(
                 ("unavailable", "unavailable")
             }
         };
+        let has_live_tui_session = has_live_local_tui_session(
+            Path::new(&workspace_cwd),
+            &record.metadata.thread_key,
+            binding.tui_active_codex_thread_id.as_deref(),
+        )
+        .await
+        .unwrap_or(false);
+        let tui_session_adoption_pending =
+            binding.tui_session_adoption_pending && has_live_tui_session;
+        if tui_session_adoption_pending && runtime_status.runtime_readiness == "ready" {
+            runtime_status.runtime_readiness = "pending_adoption";
+        }
         let recovery_hint = workspace_recovery_hint(
             false,
             resolve_binding_status(&record.metadata, Some(&binding)).as_str(),
             session_broken_reason.as_deref(),
             &runtime_status,
-            binding.tui_session_adoption_pending,
-            binding.tui_active_codex_thread_id.as_deref(),
+            tui_session_adoption_pending,
+            has_live_tui_session,
         );
         let (interrupt_status, interrupt_note) =
             workspace_interrupt_view(&binding, run_status).await;
@@ -609,8 +620,11 @@ pub async fn build_workspace_views(
             interrupt_status,
             interrupt_note,
             current_codex_thread_id: binding.current_codex_thread_id.clone(),
-            tui_active_codex_thread_id: binding.tui_active_codex_thread_id.clone(),
-            tui_session_adoption_pending: binding.tui_session_adoption_pending,
+            tui_active_codex_thread_id: binding
+                .tui_active_codex_thread_id
+                .clone()
+                .filter(|_| has_live_tui_session),
+            tui_session_adoption_pending,
             last_used_at: record.metadata.last_codex_turn_at.clone(),
             conflict: false,
             app_server_status: runtime_status.app_server_status,
@@ -646,7 +660,7 @@ pub async fn build_workspace_views(
                         last_error: item.heartbeat_last_error.clone(),
                     },
                     item.tui_session_adoption_pending,
-                    item.tui_active_codex_thread_id.as_deref(),
+                    item.tui_active_codex_thread_id.is_some(),
                 );
                 views.push(item);
             }
@@ -688,6 +702,16 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
             Ok(state) => (state.run_status.as_str(), state.run_phase.as_str()),
             Err(_) => ("unavailable", "unavailable"),
         };
+        let has_live_tui_session = match (workspace_cwd.as_deref(), binding.as_ref()) {
+            (Some(workspace_cwd), Some(binding)) => has_live_local_tui_session(
+                Path::new(workspace_cwd),
+                &metadata.thread_key,
+                binding.tui_active_codex_thread_id.as_deref(),
+            )
+            .await
+            .unwrap_or(false),
+            _ => false,
+        };
         views.push(ThreadStateView {
             thread_key: metadata.thread_key,
             title: metadata.title,
@@ -716,10 +740,12 @@ pub async fn build_thread_views(repository: &ThreadRepository) -> Result<Vec<Thr
                 .and_then(|binding| binding.current_codex_thread_id.clone()),
             tui_active_codex_thread_id: binding
                 .as_ref()
-                .and_then(|binding| binding.tui_active_codex_thread_id.clone()),
+                .and_then(|binding| binding.tui_active_codex_thread_id.clone())
+                .filter(|_| has_live_tui_session),
             tui_session_adoption_pending: binding
                 .as_ref()
-                .is_some_and(|binding| binding.tui_session_adoption_pending),
+                .is_some_and(|binding| binding.tui_session_adoption_pending)
+                && has_live_tui_session,
             session_broken_reason: session_broken_reason.clone(),
             last_verified_at: binding
                 .as_ref()
@@ -1133,7 +1159,7 @@ pub fn workspace_recovery_hint(
     session_broken_reason: Option<&str>,
     runtime_status: &WorkspaceRuntimeHealth,
     adoption_pending: bool,
-    tui_active_codex_thread_id: Option<&str>,
+    has_live_tui_session: bool,
 ) -> Option<String> {
     if conflict {
         return Some(
@@ -1165,9 +1191,6 @@ pub fn workspace_recovery_hint(
                 .to_owned(),
         );
     }
-    let has_live_tui_session = tui_active_codex_thread_id
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
     if binding_status == "broken" && has_live_tui_session {
         return Some(
             "The saved Codex session is no longer the best recovery target, but this workspace has a live TUI session. Use Adopt TUI to promote that live session, or New Session to start fresh."
@@ -1180,10 +1203,13 @@ pub fn workspace_recovery_hint(
             reason.contains("thread/read failed") && reason.contains("thread not loaded")
         });
     if unloaded_thread {
-        return Some(
+        return Some(if has_live_tui_session {
             "The saved Codex session is no longer loaded by app-server. Use New Session to start a fresh session, or Adopt TUI if this workspace already has a live TUI session."
-                .to_owned(),
-        );
+                .to_owned()
+        } else {
+            "The saved Codex session is no longer loaded by app-server. Use New Session to start a fresh session."
+                .to_owned()
+        });
     }
     if binding_status == "broken" {
         return Some(
@@ -1284,9 +1310,9 @@ mod tests {
     use super::{
         LaunchLocalSessionTarget, ManagedCodexBuildDefaultsView, ManagedCodexView,
         ManagedWorkspaceView, RuntimeControlActionRequest, ThreadStateView,
-        WorkingSessionRecordKind, aggregate_runtime_readiness, build_runtime_health,
-        build_thread_views, build_working_session_records, build_working_session_summaries,
-        build_workspace_views,
+        WorkingSessionRecordKind, WorkspaceRuntimeHealth, aggregate_runtime_readiness,
+        build_runtime_health, build_thread_views, build_working_session_records,
+        build_working_session_summaries, build_workspace_views, workspace_recovery_hint,
     };
     use crate::app_server_runtime::WorkspaceRuntimeState;
     use crate::collaboration_mode::CollaborationMode;
@@ -1495,6 +1521,32 @@ mod tests {
         assert_eq!(value["hcodex_ingress_status"], "running");
         assert!(value.get("tui_proxy_status").is_none());
         assert!(value.get("session_broken").is_none());
+    }
+
+    #[test]
+    fn workspace_recovery_hint_ignores_non_live_tui_residue() {
+        let hint = workspace_recovery_hint(
+            false,
+            "broken",
+            Some("failed to run codex turn"),
+            &WorkspaceRuntimeHealth {
+                app_server_status: "running",
+                hcodex_ingress_status: "running",
+                runtime_readiness: "ready",
+                source: "owner_heartbeat",
+                last_checked_at: None,
+                last_error: None,
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(
+            hint.as_deref(),
+            Some(
+                "Codex continuity is marked broken. Use Repair Session after the runtime surface is healthy."
+            )
+        );
     }
 
     #[tokio::test]

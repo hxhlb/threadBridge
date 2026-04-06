@@ -490,6 +490,29 @@ pub async fn clear_stale_local_tui_session_claim(workspace_path: &Path) -> Resul
     Ok(true)
 }
 
+pub async fn has_live_local_tui_session(
+    workspace_path: &Path,
+    thread_key: &str,
+    session_id: Option<&str>,
+) -> Result<bool> {
+    let Some(session_id) = session_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(false);
+    };
+    let Some(claim) = read_local_tui_session_claim(workspace_path).await? else {
+        return Ok(false);
+    };
+    if claim.thread_key != thread_key
+        || claim.session_id.as_deref() != Some(session_id)
+        || !local_tui_claim_is_live(&claim)
+    {
+        return Ok(false);
+    }
+    let Some(snapshot) = read_session_status(workspace_path, session_id).await? else {
+        return Ok(false);
+    };
+    Ok(snapshot.activity_source == SessionActivitySource::Tui && snapshot.live)
+}
+
 pub async fn append_status_event(
     workspace_path: &Path,
     event: &WorkspaceStatusEventRecord,
@@ -1306,7 +1329,7 @@ mod tests {
         WorkspaceStatusCache, WorkspaceStatusEventRecord, WorkspaceStatusPhase,
         append_status_event, busy_selected_session_status, clear_stale_local_tui_session_claim,
         current_status_path, default_local_tui_session_claim, ensure_workspace_status_surface,
-        events_path, legacy_current_status_path, legacy_events_path,
+        events_path, has_live_local_tui_session, legacy_current_status_path, legacy_events_path,
         legacy_local_tui_session_claim_path, legacy_session_status_path, list_live_local_sessions,
         local_tui_session_claim_path, read_local_tui_session_claim, read_session_status,
         read_workspace_aggregate_status, read_workspace_event_log_repairing,
@@ -1798,6 +1821,64 @@ mod tests {
         assert!(!session.live);
         assert_eq!(session.phase, WorkspaceStatusPhase::Idle);
         assert_eq!(session.turn_id, None);
+    }
+
+    #[tokio::test]
+    async fn has_live_local_tui_session_requires_live_claim_and_snapshot() {
+        let workspace = temp_path();
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+
+        let shell_pid = std::process::id();
+        let mut claim = default_local_tui_session_claim(&workspace, "thread-key", shell_pid);
+        claim.session_id = Some("thr_live".to_owned());
+        claim.child_pid = Some(0);
+        super::write_local_tui_session_claim(&workspace, &claim)
+            .await
+            .unwrap();
+        super::write_session_status(
+            &workspace,
+            &SessionCurrentStatus {
+                schema_version: 2,
+                workspace_cwd: workspace.display().to_string(),
+                session_id: "thr_live".to_owned(),
+                activity_source: SessionActivitySource::Tui,
+                live: true,
+                phase: WorkspaceStatusPhase::ShellActive,
+                shell_pid: Some(shell_pid),
+                child_pid: None,
+                child_pgid: None,
+                child_command: None,
+                client: Some(HCODEX_INGRESS_CLIENT.to_owned()),
+                turn_id: None,
+                summary: None,
+                pending_interrupt_turn_id: None,
+                pending_interrupt_requested_at: None,
+                observer_attach_mode: None,
+                updated_at: "2026-04-06T00:00:00.000Z".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            has_live_local_tui_session(&workspace, "thread-key", Some("thr_live"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !has_live_local_tui_session(&workspace, "other-thread", Some("thr_live"))
+                .await
+                .unwrap()
+        );
+
+        record_hcodex_launcher_ended(&workspace, "thread-key", shell_pid, 0)
+            .await
+            .unwrap();
+        assert!(
+            !has_live_local_tui_session(&workspace, "thread-key", Some("thr_live"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

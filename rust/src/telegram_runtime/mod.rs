@@ -35,7 +35,8 @@ use crate::thread_state::{
 };
 pub(crate) use crate::tool_results::{TelegramOutboxItem, parse_telegram_outbox};
 pub(crate) use crate::workspace_status::{
-    SessionCurrentStatus, WorkspaceStatusCache, read_session_status, record_bot_status_event,
+    SessionCurrentStatus, WorkspaceStatusCache, has_live_local_tui_session, read_session_status,
+    record_bot_status_event,
 };
 
 pub(crate) mod busy_copy;
@@ -937,16 +938,28 @@ pub(crate) fn session_binding_hint(session: Option<&SessionBinding>) -> &'static
     }
 }
 
-pub(crate) fn session_binding_hint_for_state(
+pub(crate) async fn session_binding_hint_for_state(
     state: ResolvedThreadState,
+    thread_key: Option<&str>,
     session: Option<&SessionBinding>,
 ) -> String {
     match state.binding_status {
         BindingStatus::Broken => {
-            let has_tui_residue = session
-                .and_then(|binding| binding.tui_active_codex_thread_id.as_deref())
-                .is_some();
-            if has_tui_residue {
+            let has_live_tui_session = match session {
+                Some(binding) => match (thread_key, workspace_path_from_binding(binding)) {
+                    (Some(thread_key), Ok(workspace_path)) => has_live_local_tui_session(
+                        &workspace_path,
+                        thread_key,
+                        binding.tui_active_codex_thread_id.as_deref(),
+                    )
+                    .await
+                    .unwrap_or(false),
+                    (_, Err(_)) => false,
+                    _ => false,
+                },
+                None => false,
+            };
+            if has_live_tui_session {
                 "This workspace's Codex session is invalid, and a shared TUI session is still recorded for this workspace. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again.".to_owned()
             } else {
                 "This workspace's Codex session is invalid. Use /repair_session_binding to force-restart the workspace runtime and verify it again, or /start_fresh_session to start a fresh one for the same workspace.".to_owned()
@@ -962,8 +975,9 @@ pub(crate) fn session_binding_hint_for_state(
     }
 }
 
-pub(crate) fn session_binding_access_hint(
+pub(crate) async fn session_binding_access_hint(
     state: ResolvedThreadState,
+    thread_key: Option<&str>,
     session: Option<&SessionBinding>,
     blocking_snapshot: Option<&SessionCurrentStatus>,
 ) -> String {
@@ -990,7 +1004,7 @@ pub(crate) fn session_binding_access_hint(
             "This workspace's Codex session is invalid, and {activity}. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again."
         );
     }
-    session_binding_hint_for_state(state, session)
+    session_binding_hint_for_state(state, thread_key, session).await
 }
 
 pub(crate) async fn resolve_busy_gate_state(
@@ -1317,22 +1331,48 @@ mod tests {
         );
     }
 
-    #[test]
-    fn binding_hint_prefers_resolved_broken_state() {
+    #[tokio::test]
+    async fn binding_hint_prefers_resolved_broken_state() {
         let state = ResolvedThreadState {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Broken,
             run_status: RunStatus::Idle,
             run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
         };
-        let hint = session_binding_hint_for_state(state, None);
+        let hint = session_binding_hint_for_state(state, None, None).await;
         assert!(hint.contains("/repair_session_binding"));
         assert!(hint.contains("/start_fresh_session"));
         assert!(hint.contains("force-restart"));
     }
 
-    #[test]
-    fn binding_access_hint_prefers_combined_broken_and_busy_message() {
+    #[tokio::test]
+    async fn binding_hint_ignores_non_live_tui_residue() {
+        let workspace = temp_path();
+        fs::create_dir_all(&workspace).await.unwrap();
+        let mut binding = SessionBinding::fresh(
+            Some(workspace.display().to_string()),
+            Some("thr_current".to_owned()),
+            crate::execution_mode::SessionExecutionSnapshot::from_mode(
+                crate::execution_mode::ExecutionMode::FullAuto,
+            ),
+        );
+        binding.tui_active_codex_thread_id = Some("thr_tui".to_owned());
+        let state = ResolvedThreadState {
+            lifecycle_status: LifecycleStatus::Active,
+            binding_status: BindingStatus::Broken,
+            run_status: RunStatus::Idle,
+            run_phase: crate::workspace_status::WorkspaceStatusPhase::Idle,
+        };
+
+        let hint = session_binding_hint_for_state(state, Some("thread-1"), Some(&binding)).await;
+        assert!(!hint.contains("shared TUI session"));
+        assert!(hint.contains("/start_fresh_session"));
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn binding_access_hint_prefers_combined_broken_and_busy_message() {
         let state = ResolvedThreadState {
             lifecycle_status: LifecycleStatus::Active,
             binding_status: BindingStatus::Broken,
@@ -1358,7 +1398,7 @@ mod tests {
             observer_attach_mode: None,
             updated_at: "2026-04-06T00:00:00.000Z".to_owned(),
         };
-        let hint = session_binding_access_hint(state, None, Some(&snapshot));
+        let hint = session_binding_access_hint(state, None, None, Some(&snapshot)).await;
         assert!(hint.contains("shared TUI session"));
         assert!(hint.contains("/repair_session_binding"));
         assert!(!hint.contains("/start_fresh_session"));
@@ -1426,11 +1466,12 @@ mod tests {
             .set_tui_active_session_for_thread_key(&record.metadata.thread_key, "thr_tui")
             .await
             .unwrap();
+        let shell_pid = std::process::id();
         record_hcodex_launcher_started(
             &workspace,
             &record.metadata.thread_key,
-            42,
-            77,
+            shell_pid,
+            0,
             "codex --remote",
         )
         .await

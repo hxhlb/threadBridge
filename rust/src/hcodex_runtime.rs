@@ -19,7 +19,9 @@ use tokio::signal::unix::{SignalKind, signal};
 use crate::app_server_runtime::{WorkspaceRuntimeState, issue_hcodex_launch_ticket};
 use crate::hcodex_ws_bridge::is_codex_safe_remote_ws_url;
 use crate::repository::ThreadRepository;
-use crate::workspace_status::{record_hcodex_launcher_ended, record_hcodex_launcher_started};
+use crate::workspace_status::{
+    has_live_local_tui_session, record_hcodex_launcher_ended, record_hcodex_launcher_started,
+};
 
 macro_rules! hcodex_debug {
     ($($arg:tt)*) => {
@@ -341,9 +343,26 @@ async fn run_hcodex_session(config: &RunHcodexSessionCli) -> Result<()> {
         .await?;
 
     let repository = ThreadRepository::open(&config.data_root).await?;
-    let _ = repository
-        .mark_tui_adoption_pending_for_thread_key(&config.thread_key)
-        .await?;
+    if let Some(record) = repository
+        .find_active_thread_by_key(&config.thread_key)
+        .await?
+        && let Some(binding) = repository.read_session_binding(&record).await?
+    {
+        let has_live_tui_session = has_live_local_tui_session(
+            &config.workspace,
+            &config.thread_key,
+            binding.tui_active_codex_thread_id.as_deref(),
+        )
+        .await
+        .unwrap_or(false);
+        if has_live_tui_session {
+            let _ = repository
+                .mark_tui_adoption_pending_for_thread_key(&config.thread_key)
+                .await?;
+        } else {
+            let _ = repository.clear_tui_adoption_state(record).await?;
+        }
+    }
 
     std::process::exit(exit_code_from_status(status));
 }

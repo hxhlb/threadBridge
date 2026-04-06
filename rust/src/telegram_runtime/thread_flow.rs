@@ -136,14 +136,25 @@ async fn render_thread_info(state: &AppState, record: &ThreadRecord) -> Result<S
         (Some(path), Some(session_id)) => read_session_status(path, session_id).await?,
         _ => None,
     };
+    let has_live_tui_session = match (workspace_path.as_ref(), session.as_ref()) {
+        (Some(path), Some(binding)) => has_live_local_tui_session(
+            path,
+            &record.metadata.thread_key,
+            binding.tui_active_codex_thread_id.as_deref(),
+        )
+        .await
+        .unwrap_or(false),
+        _ => false,
+    };
     let tui_active_codex_thread_id = session
         .as_ref()
         .and_then(|binding| binding.tui_active_codex_thread_id.as_deref())
+        .filter(|_| has_live_tui_session)
         .unwrap_or("none");
     let adoption_state = session
         .as_ref()
         .map(|binding| {
-            if binding.tui_session_adoption_pending {
+            if binding.tui_session_adoption_pending && has_live_tui_session {
                 "pending"
             } else {
                 "none"
@@ -727,9 +738,11 @@ pub(crate) async fn run_command(
                     Some(thread_id),
                     session_binding_access_hint(
                         resolved_state,
+                        Some(&record.metadata.thread_key),
                         session.as_ref(),
                         blocking_snapshot.as_ref(),
-                    ),
+                    )
+                    .await,
                 )
                 .await?;
                 return Ok(());
@@ -1318,9 +1331,11 @@ pub(crate) async fn run_command(
                     Some(thread_id),
                     session_binding_access_hint(
                         resolved_state,
+                        Some(&record.metadata.thread_key),
                         session.as_ref(),
                         blocking_snapshot.as_ref(),
-                    ),
+                    )
+                    .await,
                 )
                 .await?;
                 return Ok(());
@@ -1578,9 +1593,11 @@ pub(crate) async fn run_text_message(
             Some(thread_id),
             session_binding_access_hint(
                 resolved_state,
+                Some(&record.metadata.thread_key),
                 session.as_ref(),
                 blocking_snapshot.as_ref(),
-            ),
+            )
+            .await,
         )
         .await?;
         return Ok(());
