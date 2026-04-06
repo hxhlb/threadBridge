@@ -44,6 +44,7 @@ struct MirrorPreviewState {
     preview: TurnPreviewController,
     active_turn_id: Option<String>,
     owns_active_turn: bool,
+    latest_preview_text: String,
 }
 
 impl MirrorPreviewState {
@@ -52,6 +53,7 @@ impl MirrorPreviewState {
             preview,
             active_turn_id: None,
             owns_active_turn: false,
+            latest_preview_text: String::new(),
         }
     }
 
@@ -59,6 +61,7 @@ impl MirrorPreviewState {
         self.preview.reset_for_new_turn();
         self.active_turn_id = None;
         self.owns_active_turn = false;
+        self.latest_preview_text.clear();
     }
 
     fn begin_turn(&mut self, turn_id: Option<&str>) {
@@ -68,6 +71,7 @@ impl MirrorPreviewState {
         self.preview.reset_for_new_turn();
         self.active_turn_id = turn_id.map(str::to_owned);
         self.owns_active_turn = false;
+        self.latest_preview_text.clear();
     }
 
     fn set_ownership(&mut self, turn_id: Option<&str>, owns_active_turn: bool) {
@@ -79,6 +83,24 @@ impl MirrorPreviewState {
 
     fn owns_turn(&self, turn_id: Option<&str>) -> bool {
         self.owns_active_turn && self.active_turn_id.as_deref() == turn_id
+    }
+
+    fn should_skip_regressive_preview(&self, turn_id: Option<&str>, text: &str) -> bool {
+        let text = text.trim();
+        !text.is_empty()
+            && self.active_turn_id.as_deref() == turn_id
+            && self.latest_preview_text != text
+            && self.latest_preview_text.starts_with(text)
+    }
+
+    async fn consume_preview_text(&mut self, turn_id: Option<&str>, text: &str) {
+        let text = text.trim();
+        if text.is_empty() || self.should_skip_regressive_preview(turn_id, text) {
+            return;
+        }
+        self.latest_preview_text.clear();
+        self.latest_preview_text.push_str(text);
+        self.preview.consume_preview_text(text).await;
     }
 }
 
@@ -501,7 +523,7 @@ async fn sync_local_transcript_mirrors_once(
                         }
                         preview.set_ownership(None, true);
                     }
-                    preview.preview.consume_preview_text(text).await;
+                    preview.consume_preview_text(turn_id.as_deref(), text).await;
                     continue;
                 }
                 "turn_completed" => {
@@ -973,10 +995,40 @@ mod tests {
         let mut preview = test_mirror_preview_state();
         preview.begin_turn(Some("turn-1"));
         preview.set_ownership(Some("turn-1"), true);
+        preview.latest_preview_text = "Drafting from the old turn".to_owned();
         preview.begin_turn(Some("turn-2"));
         assert_eq!(preview.active_turn_id.as_deref(), Some("turn-2"));
         assert!(!preview.owns_turn(Some("turn-1")));
         assert!(!preview.owns_turn(Some("turn-2")));
+        assert!(preview.latest_preview_text.is_empty());
+    }
+
+    #[test]
+    fn mirror_preview_state_skips_regressive_preview_for_same_turn() {
+        let mut preview = test_mirror_preview_state();
+        preview.begin_turn(Some("turn-1"));
+        preview.set_ownership(Some("turn-1"), true);
+        preview.latest_preview_text = "Drafting a longer preview".to_owned();
+
+        assert!(preview.should_skip_regressive_preview(Some("turn-1"), "Drafting"));
+        assert!(!preview.should_skip_regressive_preview(
+            Some("turn-1"),
+            "Drafting a longer preview"
+        ));
+        assert!(!preview.should_skip_regressive_preview(
+            Some("turn-1"),
+            "Drafting a longer preview with more detail"
+        ));
+    }
+
+    #[test]
+    fn mirror_preview_state_does_not_treat_new_turn_prefix_as_regression() {
+        let mut preview = test_mirror_preview_state();
+        preview.begin_turn(Some("turn-1"));
+        preview.latest_preview_text = "Drafting a longer preview".to_owned();
+        preview.begin_turn(Some("turn-2"));
+
+        assert!(!preview.should_skip_regressive_preview(Some("turn-2"), "Drafting"));
     }
 
     #[test]

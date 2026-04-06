@@ -48,6 +48,7 @@
 
 - Telegram observability 已先接上已落地的 session-first API，而不只停留在 thread transcript feed
 - Telegram 已有 execution mode 設定入口；Codex 工作模型入口仍未做
+- `/workspace_info` 應補上目前正在使用的 Codex model 顯示，避免使用者只看見 execution mode / collaboration mode，卻看不見實際模型
 - Telegram collaboration mode 設定入口已先行落地，且應持續和 execution mode 分開
 - Telegram 已承接最小 v1 的 app-server / TUI 互動式回應面：
   - `request_user_input`
@@ -121,6 +122,7 @@
 - Telegram 之後可補上 Codex 工作模型設定入口
 - Telegram 已補上 execution mode 設定入口
 - Telegram 已補上 collaboration mode 設定入口
+- 在 Codex 工作模型控制面正式落地前，Telegram 的 `/workspace_info` 至少應先作為 read-side observability surface，顯示目前 session 實際使用中的 model
 - 這兩者應視為不同控制面：
   - `Codex 工作模型`
     - 回答「用哪個模型」
@@ -129,6 +131,7 @@
 - `collaboration mode`
   - 回答「這一輪 / 這個 session 是普通模式還是 Plan mode」
 - 尤其要避免把 `Plan / Normal` 誤表達成 execution mode；它和 `full_auto / yolo` 不是同一層語義
+- 換句話說，`/workspace_info` 不應只列出 mode 類資訊；它也應補上 `current model`，讓使用者能直接核對目前工作 thread 實際跑在哪個模型
 - 它們若要在 Telegram 露出，都應只是 runtime protocol control action 的 adapter surface
 
 ### 2.1. Interactive response / elicitation surface
