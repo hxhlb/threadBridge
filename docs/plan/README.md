@@ -141,6 +141,7 @@
   - `codex plan` mirror 子規格
   - upstream `item/plan/delta` / finalized `plan` item 已確認存在
   - `threadBridge` 已消費 live `item/plan/delta`，並補上 plan-only final reply fallback
+  - 已新增記錄一個明確 bug：mirror 路徑下，`proposed_plan` / finalized plan 仍可能對使用者不可見
 - [app-server-ws-mirror-observer.md](app-server-observer/app-server-ws-mirror-observer.md)
   - doc kind: `plan`
   - local/TUI mirror intake 已從 `hcodex ingress` 拆到獨立 app-server ws observer
@@ -164,6 +165,7 @@
   - workspace outbox `surface`、最小檔案大小 preflight、photo -> document fallback、以及 oversized attachment/document warning path 已開始落地
   - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
   - 已補記一個明確缺口：`codex mirror -> Telegram` 的 draft message 尚未實作 heartbeat，因此長時間 draft 仍會自動消失
+  - 已新增記錄一個明確 bug：TUI mirror 的 draft message 可能出現不斷刷新的狀態
   - 但 outbound queue、完整 control lifecycle、artifact 類型與集中化 config 仍未收斂
 - [macos-menubar-thread-manager.md](management-desktop-surface/macos-menubar-thread-manager.md)
   - doc kind: `plan`

@@ -31,6 +31,12 @@
 - media batch control message 的 action lifecycle 規格
 - 集中化的 Telegram 文件 / 媒體大小上限 config，而不是目前仍在 adapter callsite 的常數
 
+目前新增記錄的一個明確 bug 是：
+
+- TUI mirror 的 draft message 目前可能出現不斷刷新、反覆跳動的狀態
+- today 症狀是：draft surface 看起來像持續被重送或重編輯，而不是穩定地 heartbeat / coalesce 成單一 preview
+- 這代表 local/TUI mirror -> Telegram draft 的 lifecycle、dedupe、或 heartbeat 邊界仍未完全正確
+
 ## 問題
 
 `threadBridge` 現在已經有多條 Telegram 送信 surface：
@@ -170,6 +176,7 @@ preview draft surface。
 - 目前 `telegram -> codex` draft 已有 heartbeat
 - 目前 `codex mirror` 送出的 draft 還沒有 heartbeat；當 draft 存在時間拉長時，Telegram draft 會自動消失
 - 因此 mirror draft heartbeat 應補齊為這個 surface 的 v1 必要能力，而不是可選優化
+- 同時也已新增記錄另一個 today bug：TUI mirror draft 可能陷入過度刷新 / 反覆重編輯，表示 draft update 不只是缺 heartbeat，也可能缺少穩定的 coalescing / dedupe / latest-wins 邏輯
 
 ### Final Assistant Reply
 
@@ -244,6 +251,8 @@ preview draft surface。
 - `draft` 可 coalesce
 - 同一個 draft key 永遠只保留最新一版 render
 - draft 發送失敗不應阻塞 final reply
+- draft heartbeat 不應被實作成「持續重建 draft 內容」；heartbeat 與內容更新需要分離
+- 對 local/TUI mirror 而言，也不能接受 draft surface 進入無限刷新或肉眼可見的頻繁抖動
 
 ### `status` 與 `edit`
 

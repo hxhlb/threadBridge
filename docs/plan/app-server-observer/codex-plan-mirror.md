@@ -21,6 +21,12 @@
 - management / observability UI 是否要對 combined final reply 做更明確的 plan 區塊呈現
 - Telegram 的 `Questions` / `Implement this plan?` 最小互動面已接上同一路徑；若之後要做更一般的 interrupt / questionnaire surface，應視為 adapter follow-up，而不是這份 plan mirror 子規格的責任
 
+目前新增記錄的一個明確 bug 是：
+
+- mirror 路徑下，`<proposed_plan>` / finalized plan 目前仍可能對使用者不可見
+- today 症狀是：plan mode 明明已有 upstream `item/plan/delta` / finalized `plan` item，但 local/TUI mirror 或其 adapter 呈現仍可能沒有把 plan 文本穩定顯示出來
+- 這代表 `codex plan` mirror 雖已補上主線 intake 與 fallback，但 mirror consumer / adapter 的某些分支仍未真正收斂到「plan 對使用者可見」這個產品結果
+
 ## 問題
 
 `threadBridge` 目前對 `codex plan` 的 mirror 缺口，不是因為 Codex upstream 仍只輸出 raw `<proposed_plan>` 標記，也不是因為 upstream 缺少可消費事件。
@@ -31,6 +37,7 @@
 - `threadBridge` 目前只完整接上了 `agentMessage` delta 與部分 `plan` finalized item
 - 過去 live `item/plan/delta` 沒有進入 `threadBridge` 的 normalization / process transcript / Telegram preview 路徑
 - 過去 plan-only turn 在 upstream assistant final text 為空時，Telegram adapter 也沒有 fallback final reply
+- 即使主線已補修，mirror 路徑仍可能存在一個殘留 bug：`proposed_plan` 雖已進入 process transcript / finalized item，但最終 user-visible mirror surface 仍沒有把它顯示出來
 
 結果就是：
 
@@ -206,3 +213,8 @@ Telegram rolling preview 仍沿用現在的模型：
 - v1 應優先把 `item/plan/delta` 接進 mirror pipeline，並補齊 plan-only Telegram final reply fallback
 
 這樣就能在不改動 Codex upstream 的前提下，讓 `threadBridge` 的 plan mode mirror 進入可用狀態。
+
+也要補上一條更嚴格的驗收語義：
+
+- 只要 upstream turn 含有 `item/plan/delta` 或 finalized `plan` item，mirror surface 最終就必須有一個穩定可見的 user-facing plan 呈現
+- 不能接受「transcript 裡已有 plan，但 mirror 對使用者仍不可見」這種半收斂狀態
