@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::{Context, Result, bail};
@@ -1119,6 +1120,9 @@ pub struct WorkspaceSessionService {
     ctx: RuntimeControlContext,
 }
 
+const SESSION_REPAIR_RUNTIME_RESTART_TIMEOUT: Duration = Duration::from_secs(15);
+const SESSION_REPAIR_RESUME_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl WorkspaceSessionService {
     pub async fn resolve_workspace_add(
         &self,
@@ -1223,11 +1227,19 @@ impl WorkspaceSessionService {
             .workspace_runtime_service()
             .ensure_bound_workspace_runtime(binding)
             .await?;
-        let codex_workspace = self
-            .ctx
-            .workspace_runtime_service()
-            .restart_workspace_runtime_for_control(workspace_path.clone())
-            .await?;
+        let codex_workspace = tokio::time::timeout(
+            SESSION_REPAIR_RUNTIME_RESTART_TIMEOUT,
+            self.ctx
+                .workspace_runtime_service()
+                .restart_workspace_runtime_for_control(workspace_path.clone()),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "timed out restarting workspace runtime during session repair after {}s",
+                SESSION_REPAIR_RUNTIME_RESTART_TIMEOUT.as_secs()
+            )
+        })??;
         let execution_mode = workspace_execution_mode(&codex_workspace.working_directory).await?;
         let cleanup =
             repair_stale_session_state(&workspace_path, &record.metadata.thread_key, binding)
@@ -1236,13 +1248,35 @@ impl WorkspaceSessionService {
         if cleanup.stale_tui_cleared {
             record = self.ctx.repository.clear_tui_adoption_state(record).await?;
         }
-        match self
-            .ctx
-            .codex
-            .resume_session(&codex_workspace, existing_thread_id, Some(execution_mode))
-            .await
-        {
-            Ok(binding) => {
+        let resume_result = tokio::time::timeout(
+            SESSION_REPAIR_RESUME_TIMEOUT,
+            self.ctx.codex.resume_session(
+                &codex_workspace,
+                existing_thread_id,
+                Some(execution_mode),
+            ),
+        )
+        .await;
+        match resume_result {
+            Err(_) => Ok(SessionRepairResult {
+                record: self
+                    .ctx
+                    .repository
+                    .mark_session_binding_broken(
+                        record,
+                        format!(
+                            "timed out waiting for saved Codex session `{}` to resume after {}s",
+                            existing_thread_id,
+                            SESSION_REPAIR_RESUME_TIMEOUT.as_secs()
+                        ),
+                    )
+                    .await?,
+                verified: false,
+                runtime_restarted: true,
+                stale_busy_cleared: cleanup.stale_busy_cleared,
+                stale_tui_cleared: cleanup.stale_tui_cleared,
+            }),
+            Ok(Ok(binding)) => {
                 let record = self
                     .ctx
                     .repository
@@ -1260,7 +1294,7 @@ impl WorkspaceSessionService {
                     stale_tui_cleared: cleanup.stale_tui_cleared,
                 })
             }
-            Err(error) => Ok(SessionRepairResult {
+            Ok(Err(error)) => Ok(SessionRepairResult {
                 record: self
                     .ctx
                     .repository

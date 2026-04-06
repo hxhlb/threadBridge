@@ -757,6 +757,15 @@ pub(crate) async fn run_command(
                 .await?;
                 return Ok(());
             }
+            state
+                .repository
+                .append_log(
+                    &record,
+                    LogDirection::System,
+                    "Action 'repair_session_binding' started from telegram command.",
+                    None,
+                )
+                .await?;
             let typing = TypingHeartbeat::start(bot.clone(), msg.chat.id, Some(thread_id));
             let reconnect = execute_runtime_control_action(
                 state,
@@ -776,22 +785,57 @@ pub(crate) async fn run_command(
                             "unexpected runtime control result for repair_session_binding"
                         ));
                     };
-                    if verified {
-                        send_scoped_message(
-                            bot,
-                            msg.chat.id,
-                            Some(thread_id),
-                            "Workspace runtime restarted and the saved Codex session was resumed and verified.",
-                        )
-                        .await?;
+                    let response_text = if verified {
+                        "Workspace runtime restarted and the saved Codex session was resumed and verified."
                     } else {
-                        send_scoped_warning_message(
+                        "Workspace runtime restarted, but the saved Codex session still could not be resumed and verified. Use /start_fresh_session to start fresh or /repair_session_binding to retry."
+                    };
+                    state
+                        .repository
+                        .append_log(&record, LogDirection::System, response_text, None)
+                        .await?;
+                    if verified {
+                        if let Err(error) =
+                            send_scoped_message(bot, msg.chat.id, Some(thread_id), response_text)
+                                .await
+                        {
+                            let _ = state
+                                .repository
+                                .append_log(
+                                    &record,
+                                    LogDirection::System,
+                                    format!(
+                                        "Repair session binding response delivery failed: {}",
+                                        error
+                                    ),
+                                    None,
+                                )
+                                .await;
+                            return Err(error.into());
+                        }
+                    } else {
+                        if let Err(error) = send_scoped_warning_message(
                             bot,
                             msg.chat.id,
                             Some(thread_id),
-                            "Workspace runtime restarted, but the saved Codex session still could not be resumed and verified. Use /start_fresh_session to start fresh or /repair_session_binding to retry.",
+                            response_text,
                         )
-                        .await?;
+                        .await
+                        {
+                            let _ = state
+                                .repository
+                                .append_log(
+                                    &record,
+                                    LogDirection::System,
+                                    format!(
+                                        "Repair session binding warning delivery failed: {}",
+                                        error
+                                    ),
+                                    None,
+                                )
+                                .await;
+                            return Err(error.into());
+                        }
                     }
                     if let Ok(updated) = state
                         .repository
@@ -812,7 +856,21 @@ pub(crate) async fn run_command(
                         .await;
                     }
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    let _ = state
+                        .repository
+                        .append_log(
+                            &record,
+                            LogDirection::System,
+                            format!(
+                                "Repair session binding failed: {}",
+                                format_error_chain(&error)
+                            ),
+                            None,
+                        )
+                        .await;
+                    return Err(error);
+                }
             }
         }
         Command::WorkspaceInfo => {

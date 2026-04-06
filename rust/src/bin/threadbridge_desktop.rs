@@ -36,6 +36,7 @@ mod macos_app {
     use threadbridge_rust::runtime_support::{ensure_runtime_support, rebuild_runtime_support};
 
     const TRAY_ICON_SIZE: u32 = 32;
+    const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
     const TRAY_ICON_RGBA: &[u8] =
         include_bytes!("../../static/tray/point_3_filled_connected_trianglepath_dotted.rgba");
 
@@ -101,6 +102,7 @@ mod macos_app {
         let runtime = Arc::new(
             RuntimeBuilder::new_multi_thread()
                 .enable_all()
+                .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
                 .build()
                 .expect("tokio runtime"),
         );

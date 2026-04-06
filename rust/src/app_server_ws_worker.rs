@@ -72,6 +72,8 @@ enum LocalRequestAction {
     Forward(WsMessage),
 }
 
+const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
 fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -80,6 +82,7 @@ pub fn run_from_env() -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
         .build()
         .context("failed to build worker runtime")?;
     runtime.block_on(run_cli(args))

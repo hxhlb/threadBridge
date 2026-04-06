@@ -185,15 +185,54 @@ pub async fn handle_command(
     }
     if let Err(error) = thread_flow::run_command(&bot, &msg, command, &state).await {
         error!(event = "telegram.command.failed", error = %error, chat_id = msg.chat.id.0);
-        let _ = send_scoped_warning_message(
+        let log_text = format!("Telegram command failed: {}", error);
+        let _ = append_command_thread_log(
+            &state.repository,
+            msg.chat.id.0,
+            msg.thread_id,
+            log_text.clone(),
+        )
+        .await;
+        if let Err(send_error) = send_scoped_warning_message(
             &bot,
             msg.chat.id,
             msg.thread_id,
             format!("Command failed: {error}"),
         )
-        .await;
+        .await
+        {
+            let _ = append_command_thread_log(
+                &state.repository,
+                msg.chat.id.0,
+                msg.thread_id,
+                format!(
+                    "Telegram command failure warning delivery failed: {}",
+                    send_error
+                ),
+            )
+            .await;
+        }
     }
     Ok(())
+}
+
+async fn append_command_thread_log(
+    repository: &ThreadRepository,
+    chat_id: i64,
+    thread_id: Option<ThreadId>,
+    text: impl Into<String>,
+) -> Result<()> {
+    let record = match thread_id {
+        Some(thread_id) => {
+            repository
+                .get_thread(chat_id, thread_id_to_i32(thread_id))
+                .await?
+        }
+        None => repository.get_main_thread(chat_id).await?,
+    };
+    repository
+        .append_log(&record, LogDirection::System, text.into(), None)
+        .await
 }
 
 pub async fn handle_message(bot: Bot, msg: Message, state: AppState) -> ResponseResult<()> {
@@ -1060,11 +1099,11 @@ fn parse_fallback_command_text(text: &str) -> Option<Command> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, Command, TelegramSystemIntent, TelegramTextRole, command_list,
-        current_bound_session_id, format_role_text, format_system_text,
-        normalize_slash_command_text, parse_fallback_command_text, session_binding_access_hint,
-        session_binding_hint_for_state, should_cleanup_topic_rename_service_message,
-        topic_rename_service_message_thread_id, repairable_bound_session_id,
+        AppState, Command, TelegramSystemIntent, TelegramTextRole, append_command_thread_log,
+        command_list, current_bound_session_id, format_role_text, format_system_text,
+        normalize_slash_command_text, parse_fallback_command_text, repairable_bound_session_id,
+        session_binding_access_hint, session_binding_hint_for_state,
+        should_cleanup_topic_rename_service_message, topic_rename_service_message_thread_id,
         usable_bound_session_id,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
@@ -1085,7 +1124,7 @@ mod tests {
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Duration;
-    use teloxide::types::Message;
+    use teloxide::types::{Message, MessageId, ThreadId};
     use teloxide::utils::command::BotCommands;
     use tokio::fs;
     use tokio::net::TcpListener;
@@ -1456,6 +1495,30 @@ mod tests {
             repairable_bound_session_id(Some(&binding)),
             Some("thr_current")
         );
+    }
+
+    #[tokio::test]
+    async fn append_command_thread_log_writes_workspace_thread_entry() {
+        let root = temp_path();
+        let repository = ThreadRepository::open(&root).await.unwrap();
+        let record = repository
+            .create_thread(-1001234567890, 7, "Title".to_owned())
+            .await
+            .unwrap();
+
+        append_command_thread_log(
+            &repository,
+            record.metadata.chat_id,
+            Some(ThreadId(MessageId(7))),
+            "Action 'repair_session_binding' started from telegram command.",
+        )
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&record.log_path).await.unwrap();
+        assert!(content.contains("repair_session_binding"));
+
+        let _ = fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
