@@ -13,7 +13,9 @@ use super::media::{self, dispatch_workspace_telegram_outbox};
 use super::preview::{PreviewHeartbeat, TurnPreviewController, TypingHeartbeat};
 use super::restore;
 use super::*;
-use crate::codex::{COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest};
+use crate::codex::{
+    COLLABORATION_MODE_UNAVAILABLE_PREFIX, CodexServerRequest, ensure_thread_run_state_idle,
+};
 use crate::collaboration_mode::CollaborationMode;
 use crate::delivery_bus::{
     ClaimStatus, DeliveryAttempt, DeliveryChannel, DeliveryClaim, DeliveryKind,
@@ -79,14 +81,22 @@ async fn revalidate_session_after_turn_error(
     existing_thread_id: &str,
     execution_mode: ExecutionMode,
 ) -> Result<crate::codex::CodexThreadBinding> {
-    tokio::time::timeout(
+    let binding = tokio::time::timeout(
         Duration::from_secs(TURN_ERROR_REVALIDATION_TIMEOUT_SECS),
         state
             .codex
             .resume_session(codex_workspace, existing_thread_id, Some(execution_mode)),
     )
     .await
-    .context("timed out while revalidating saved session after turn failure")?
+    .context("timed out while revalidating saved session after turn failure")??;
+    let run_state = state
+        .codex
+        .read_thread_run_state(codex_workspace, &binding.thread_id)
+        .await
+        .context("failed to inspect worker run state while revalidating saved session after turn failure")?;
+    ensure_thread_run_state_idle(&binding.thread_id, &run_state)
+        .context("saved session resumed, but worker did not settle after turn failure")?;
+    Ok(binding)
 }
 
 async fn persist_collaboration_mode_change(

@@ -874,6 +874,7 @@ pub async fn record_bot_status_event(
             current
         }
         "bot_turn_interrupt_requested" => {
+            current.phase = WorkspaceStatusPhase::TurnFinalizing;
             current.client = Some("threadbridge".to_owned());
             current.pending_interrupt_turn_id = turn_id.map(str::to_owned);
             current.pending_interrupt_requested_at = Some(now_iso());
@@ -2172,7 +2173,7 @@ mod tests {
             Some("turn-1")
         );
         assert!(requested.pending_interrupt_requested_at.is_some());
-        assert_eq!(requested.phase, WorkspaceStatusPhase::TurnRunning);
+        assert_eq!(requested.phase, WorkspaceStatusPhase::TurnFinalizing);
 
         let finalized =
             super::finalize_pending_bot_interrupt_if_still_busy(&workspace, "thr_bot", "turn-1")

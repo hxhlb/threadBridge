@@ -111,6 +111,20 @@ pub struct BackendThreadRunState {
     pub last_transition_at: Option<String>,
 }
 
+pub fn ensure_thread_run_state_idle(
+    thread_id: &str,
+    run_state: &BackendThreadRunState,
+) -> Result<()> {
+    if !run_state.is_busy {
+        return Ok(());
+    }
+    let active_turn_id = run_state.active_turn_id.as_deref().unwrap_or("unknown");
+    let phase = run_state.phase.as_deref().unwrap_or("unknown");
+    bail!(
+        "saved Codex session `{thread_id}` resumed, but worker still reports active turn `{active_turn_id}` in phase `{phase}`"
+    );
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexTurnOutcome {
@@ -1994,6 +2008,37 @@ mod tests {
         assert_eq!(binding.model.as_deref(), Some("gpt-test"));
         assert_eq!(binding.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(binding.execution.execution_mode, None);
+    }
+
+    #[test]
+    fn ensure_thread_run_state_idle_accepts_idle_state() {
+        let run_state = super::BackendThreadRunState {
+            thread_id: "thr_123".to_owned(),
+            is_busy: false,
+            active_turn_id: None,
+            interruptible: false,
+            phase: Some("idle".to_owned()),
+            last_transition_at: None,
+        };
+        assert!(super::ensure_thread_run_state_idle("thr_123", &run_state).is_ok());
+    }
+
+    #[test]
+    fn ensure_thread_run_state_idle_rejects_busy_state() {
+        let run_state = super::BackendThreadRunState {
+            thread_id: "thr_123".to_owned(),
+            is_busy: true,
+            active_turn_id: Some("turn_456".to_owned()),
+            interruptible: false,
+            phase: Some("turn_interrupt_requested".to_owned()),
+            last_transition_at: None,
+        };
+        let error = super::ensure_thread_run_state_idle("thr_123", &run_state)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("thr_123"));
+        assert!(error.contains("turn_456"));
+        assert!(error.contains("turn_interrupt_requested"));
     }
 
     #[test]

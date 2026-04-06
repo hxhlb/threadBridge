@@ -10,7 +10,7 @@ use tokio::process::Command;
 use tracing::info;
 
 use crate::app_server_runtime::{WorkspaceRuntimeManager, WorkspaceRuntimeState};
-use crate::codex::{CodexRunner, CodexWorkspace};
+use crate::codex::{CodexRunner, CodexWorkspace, ensure_thread_run_state_idle};
 use crate::collaboration_mode::CollaborationMode;
 use crate::config::RuntimeConfig;
 use crate::delivery_bus::DeliveryBusCoordinator;
@@ -1277,6 +1277,29 @@ impl WorkspaceSessionService {
                 stale_tui_cleared: cleanup.stale_tui_cleared,
             }),
             Ok(Ok(binding)) => {
+                let run_state = self
+                    .ctx
+                    .codex
+                    .read_thread_run_state(&codex_workspace, &binding.thread_id)
+                    .await
+                    .context("failed to inspect worker run state after session repair");
+                if let Err(error) = run_state.and_then(|run_state| {
+                    ensure_thread_run_state_idle(&binding.thread_id, &run_state).context(
+                        "saved Codex session resumed during repair, but worker did not settle",
+                    )
+                }) {
+                    return Ok(SessionRepairResult {
+                        record: self
+                            .ctx
+                            .repository
+                            .mark_session_binding_broken(record, error.to_string())
+                            .await?,
+                        verified: false,
+                        runtime_restarted: true,
+                        stale_busy_cleared: cleanup.stale_busy_cleared,
+                        stale_tui_cleared: cleanup.stale_tui_cleared,
+                    });
+                }
                 let record = self
                     .ctx
                     .repository
