@@ -39,6 +39,7 @@ use crate::turn_completion::compose_visible_final_reply;
 const TELEGRAM_SESSION_SUMMARY_LIMIT: usize = 5;
 const TELEGRAM_SESSION_RECORD_LIMIT: usize = 12;
 const STOP_INTERRUPT_GRACE_MS: u64 = 5_000;
+const TURN_ERROR_REVALIDATION_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LaunchCommandTarget {
@@ -70,6 +71,22 @@ fn format_error_chain(error: &anyhow::Error) -> String {
     } else {
         chain.join(" | ")
     }
+}
+
+async fn revalidate_session_after_turn_error(
+    state: &AppState,
+    codex_workspace: &crate::codex::CodexWorkspace,
+    existing_thread_id: &str,
+    execution_mode: ExecutionMode,
+) -> Result<crate::codex::CodexThreadBinding> {
+    tokio::time::timeout(
+        Duration::from_secs(TURN_ERROR_REVALIDATION_TIMEOUT_SECS),
+        state
+            .codex
+            .resume_session(codex_workspace, existing_thread_id, Some(execution_mode)),
+    )
+    .await
+    .context("timed out while revalidating saved session after turn failure")?
 }
 
 async fn persist_collaboration_mode_change(
@@ -2239,6 +2256,7 @@ async fn execute_text_turn(
             }
         },
         Err(error) => {
+            let error_chain = format_error_chain(&error);
             let _ = record_bot_status_event(
                 &workspace_path,
                 "bot_turn_failed",
@@ -2247,47 +2265,114 @@ async fn execute_text_turn(
                 Some("text turn failed"),
             )
             .await;
-            error!(
-                event = "telegram.thread.message.codex_failed",
-                thread_key = %record.metadata.thread_key,
-                chat_id = record.metadata.chat_id,
-                message_thread_id = record.metadata.message_thread_id.unwrap_or_default(),
-                codex_thread_id = existing_thread_id,
-                error = %error,
-                "codex turn failed for thread message"
-            );
             if is_nonfatal_collaboration_mode_error(&error) {
-                send_scoped_warning_message(bot, chat_id, Some(thread_id), error.to_string())
-                    .await?;
+                warn!(
+                    event = "telegram.thread.message.codex_nonfatal_failed",
+                    thread_key = %record.metadata.thread_key,
+                    chat_id = record.metadata.chat_id,
+                    message_thread_id = record.metadata.message_thread_id.unwrap_or_default(),
+                    codex_thread_id = existing_thread_id,
+                    error = %error,
+                    error_chain = %error_chain,
+                    "codex turn failed with a nonfatal collaboration-mode error"
+                );
+                send_scoped_warning_message(bot, chat_id, Some(thread_id), error_chain).await?;
                 return Ok(());
             }
-            let record = state
-                .repository
-                .mark_session_binding_broken(record, error.to_string())
-                .await?;
-            state
-                .repository
-                .append_log(
-                    &record,
-                    LogDirection::System,
-                    format!("Codex turn failed: {error}"),
-                    None,
-                )
-                .await?;
-            send_scoped_warning_message(
-                bot,
-                chat_id,
-                Some(thread_id),
-                "Codex session is unavailable. Use /repair_session_binding to retry or /start_fresh_session to start a fresh one.",
+
+            match revalidate_session_after_turn_error(
+                state,
+                &codex_workspace,
+                existing_thread_id,
+                execution_mode,
             )
-            .await?;
-            let _ = title_sync::refresh_thread_topic_title(
-                bot,
-                &state.repository,
-                &record,
-                "thread_message_codex_failed",
-            )
-            .await;
+            .await
+            {
+                Ok(binding) => {
+                    warn!(
+                        event = "telegram.thread.message.codex_transport_revalidated",
+                        thread_key = %record.metadata.thread_key,
+                        chat_id = record.metadata.chat_id,
+                        message_thread_id = record.metadata.message_thread_id.unwrap_or_default(),
+                        codex_thread_id = existing_thread_id,
+                        error = %error,
+                        error_chain = %error_chain,
+                        "codex turn transport failed, but the saved session was revalidated"
+                    );
+                    let record = state
+                        .repository
+                        .mark_session_binding_verified(record)
+                        .await?;
+                    let record = state
+                        .repository
+                        .update_session_execution_snapshot(record, &binding.execution)
+                        .await?;
+                    state
+                        .repository
+                        .append_log(
+                            &record,
+                            LogDirection::System,
+                            format!(
+                                "Codex turn transport failed, but session continuity was revalidated: {error_chain}"
+                            ),
+                            None,
+                        )
+                        .await?;
+                    send_scoped_warning_message(
+                        bot,
+                        chat_id,
+                        Some(thread_id),
+                        "The current Codex request failed in transit, but the saved session is still healthy. Retry the message if you still need a reply.",
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                Err(revalidation_error) => {
+                    let revalidation_error_chain = format_error_chain(&revalidation_error);
+                    error!(
+                        event = "telegram.thread.message.codex_failed",
+                        thread_key = %record.metadata.thread_key,
+                        chat_id = record.metadata.chat_id,
+                        message_thread_id = record.metadata.message_thread_id.unwrap_or_default(),
+                        codex_thread_id = existing_thread_id,
+                        error = %error,
+                        error_chain = %error_chain,
+                        revalidation_error = %revalidation_error,
+                        revalidation_error_chain = %revalidation_error_chain,
+                        "codex turn failed for thread message"
+                    );
+                    let record = state
+                        .repository
+                        .mark_session_binding_broken(record, error_chain.clone())
+                        .await?;
+                    state
+                        .repository
+                        .append_log(
+                            &record,
+                            LogDirection::System,
+                            format!(
+                                "Codex turn failed: {error_chain} | Session revalidation failed: {revalidation_error_chain}"
+                            ),
+                            None,
+                        )
+                        .await?;
+                    send_scoped_warning_message(
+                        bot,
+                        chat_id,
+                        Some(thread_id),
+                        "Codex session is unavailable. Use /repair_session_binding to retry or /start_fresh_session to start a fresh one.",
+                    )
+                    .await?;
+                    let _ = title_sync::refresh_thread_topic_title(
+                        bot,
+                        &state.repository,
+                        &record,
+                        "thread_message_codex_failed",
+                    )
+                    .await;
+                    return Ok(());
+                }
+            }
         }
     }
 
@@ -2430,9 +2515,10 @@ pub(crate) async fn launch_plan_implementation_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        LaunchCommandTarget, build_workspace_launch_config, parse_execution_mode_argument,
-        parse_launch_command_target, persist_collaboration_mode_change,
-        render_stop_started_message, render_working_session_records, render_working_sessions,
+        LaunchCommandTarget, build_workspace_launch_config, format_error_chain,
+        parse_execution_mode_argument, parse_launch_command_target,
+        persist_collaboration_mode_change, render_stop_started_message,
+        render_working_session_records, render_working_sessions,
     };
     use crate::collaboration_mode::CollaborationMode;
     use crate::config::{AppConfig, RuntimeConfig, TelegramConfig};
@@ -2458,6 +2544,15 @@ mod tests {
 
     #[test]
     fn thread_flow_module_compiles_without_attach_helpers() {}
+
+    #[test]
+    fn format_error_chain_includes_context_and_source() {
+        let error = anyhow::anyhow!("worker websocket closed unexpectedly").context("turn failed");
+        assert_eq!(
+            format_error_chain(&error),
+            "turn failed | worker websocket closed unexpectedly"
+        );
+    }
 
     #[test]
     fn launch_command_parser_accepts_new_continue_current_and_resume() {
