@@ -360,7 +360,18 @@ async fn sync_local_transcript_mirrors_once(
             None => initial_workspace_event_offset(&event_log.events, &local_tui_claim),
         };
         let new_offset = event_log.events.len();
-        for event in event_log.events.iter().skip(previous_offset) {
+        let new_events = &event_log.events[previous_offset..new_offset];
+        let mut event_index = 0usize;
+        while event_index < new_events.len() {
+            let mut event = &new_events[event_index];
+            let mut next_event_index = event_index + 1;
+            if event.event == "preview_text" {
+                let run_end = preview_event_run_end(new_events, event_index);
+                // TUI ingress emits cumulative preview snapshots; only the newest
+                // preview in a consecutive run should be mirrored into Telegram.
+                event = &new_events[run_end - 1];
+                next_event_index = run_end;
+            }
             match event.event.as_str() {
                 "user_prompt_submitted" => {
                     let Some(session_id) = event
@@ -702,6 +713,7 @@ async fn sync_local_transcript_mirrors_once(
                     }
                 }
             }
+            event_index = next_event_index;
         }
         workspace_event_offsets.insert(workspace_key, new_offset);
     }
@@ -750,6 +762,37 @@ fn initial_workspace_event_offset(
         .iter()
         .position(|event| event.occurred_at >= local_tui_claim.started_at)
         .unwrap_or(events.len())
+}
+
+fn preview_event_run_end(events: &[WorkspaceStatusEventRecord], start: usize) -> usize {
+    let Some(first) = events.get(start) else {
+        return start;
+    };
+    if first.event != "preview_text" {
+        return start + 1;
+    }
+    let Some(session_id) = first.payload.get("session_id").and_then(Value::as_str) else {
+        return start + 1;
+    };
+    let turn_id = turn_id_from_event_payload(&first.payload);
+    let mut index = start + 1;
+    while let Some(candidate) = events.get(index) {
+        if candidate.event != "preview_text" {
+            break;
+        }
+        let Some(candidate_session_id) =
+            candidate.payload.get("session_id").and_then(Value::as_str)
+        else {
+            break;
+        };
+        if candidate_session_id != session_id
+            || turn_id_from_event_payload(&candidate.payload) != turn_id
+        {
+            break;
+        }
+        index += 1;
+    }
+    index
 }
 
 fn transcript_origin_from_event(event: &WorkspaceStatusEventRecord) -> TranscriptMirrorOrigin {
@@ -875,8 +918,9 @@ mod tests {
     use super::{
         MirrorPreviewState, STARTUP_STALE_BUSY_RECOVERED_LOG, busy_command_message,
         busy_text_message, initial_workspace_event_offset, local_mirror_entry_from_event,
-        reconcile_stale_bot_busy_sessions_for_repository, render_topic_title, thread_id_from_i32,
-        topic_title_suffix_label, tui_adoption_prompt_text, turn_id_from_event_payload,
+        preview_event_run_end, reconcile_stale_bot_busy_sessions_for_repository,
+        render_topic_title, thread_id_from_i32, topic_title_suffix_label, tui_adoption_prompt_text,
+        turn_id_from_event_payload,
     };
     use crate::repository::{
         SessionBinding, ThreadMetadata, ThreadRecord, ThreadRepository, ThreadScope, ThreadStatus,
@@ -1184,6 +1228,79 @@ mod tests {
         ];
 
         assert_eq!(initial_workspace_event_offset(&events, &local_tui_claim), 1);
+    }
+
+    #[test]
+    fn preview_event_run_end_collapses_consecutive_same_turn_snapshots() {
+        let events = vec![
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "turn_id": "turn-1", "text": "a"}),
+            },
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.010Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "turn_id": "turn-1", "text": "ab"}),
+            },
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.020Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "turn_id": "turn-1", "text": "abc"}),
+            },
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "turn_completed".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:01.000Z".to_owned(),
+                payload: json!({"thread-id": "thr_tui", "turn-id": "turn-1", "last-assistant-message": "done"}),
+            },
+        ];
+
+        assert_eq!(preview_event_run_end(&events, 0), 3);
+    }
+
+    #[test]
+    fn preview_event_run_end_stops_at_turn_or_session_boundary() {
+        let events = vec![
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.000Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "turn_id": "turn-1", "text": "a"}),
+            },
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.010Z".to_owned(),
+                payload: json!({"session_id": "thr_tui", "turn_id": "turn-2", "text": "b"}),
+            },
+            WorkspaceStatusEventRecord {
+                schema_version: 2,
+                event: "preview_text".to_owned(),
+                source: crate::workspace_status::SessionActivitySource::Tui,
+                workspace_cwd: "/tmp/workspace".to_owned(),
+                occurred_at: "2026-03-19T00:00:00.020Z".to_owned(),
+                payload: json!({"session_id": "thr_other", "turn_id": "turn-2", "text": "c"}),
+            },
+        ];
+
+        assert_eq!(preview_event_run_end(&events, 0), 1);
+        assert_eq!(preview_event_run_end(&events, 1), 2);
     }
 
     #[test]
