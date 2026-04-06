@@ -960,9 +960,9 @@ pub(crate) async fn session_binding_hint_for_state(
                 None => false,
             };
             if has_live_tui_session {
-                "This workspace's Codex session is invalid, and a shared TUI session is still recorded for this workspace. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again.".to_owned()
+                "This workspace's Codex session is invalid, and a shared TUI session is still recorded for this workspace. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and resume the saved Codex session before trying again.".to_owned()
             } else {
-                "This workspace's Codex session is invalid. Use /repair_session_binding to force-restart the workspace runtime and verify it again, or /start_fresh_session to start a fresh one for the same workspace.".to_owned()
+                "This workspace's Codex session is invalid. Use /repair_session_binding to force-restart the workspace runtime and resume it again, or /start_fresh_session to start a fresh one for the same workspace.".to_owned()
             }
         }
         BindingStatus::Unbound => {
@@ -1001,7 +1001,7 @@ pub(crate) async fn session_binding_access_hint(
             }
         };
         return format!(
-            "This workspace's Codex session is invalid, and {activity}. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and verify the saved Codex session before trying again."
+            "This workspace's Codex session is invalid, and {activity}. Use /repair_session_binding to force-restart the workspace runtime, clear stale session state, and resume the saved Codex session before trying again."
         );
     }
     session_binding_hint_for_state(state, thread_key, session).await
@@ -1174,7 +1174,7 @@ mod tests {
                                     "id": id,
                                     "result": { "protocolVersion": "2" },
                                 }),
-                                "thread/read" => json!({
+                                "thread/read" | "thread/resume" => json!({
                                     "id": id,
                                     "result": {
                                         "thread": {

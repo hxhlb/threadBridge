@@ -573,9 +573,13 @@ impl SharedControlHandle {
                 &result.record,
                 LogDirection::System,
                 if result.verified {
-                    format!("Codex session force-recovered and revalidated from {origin}.")
+                    format!(
+                        "Codex session force-recovered, resumed, and revalidated from {origin}."
+                    )
                 } else {
-                    format!("Codex session force-recovery failed verification from {origin}.")
+                    format!(
+                        "Codex session force-recovery failed resume verification from {origin}."
+                    )
                 },
                 None,
             )
@@ -1224,6 +1228,7 @@ impl WorkspaceSessionService {
             .workspace_runtime_service()
             .restart_workspace_runtime_for_control(workspace_path.clone())
             .await?;
+        let execution_mode = workspace_execution_mode(&codex_workspace.working_directory).await?;
         let cleanup =
             repair_stale_session_state(&workspace_path, &record.metadata.thread_key, binding)
                 .await?;
@@ -1234,20 +1239,27 @@ impl WorkspaceSessionService {
         match self
             .ctx
             .codex
-            .reconnect_session(&codex_workspace, existing_thread_id)
+            .resume_session(&codex_workspace, existing_thread_id, Some(execution_mode))
             .await
         {
-            Ok(()) => Ok(SessionRepairResult {
-                record: self
+            Ok(binding) => {
+                let record = self
                     .ctx
                     .repository
-                    .mark_session_binding_verified(record)
-                    .await?,
-                verified: true,
-                runtime_restarted: true,
-                stale_busy_cleared: cleanup.stale_busy_cleared,
-                stale_tui_cleared: cleanup.stale_tui_cleared,
-            }),
+                    .update_session_execution_snapshot(record, &binding.execution)
+                    .await?;
+                Ok(SessionRepairResult {
+                    record: self
+                        .ctx
+                        .repository
+                        .mark_session_binding_verified(record)
+                        .await?,
+                    verified: true,
+                    runtime_restarted: true,
+                    stale_busy_cleared: cleanup.stale_busy_cleared,
+                    stale_tui_cleared: cleanup.stale_tui_cleared,
+                })
+            }
             Err(error) => Ok(SessionRepairResult {
                 record: self
                     .ctx
@@ -1384,34 +1396,43 @@ impl SessionRoutingService {
             .workspace_runtime_service()
             .shared_codex_workspace(workspace_path)
             .await?;
-        if let Err(error) = self
+        let execution_mode = workspace_execution_mode(&workspace.working_directory).await?;
+        let resumed = match self
             .ctx
             .codex
-            .reconnect_session(&workspace, &tui_session_id)
+            .resume_session(&workspace, &tui_session_id, Some(execution_mode))
             .await
         {
-            let reason = format!(
-                "TUI session adoption verification failed for `{}`: {}",
-                tui_session_id, error
-            );
-            let updated = self.ctx.repository.clear_tui_adoption_state(record).await?;
-            self.ctx
-                .repository
-                .append_log(&updated, LogDirection::System, reason.clone(), None)
-                .await?;
-            let updated = self
-                .ctx
-                .repository
-                .mark_session_binding_broken(updated, reason)
-                .await?;
-            let session = self.ctx.repository.read_session_binding(&updated).await?;
-            return Ok(SessionRoutingResult::BrokenAfterFailedVerify {
-                record: updated,
-                session,
-            });
-        }
+            Ok(binding) => binding,
+            Err(error) => {
+                let reason = format!(
+                    "TUI session adoption verification failed for `{}`: {}",
+                    tui_session_id, error
+                );
+                let updated = self.ctx.repository.clear_tui_adoption_state(record).await?;
+                self.ctx
+                    .repository
+                    .append_log(&updated, LogDirection::System, reason.clone(), None)
+                    .await?;
+                let updated = self
+                    .ctx
+                    .repository
+                    .mark_session_binding_broken(updated, reason)
+                    .await?;
+                let session = self.ctx.repository.read_session_binding(&updated).await?;
+                return Ok(SessionRoutingResult::BrokenAfterFailedVerify {
+                    record: updated,
+                    session,
+                });
+            }
+        };
 
         let updated = self.ctx.repository.adopt_tui_active_session(record).await?;
+        let updated = self
+            .ctx
+            .repository
+            .update_session_execution_snapshot(updated, &resumed.execution)
+            .await?;
         let session = self.ctx.repository.read_session_binding(&updated).await?;
         self.ctx
             .repository

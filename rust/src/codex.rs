@@ -538,6 +538,46 @@ impl CodexRunner {
         })
     }
 
+    async fn resume_thread_on_client(
+        client: &mut AppServerClient,
+        thread_id: &str,
+        execution_mode: Option<ExecutionMode>,
+    ) -> Result<CodexThreadBinding> {
+        let result = client
+            .request_simple(
+                "thread/resume",
+                Self::build_thread_resume_params(thread_id, execution_mode),
+            )
+            .await?;
+        let binding = Self::parse_binding(&result)?;
+        if binding.thread_id != thread_id {
+            bail!(
+                "Codex thread continuity changed: expected {}, got {}",
+                thread_id,
+                binding.thread_id
+            );
+        }
+        Ok(binding)
+    }
+
+    async fn read_thread_on_client(
+        client: &mut AppServerClient,
+        thread_id: &str,
+    ) -> Result<CodexThreadBinding> {
+        let result = client
+            .request_simple("thread/read", Self::build_thread_read_params(thread_id))
+            .await?;
+        let binding = Self::parse_binding(&result)?;
+        if binding.thread_id != thread_id {
+            bail!(
+                "Codex thread continuity changed: expected {}, got {}",
+                thread_id,
+                binding.thread_id
+            );
+        }
+        Ok(binding)
+    }
+
     fn build_turn_start_params(
         thread_id: &str,
         input: &[CodexInputItem],
@@ -759,27 +799,28 @@ impl CodexRunner {
         Ok(binding)
     }
 
-    pub async fn reconnect_session(
+    pub async fn resume_session(
         &self,
         workspace: &CodexWorkspace,
         existing_thread_id: &str,
-    ) -> Result<()> {
+        execution_mode: Option<ExecutionMode>,
+    ) -> Result<CodexThreadBinding> {
         let mut client = AppServerClient::start(workspace).await?;
-        let result = client
-            .request_simple(
-                "thread/read",
-                Self::build_thread_read_params(existing_thread_id),
-            )
-            .await?;
-        let binding = Self::parse_binding(&result)?;
-        if binding.thread_id != existing_thread_id {
-            bail!(
-                "Codex thread continuity changed: expected {}, got {}",
-                existing_thread_id,
-                binding.thread_id
-            );
-        }
-        Self::ensure_workspace_cwd(workspace, &binding)
+        let binding =
+            Self::resume_thread_on_client(&mut client, existing_thread_id, execution_mode).await?;
+        Self::ensure_workspace_cwd(workspace, &binding)?;
+        Ok(binding)
+    }
+
+    pub async fn read_session_binding(
+        &self,
+        workspace: &CodexWorkspace,
+        existing_thread_id: &str,
+    ) -> Result<CodexThreadBinding> {
+        let mut client = AppServerClient::start(workspace).await?;
+        let binding = Self::read_thread_on_client(&mut client, existing_thread_id).await?;
+        Self::ensure_workspace_cwd(workspace, &binding)?;
+        Ok(binding)
     }
 
     pub async fn run_with_events<F, Fut>(
@@ -829,20 +870,8 @@ impl CodexRunner {
         let mut client = AppServerClient::start(workspace).await?;
         let (binding, selected_factory) = match existing_thread_id {
             Some(thread_id) => {
-                let result = client
-                    .request_simple(
-                        "thread/resume",
-                        Self::build_thread_resume_params(thread_id, execution_mode),
-                    )
-                    .await?;
-                let binding = Self::parse_binding(&result)?;
-                if binding.thread_id != thread_id {
-                    bail!(
-                        "Codex thread continuity changed: expected {}, got {}",
-                        thread_id,
-                        binding.thread_id
-                    );
-                }
+                let binding =
+                    Self::resume_thread_on_client(&mut client, thread_id, execution_mode).await?;
                 (binding, "resumeThread")
             }
             None => {
@@ -1583,12 +1612,98 @@ mod tests {
     use crate::collaboration_mode::CollaborationMode;
     use crate::execution_mode::{ExecutionMode, SessionExecutionSnapshot};
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     fn workspace() -> CodexWorkspace {
         CodexWorkspace {
             working_directory: PathBuf::from("/tmp/workspace"),
             app_server_url: None,
         }
+    }
+
+    async fn start_mock_app_server(
+        workspace: PathBuf,
+        thread_method: &'static str,
+    ) -> anyhow::Result<(String, Arc<Mutex<Vec<String>>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let seen_methods = Arc::new(Mutex::new(Vec::new()));
+        tokio::spawn({
+            let seen_methods = seen_methods.clone();
+            async move {
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let seen_methods = seen_methods.clone();
+                    let workspace = workspace.clone();
+                    tokio::spawn(async move {
+                        let Ok(mut ws) = accept_async(stream).await else {
+                            return;
+                        };
+                        while let Some(message) = futures_util::StreamExt::next(&mut ws).await {
+                            let Ok(message) = message else {
+                                break;
+                            };
+                            let WsMessage::Text(text) = message else {
+                                continue;
+                            };
+                            let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text)
+                            else {
+                                continue;
+                            };
+                            let Some(method) = payload
+                                .get("method")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                            else {
+                                continue;
+                            };
+                            seen_methods.lock().unwrap().push(method.clone());
+                            if payload.get("id").is_none() {
+                                continue;
+                            }
+                            let id = payload["id"].as_i64().unwrap();
+                            let response = match method.as_str() {
+                                "initialize" => json!({
+                                    "id": id,
+                                    "result": { "protocolVersion": "2" },
+                                }),
+                                value if value == thread_method => json!({
+                                    "id": id,
+                                    "result": {
+                                        "thread": {
+                                            "id": "thr_resume",
+                                            "cwd": workspace.display().to_string(),
+                                        },
+                                        "cwd": workspace.display().to_string(),
+                                        "model": "gpt-test",
+                                        "reasoningEffort": "medium",
+                                        "approvalPolicy": "on-request",
+                                        "sandbox": "workspace-write",
+                                    },
+                                }),
+                                _ => json!({
+                                    "id": id,
+                                    "error": {
+                                        "message": format!("unsupported method: {method}"),
+                                    },
+                                }),
+                            };
+                            let _ = futures_util::SinkExt::send(
+                                &mut ws,
+                                WsMessage::Text(response.to_string().into()),
+                            )
+                            .await;
+                        }
+                    });
+                }
+            }
+        });
+        Ok((format!("ws://127.0.0.1:{}", addr.port()), seen_methods))
     }
 
     #[test]
@@ -1636,6 +1751,60 @@ mod tests {
             runner.build_thread_start_params(&workspace().working_directory, ExecutionMode::Yolo);
         assert_eq!(params["approvalPolicy"], "never");
         assert_eq!(params["sandbox"], "danger-full-access");
+    }
+
+    #[tokio::test]
+    async fn resume_session_uses_thread_resume() {
+        let workspace_dir = PathBuf::from("/tmp/workspace");
+        let (app_server_url, seen_methods) =
+            start_mock_app_server(workspace_dir.clone(), "thread/resume")
+                .await
+                .unwrap();
+        let runner = CodexRunner::new(None);
+        let binding = runner
+            .resume_session(
+                &CodexWorkspace {
+                    working_directory: workspace_dir.clone(),
+                    app_server_url: Some(app_server_url),
+                },
+                "thr_resume",
+                Some(ExecutionMode::FullAuto),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(binding.thread_id, "thr_resume");
+        assert_eq!(binding.cwd, workspace_dir.display().to_string());
+        assert_eq!(
+            seen_methods.lock().unwrap().as_slice(),
+            &["initialize", "initialized", "thread/resume"]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_session_binding_uses_thread_read() {
+        let workspace_dir = PathBuf::from("/tmp/workspace");
+        let (app_server_url, seen_methods) =
+            start_mock_app_server(workspace_dir.clone(), "thread/read")
+                .await
+                .unwrap();
+        let runner = CodexRunner::new(None);
+        let binding = runner
+            .read_session_binding(
+                &CodexWorkspace {
+                    working_directory: workspace_dir.clone(),
+                    app_server_url: Some(app_server_url),
+                },
+                "thr_resume",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(binding.thread_id, "thr_resume");
+        assert_eq!(
+            seen_methods.lock().unwrap().as_slice(),
+            &["initialize", "initialized", "thread/read"]
+        );
     }
 
     #[test]

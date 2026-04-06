@@ -1200,7 +1200,9 @@ pub fn workspace_recovery_hint(
     let unloaded_thread = session_broken_reason
         .map(str::to_ascii_lowercase)
         .is_some_and(|reason| {
-            reason.contains("thread/read failed") && reason.contains("thread not loaded")
+            reason.contains("thread not loaded")
+                && (reason.contains("thread/read failed")
+                    || reason.contains("thread/resume failed"))
         });
     if unloaded_thread {
         return Some(if has_live_tui_session {
@@ -1545,6 +1547,32 @@ mod tests {
             hint.as_deref(),
             Some(
                 "Codex continuity is marked broken. Use Repair Session after the runtime surface is healthy."
+            )
+        );
+    }
+
+    #[test]
+    fn workspace_recovery_hint_detects_unloaded_session_from_resume_failure() {
+        let hint = workspace_recovery_hint(
+            false,
+            "broken",
+            Some("thread/resume failed: thread not loaded: thr_current"),
+            &WorkspaceRuntimeHealth {
+                app_server_status: "running",
+                hcodex_ingress_status: "running",
+                runtime_readiness: "ready",
+                source: "owner_heartbeat",
+                last_checked_at: None,
+                last_error: None,
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(
+            hint.as_deref(),
+            Some(
+                "The saved Codex session is no longer loaded by app-server. Use New Session to start a fresh session."
             )
         );
     }

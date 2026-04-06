@@ -781,7 +781,7 @@ pub(crate) async fn run_command(
                             bot,
                             msg.chat.id,
                             Some(thread_id),
-                            "Workspace runtime restarted and the saved Codex session was verified.",
+                            "Workspace runtime restarted and the saved Codex session was resumed and verified.",
                         )
                         .await?;
                     } else {
@@ -789,7 +789,7 @@ pub(crate) async fn run_command(
                             bot,
                             msg.chat.id,
                             Some(thread_id),
-                            "Workspace runtime restarted, but the saved Codex session still could not be verified. Use /start_fresh_session to start fresh or /repair_session_binding to retry.",
+                            "Workspace runtime restarted, but the saved Codex session still could not be resumed and verified. Use /start_fresh_session to start fresh or /repair_session_binding to retry.",
                         )
                         .await?;
                     }
