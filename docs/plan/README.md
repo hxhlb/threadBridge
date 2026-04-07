@@ -259,6 +259,10 @@
   - 記錄目前單一 `TELEGRAM_BOT_TOKEN` / 單 bot polling / 單 bot setup 模型的限制
   - 已補記一個明確產品判斷：`threadBridge` 應正式支持多個 Telegram bot token
   - 聚焦 machine-local bot registry、per-bot authorized users、thread bot identity 與 management setup 收斂方向
+- [codex-agent-install-and-first-setup.md](management-desktop-surface/codex-agent-install-and-first-setup.md)
+  - doc kind: `plan`
+  - 給外部 Codex agent 的安裝與首次 Telegram setup 引導草稿
+  - 聚焦 desktop-first 啟動、management setup checkpoint、control chat ready，與 first workspace bind 的最短成功路徑
 - [llm-guidance-and-goals.md](unknown-owner/llm-guidance-and-goals.md)
   - doc kind: `plan`
   - 目前掛在 `unknown-owner/`，作為尚未安全掛靠到 canonical role 的 quarantine 草稿
