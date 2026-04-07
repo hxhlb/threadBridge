@@ -45,6 +45,13 @@ const TURN_ERROR_REVALIDATION_TIMEOUT_SECS: u64 = 5;
 const TURN_ERROR_REVALIDATION_MAX_ATTEMPTS: usize = 3;
 const TURN_ERROR_REVALIDATION_RETRY_DELAY_SECS: u64 = 5;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TelegramInputAutoRecovery {
+    NotAttempted,
+    VerifiedInPlace,
+    RepairedAfterRestart,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LaunchCommandTarget {
     New,
@@ -74,6 +81,164 @@ fn format_error_chain(error: &anyhow::Error) -> String {
         "unknown error".to_owned()
     } else {
         chain.join(" | ")
+    }
+}
+
+async fn verify_session_binding_now(
+    state: &AppState,
+    codex_workspace: &crate::codex::CodexWorkspace,
+    existing_thread_id: &str,
+    execution_mode: ExecutionMode,
+) -> Result<crate::codex::CodexThreadBinding> {
+    verify_session_binding_now_with(
+        existing_thread_id,
+        || async {
+            tokio::time::timeout(
+                Duration::from_secs(TURN_ERROR_REVALIDATION_TIMEOUT_SECS),
+                state
+                    .codex
+                    .resume_session(codex_workspace, existing_thread_id, Some(execution_mode)),
+            )
+            .await
+            .context("timed out while verifying saved session before Telegram auto-recovery")?
+        },
+        |thread_id| {
+            let thread_id = thread_id.to_owned();
+            async move {
+                state
+                    .codex
+                    .read_thread_run_state(codex_workspace, &thread_id)
+                    .await
+                    .context(
+                        "failed to inspect worker run state before Telegram auto-recovery",
+                    )
+            }
+        },
+    )
+    .await
+}
+
+async fn verify_session_binding_now_with<Resume, ResumeFut, ReadRun, ReadRunFut>(
+    _existing_thread_id: &str,
+    mut resume_session: Resume,
+    mut read_run_state: ReadRun,
+) -> Result<crate::codex::CodexThreadBinding>
+where
+    Resume: FnMut() -> ResumeFut,
+    ResumeFut: std::future::Future<Output = Result<crate::codex::CodexThreadBinding>>,
+    ReadRun: FnMut(&str) -> ReadRunFut,
+    ReadRunFut: std::future::Future<Output = Result<crate::codex::BackendThreadRunState>>,
+{
+    let binding = resume_session().await?;
+    let run_state = read_run_state(&binding.thread_id).await?;
+    ensure_thread_run_state_idle(&binding.thread_id, &run_state)
+        .context("saved session resumed during Telegram auto-recovery, but worker did not settle")?;
+    Ok(binding)
+}
+
+async fn maybe_auto_recover_broken_current_session_for_telegram_input(
+    state: &AppState,
+    record: ThreadRecord,
+    session: Option<SessionBinding>,
+) -> Result<(ThreadRecord, Option<SessionBinding>, TelegramInputAutoRecovery)> {
+    let Some(binding) = session.as_ref() else {
+        return Ok((record, session, TelegramInputAutoRecovery::NotAttempted));
+    };
+    if !record.metadata.session_broken {
+        return Ok((record, session, TelegramInputAutoRecovery::NotAttempted));
+    }
+    let Some(existing_thread_id) = current_bound_session_id(Some(binding)).map(str::to_owned) else {
+        return Ok((record, session, TelegramInputAutoRecovery::NotAttempted));
+    };
+    let workspace_path = workspace_path_from_binding(binding)?;
+    let live_tui_session = has_live_local_tui_session(
+        &workspace_path,
+        &record.metadata.thread_key,
+        binding.tui_active_codex_thread_id.as_deref(),
+    )
+    .await?;
+    let workspace_path = state
+        .control
+        .workspace_runtime_service()
+        .ensure_bound_workspace_runtime(binding)
+        .await?;
+    let codex_workspace = state
+        .control
+        .workspace_runtime_service()
+        .shared_codex_workspace(workspace_path.clone())
+        .await?;
+    let execution_mode = workspace_execution_mode(&workspace_path).await?;
+
+    match verify_session_binding_now(state, &codex_workspace, &existing_thread_id, execution_mode)
+        .await
+    {
+        Ok(binding_result) => {
+            let record = state.repository.mark_session_binding_verified(record).await?;
+            let record = state
+                .repository
+                .update_session_execution_snapshot(record, &binding_result.execution)
+                .await?;
+            state
+                .repository
+                .append_log(
+                    &record,
+                    LogDirection::System,
+                    "Auto-recovered the broken current Codex session on Telegram input without restarting the workspace runtime.",
+                    None,
+                )
+                .await?;
+            let session = state.repository.read_session_binding(&record).await?;
+            Ok((record, session, TelegramInputAutoRecovery::VerifiedInPlace))
+        }
+        Err(error) if live_tui_session => {
+            warn!(
+                event = "telegram.thread.message.auto_recovery_skipped_for_live_tui",
+                thread_key = %record.metadata.thread_key,
+                codex_thread_id = existing_thread_id,
+                error = %error,
+                error_chain = %format_error_chain(&error),
+                "skipping automatic session recovery because a live local TUI session is active"
+            );
+            Ok((record, session, TelegramInputAutoRecovery::NotAttempted))
+        }
+        Err(error) => {
+            warn!(
+                event = "telegram.thread.message.auto_recovery_restart",
+                thread_key = %record.metadata.thread_key,
+                codex_thread_id = existing_thread_id,
+                error = %error,
+                error_chain = %format_error_chain(&error),
+                "Telegram input auto-recovery could not verify the current session in place; restarting the workspace runtime"
+            );
+            let repaired = state
+                .control
+                .workspace_session_service()
+                .repair_session_binding(record, binding)
+                .await?;
+            state
+                .repository
+                .append_log(
+                    &repaired.record,
+                    LogDirection::System,
+                    if repaired.verified {
+                        "Auto-recovered the broken current Codex session on Telegram input by restarting the workspace runtime."
+                    } else {
+                        "Automatic Telegram session recovery restarted the workspace runtime, but the saved Codex session still could not be resumed and verified."
+                    },
+                    None,
+                )
+                .await?;
+            let session = state.repository.read_session_binding(&repaired.record).await?;
+            Ok((
+                repaired.record,
+                session,
+                if repaired.verified {
+                    TelegramInputAutoRecovery::RepairedAfterRestart
+                } else {
+                    TelegramInputAutoRecovery::NotAttempted
+                },
+            ))
+        }
     }
 }
 
@@ -1747,7 +1912,8 @@ pub(crate) async fn run_text_message(
         .maybe_route_telegram_input_to_tui_session(record, session)
         .await?
         .into_record_session();
-    let (resolved_state, blocking_snapshot) =
+    let (mut record, mut session) = (record, session);
+    let (mut resolved_state, mut blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
         send_scoped_message(
@@ -1758,6 +1924,17 @@ pub(crate) async fn run_text_message(
         )
         .await?;
         return Ok(());
+    }
+    if usable_bound_session_id(resolved_state, session.as_ref()).is_none() {
+        let (updated_record, updated_session, recovery) =
+            maybe_auto_recover_broken_current_session_for_telegram_input(state, record, session)
+                .await?;
+        record = updated_record;
+        session = updated_session;
+        if recovery != TelegramInputAutoRecovery::NotAttempted {
+            (resolved_state, blocking_snapshot) =
+                resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+        }
     }
     let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
         send_scoped_message(
@@ -2496,10 +2673,22 @@ pub(crate) async fn launch_plan_implementation_turn(
         .maybe_route_telegram_input_to_tui_session(record, session)
         .await?
         .into_record_session();
-    let (resolved_state, blocking_snapshot) =
+    let (mut record, mut session) = (record, session);
+    let (mut resolved_state, mut blocking_snapshot) =
         resolve_busy_gate_state(state, &record, session.as_ref()).await?;
     if resolved_state.is_archived() {
         anyhow::bail!("workspace is archived");
+    }
+    if usable_bound_session_id(resolved_state, session.as_ref()).is_none() {
+        let (updated_record, updated_session, recovery) =
+            maybe_auto_recover_broken_current_session_for_telegram_input(state, record, session)
+                .await?;
+        record = updated_record;
+        session = updated_session;
+        if recovery != TelegramInputAutoRecovery::NotAttempted {
+            (resolved_state, blocking_snapshot) =
+                resolve_busy_gate_state(state, &record, session.as_ref()).await?;
+        }
     }
     let Some(existing_thread_id) = usable_bound_session_id(resolved_state, session.as_ref()) else {
         anyhow::bail!("workspace is missing a usable session");
@@ -3060,5 +3249,67 @@ mod tests {
         assert_eq!(resume_calls.load(Ordering::SeqCst), 3);
         assert_eq!(run_state_checks.load(Ordering::SeqCst), 3);
         assert_eq!(sleep_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn verify_session_binding_now_requires_idle_worker_state() {
+        let binding = super::verify_session_binding_now_with(
+            "thr_current",
+            || async {
+                Ok(crate::codex::CodexThreadBinding {
+                    thread_id: "thr_current".to_owned(),
+                    cwd: "/tmp/workspace".to_owned(),
+                    model: None,
+                    reasoning_effort: None,
+                    execution: SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+                })
+            },
+            |_| async {
+                Ok(crate::codex::BackendThreadRunState {
+                    thread_id: "thr_current".to_owned(),
+                    is_busy: false,
+                    active_turn_id: None,
+                    interruptible: false,
+                    phase: Some("idle".to_owned()),
+                    last_transition_at: None,
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(binding.thread_id, "thr_current");
+    }
+
+    #[tokio::test]
+    async fn verify_session_binding_now_rejects_busy_worker_state() {
+        let error = super::verify_session_binding_now_with(
+            "thr_current",
+            || async {
+                Ok(crate::codex::CodexThreadBinding {
+                    thread_id: "thr_current".to_owned(),
+                    cwd: "/tmp/workspace".to_owned(),
+                    model: None,
+                    reasoning_effort: None,
+                    execution: SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+                })
+            },
+            |_| async {
+                Ok(crate::codex::BackendThreadRunState {
+                    thread_id: "thr_current".to_owned(),
+                    is_busy: true,
+                    active_turn_id: Some("turn_busy".to_owned()),
+                    interruptible: false,
+                    phase: Some("turn_interrupt_requested".to_owned()),
+                    last_transition_at: None,
+                })
+            },
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("worker did not settle"));
+        assert!(error.contains("Telegram auto-recovery"));
     }
 }

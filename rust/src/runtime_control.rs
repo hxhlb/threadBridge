@@ -29,7 +29,7 @@ use crate::thread_state::{effective_busy_snapshot_for_binding, resolve_thread_st
 use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
 use crate::workspace_status::{
     SessionActivitySource, clear_stale_local_tui_session_claim, has_live_local_tui_session,
-    read_session_status, record_managed_runtime_interrupt_requested,
+    read_session_status, record_bot_status_event, record_managed_runtime_interrupt_requested,
     recover_stale_tui_busy_session, stale_tui_busy_session_needs_recovery,
 };
 
@@ -1339,6 +1339,28 @@ async fn repair_stale_session_state(
 ) -> Result<SessionRepairCleanup> {
     let mut cleanup = SessionRepairCleanup::default();
 
+    if let Some(current_session_id) = binding.current_codex_thread_id.as_deref()
+        && let Some(snapshot) = read_session_status(workspace_path, current_session_id).await?
+        && snapshot.activity_source == SessionActivitySource::ManagedRuntime
+        && snapshot.phase.is_turn_busy()
+        && !has_live_local_tui_session(
+            workspace_path,
+            thread_key,
+            binding.tui_active_codex_thread_id.as_deref(),
+        )
+        .await?
+    {
+        record_bot_status_event(
+            workspace_path,
+            "bot_turn_recovered",
+            Some(current_session_id),
+            snapshot.turn_id.as_deref(),
+            None,
+        )
+        .await?;
+        cleanup.stale_busy_cleared = true;
+    }
+
     if let Some(tui_session_id) = binding.tui_active_codex_thread_id.as_deref()
         && let Some(snapshot) = read_session_status(workspace_path, tui_session_id).await?
         && snapshot.activity_source == SessionActivitySource::Tui
@@ -2034,6 +2056,62 @@ mod tests {
             .unwrap();
         assert!(!cleanup.stale_busy_cleared);
         assert!(cleanup.stale_tui_cleared);
+
+        let _ = fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn repair_stale_session_state_clears_busy_current_managed_runtime_snapshot() {
+        let workspace = temp_dir("repair-current-managed-session");
+        ensure_workspace_status_surface(&workspace).await.unwrap();
+        let current = SessionCurrentStatus {
+            schema_version: 2,
+            workspace_cwd: workspace.display().to_string(),
+            session_id: "thr_current".to_owned(),
+            activity_source: SessionActivitySource::ManagedRuntime,
+            live: false,
+            phase: WorkspaceStatusPhase::TurnFinalizing,
+            shell_pid: None,
+            child_pid: None,
+            child_pgid: None,
+            child_command: Some("app_server_ws_worker".to_owned()),
+            client: Some("threadbridge".to_owned()),
+            turn_id: Some("turn-1".to_owned()),
+            summary: Some("prompt summary".to_owned()),
+            pending_interrupt_turn_id: None,
+            pending_interrupt_requested_at: None,
+            observer_attach_mode: None,
+            updated_at: "2026-04-07T00:00:00.000Z".to_owned(),
+        };
+        fs::create_dir_all(workspace.join(".threadbridge/state/runtime-observer/sessions"))
+            .await
+            .unwrap();
+        fs::write(
+            workspace.join(".threadbridge/state/runtime-observer/sessions/thr_current.json"),
+            format!("{}\n", serde_json::to_string_pretty(&current).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let binding = SessionBinding::fresh(
+            Some(workspace.display().to_string()),
+            Some("thr_current".to_owned()),
+            SessionExecutionSnapshot::from_mode(ExecutionMode::FullAuto),
+        );
+
+        let cleanup = repair_stale_session_state(&workspace, "thread-1", &binding)
+            .await
+            .unwrap();
+        assert!(cleanup.stale_busy_cleared);
+        assert!(!cleanup.stale_tui_cleared);
+
+        let updated = read_session_status(&workspace, "thr_current")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.phase, WorkspaceStatusPhase::Idle);
+        assert_eq!(updated.turn_id, None);
+        assert_eq!(updated.summary.as_deref(), Some("prompt summary"));
 
         let _ = fs::remove_dir_all(workspace).await;
     }
