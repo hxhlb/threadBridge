@@ -253,6 +253,12 @@
   - Telegram Web App 觀測面草稿
   - 本地 session-first observability API 與 workspace-card Sessions pane 已落地，但 Telegram Web App 本身仍未開始
   - 由於 Telegram Web App 依賴 HTTPS，近期已降為遠期可選載體，不再是本地 observability 的主路徑
+- [multi-bot-token-support.md](telegram-adapter/multi-bot-token-support.md)
+  - doc kind: `plan`
+  - Telegram adapter 多 bot token 能力草稿
+  - 記錄目前單一 `TELEGRAM_BOT_TOKEN` / 單 bot polling / 單 bot setup 模型的限制
+  - 已補記一個明確產品判斷：`threadBridge` 應正式支持多個 Telegram bot token
+  - 聚焦 machine-local bot registry、per-bot authorized users、thread bot identity 與 management setup 收斂方向
 - [llm-guidance-and-goals.md](unknown-owner/llm-guidance-and-goals.md)
   - doc kind: `plan`
   - 目前掛在 `unknown-owner/`，作為尚未安全掛靠到 canonical role 的 quarantine 草稿
