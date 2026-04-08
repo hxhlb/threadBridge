@@ -173,6 +173,7 @@
   - primary spec: `yes`
   - Telegram outbound delivery 主規格已從純草稿進入部分落地
   - workspace outbox `surface`、最小檔案大小 preflight、photo -> document fallback、以及 oversized attachment/document warning path 已開始落地
+  - 用戶 -> bot 的文件輸入仍未正式支持；bot -> 用戶的 attachment / outbox document 已存在但仍屬局部 delivery path
   - workspace outbox v1 目前只正式承諾 `content` / `status`；其他 `surface` 仍是保守兼容值
   - local/TUI mirror draft 已開始保留 upstream `turn_id`，並用 turn-bound draft claim 做單 turn 去重
   - 已新增記錄一個明確責任債務：`status_sync` 目前仍同時承擔 mirror consume、draft write、與 heartbeat

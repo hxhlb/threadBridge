@@ -39,6 +39,12 @@
 - 已落地的止血修正是：把 upstream `turn_id` 帶進 `preview_text`，並用 turn-bound draft claim 先做同 turn 去重
 - 但 today 仍有一個責任問題待收斂：`status_sync` 目前同時承擔 mirror consume、draft write、與 draft heartbeat
 
+目前新增確認的一個能力邊界是：
+
+- `threadBridge` 目前尚未正式支持「用戶 -> bot」的文件輸入能力
+- `bot -> 用戶` 的文件/媒體輸出路徑已存在，例如 `reply.md` attachment、workspace outbox `document` / `photo`、以及超限 warning fallback
+- 但這些既有能力仍屬 outbound delivery 子路徑；它們不等於 Telegram adapter 已完成一般化的雙向 file transfer feature
+
 ## 問題
 
 `threadBridge` 現在已經有多條 Telegram 送信 surface：
