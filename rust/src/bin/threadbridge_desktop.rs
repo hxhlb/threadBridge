@@ -134,7 +134,10 @@ mod macos_app {
         let _guard = init_runtime_json_logs(&runtime_config.debug_log_path)?;
         let management_api = runtime.block_on(spawn_management_api(runtime_config.clone()))?;
         runtime.block_on(management_api.set_native_workspace_picker_available(true));
-        let owner = Arc::new(runtime.block_on(DesktopRuntimeOwner::new(runtime_config.clone()))?);
+        let owner = Arc::new(runtime.block_on(DesktopRuntimeOwner::new(
+            runtime_config.clone(),
+            management_api.runtime_telemetry_handle(),
+        ))?);
         runtime.block_on(management_api.set_runtime_owner(Some((*owner).clone())));
         let shared_control = runtime.block_on(RuntimeControlContext::new(
             runtime_config.clone(),
@@ -366,24 +369,82 @@ mod macos_app {
     }
 
     async fn collect_snapshot(management_api: &ManagementApiHandle) -> Result<DesktopSnapshot> {
-        let setup = management_api.setup_state().await?;
-        let runtime = management_api.runtime_overview().await?;
-        Ok(DesktopSnapshot {
-            setup,
-            health: runtime.health,
-            workspaces: runtime.workspaces,
-        })
+        let started_at = Instant::now();
+        let result = async {
+            let setup = management_api.setup_state().await?;
+            let runtime = management_api.runtime_overview().await?;
+            Ok::<DesktopSnapshot, anyhow::Error>(DesktopSnapshot {
+                setup,
+                health: runtime.health,
+                workspaces: runtime.workspaces,
+            })
+        }
+        .await;
+
+        let mut metrics = threadbridge_rust::telemetry::RuntimeTelemetryMetrics::new();
+        match &result {
+            Ok(snapshot) => {
+                metrics.insert(
+                    "workspace_count".to_owned(),
+                    snapshot.workspaces.len() as u64,
+                );
+                metrics.insert(
+                    "running_workspaces".to_owned(),
+                    snapshot.health.running_workspaces as u64,
+                );
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.collect_snapshot",
+                    started_at.into(),
+                    "ok",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    metrics,
+                    None,
+                );
+            }
+            Err(error) => {
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.collect_snapshot",
+                    started_at.into(),
+                    "error",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    metrics,
+                    Some(error.to_string()),
+                );
+            }
+        }
+
+        result
     }
 
     async fn send_snapshot(
         management_api: &ManagementApiHandle,
         proxy: &EventLoopProxy<UserEvent>,
     ) {
+        let started_at = Instant::now();
         match collect_snapshot(management_api).await {
             Ok(snapshot) => {
+                let workspace_count = snapshot.workspaces.len() as u64;
                 let _ = proxy.send_event(UserEvent::Snapshot(Box::new(snapshot)));
+                let mut metrics = threadbridge_rust::telemetry::RuntimeTelemetryMetrics::new();
+                metrics.insert("workspace_count".to_owned(), workspace_count);
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.send_snapshot",
+                    started_at.into(),
+                    "ok",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    metrics,
+                    None,
+                );
             }
             Err(error) => {
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.send_snapshot",
+                    started_at.into(),
+                    "error",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    threadbridge_rust::telemetry::RuntimeTelemetryMetrics::new(),
+                    Some(error.to_string()),
+                );
                 warn!(event = "desktop_runtime.snapshot.failed", error = %error);
             }
         }
@@ -420,23 +481,50 @@ mod macos_app {
         management_api: &ManagementApiHandle,
         owner: &DesktopRuntimeOwner,
     ) {
-        let Ok(workspaces) = management_api.workspace_views().await else {
-            return;
-        };
-        let targets = workspaces
-            .into_iter()
-            .filter(|workspace| !workspace.conflict)
-            .map(|workspace| workspace.workspace_cwd)
-            .collect::<Vec<_>>();
-        if targets.is_empty() {
-            return;
+        let started_at = Instant::now();
+        let result = async {
+            let workspaces = management_api.workspace_views().await?;
+            let targets = workspaces
+                .into_iter()
+                .filter(|workspace| !workspace.conflict)
+                .map(|workspace| workspace.workspace_cwd)
+                .collect::<Vec<_>>();
+            if targets.is_empty() {
+                return Ok::<usize, anyhow::Error>(0);
+            }
+            owner.reconcile_managed_workspaces(targets.clone()).await?;
+            Ok(targets.len())
         }
-        if let Err(error) = owner.reconcile_managed_workspaces(targets).await {
-            warn!(
-                event = "desktop_runtime.owner.reconcile.failed",
-                error = %error,
-                "desktop runtime owner reconciliation failed"
-            );
+        .await;
+
+        let mut metrics = threadbridge_rust::telemetry::RuntimeTelemetryMetrics::new();
+        match result {
+            Ok(target_count) => {
+                metrics.insert("target_workspaces".to_owned(), target_count as u64);
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.reconcile_runtime_owner",
+                    started_at.into(),
+                    "ok",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    metrics,
+                    None,
+                );
+            }
+            Err(error) => {
+                management_api.runtime_telemetry_handle().record_duration(
+                    "desktop.reconcile_runtime_owner",
+                    started_at.into(),
+                    "error",
+                    threadbridge_rust::telemetry::RuntimeTelemetryFields::new(),
+                    metrics,
+                    Some(error.to_string()),
+                );
+                warn!(
+                    event = "desktop_runtime.owner.reconcile.failed",
+                    error = %error,
+                    "desktop runtime owner reconciliation failed"
+                );
+            }
         }
     }
 

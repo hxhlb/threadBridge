@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -11,8 +12,10 @@ use tracing::info;
 use crate::app_server_runtime::{WorkspaceRuntimeManager, daemon_endpoint_is_live};
 use crate::config::RuntimeConfig;
 use crate::hcodex_ingress::hcodex_ingress_endpoint_is_live;
+use crate::telemetry::{RuntimeTelemetryFields, RuntimeTelemetryHandle, RuntimeTelemetryMetrics};
 use crate::workspace::{
-    WorkspaceRuntimeEnsureMode, ensure_workspace_runtime_with_mode, validate_seed_template,
+    WorkspaceRuntimeEnsureMode, ensure_workspace_runtime_with_mode_and_telemetry,
+    validate_seed_template,
 };
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -63,10 +66,11 @@ pub struct DesktopRuntimeOwner {
     status: Arc<RwLock<RuntimeOwnerStatus>>,
     workspace_heartbeats: Arc<RwLock<BTreeMap<String, WorkspaceRuntimeHeartbeat>>>,
     reconcile_lock: Arc<Mutex<()>>,
+    telemetry: RuntimeTelemetryHandle,
 }
 
 impl DesktopRuntimeOwner {
-    pub async fn new(runtime: RuntimeConfig) -> Result<Self> {
+    pub async fn new(runtime: RuntimeConfig, telemetry: RuntimeTelemetryHandle) -> Result<Self> {
         let seed_template_path = validate_seed_template(&runtime.runtime_template_path())?;
         Ok(Self {
             app_server_runtime: WorkspaceRuntimeManager::new_with_data_root(
@@ -84,6 +88,7 @@ impl DesktopRuntimeOwner {
             })),
             workspace_heartbeats: Arc::new(RwLock::new(BTreeMap::new())),
             reconcile_lock: Arc::new(Mutex::new(())),
+            telemetry,
         })
     }
 
@@ -111,6 +116,7 @@ impl DesktopRuntimeOwner {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        let reconcile_started_at = Instant::now();
         let _reconcile_guard = self.reconcile_lock.lock().await;
         let unique_workspaces = workspaces
             .into_iter()
@@ -130,18 +136,20 @@ impl DesktopRuntimeOwner {
         }
         for workspace in &unique_workspaces {
             let workspace_path = Path::new(workspace);
+            let workspace_started_at = Instant::now();
             info!(
                 event = "runtime_owner.workspace.reconcile_started",
                 workspace = %workspace_path.display(),
                 "desktop runtime owner started reconciling workspace"
             );
             let step = async {
-                ensure_workspace_runtime_with_mode(
+                ensure_workspace_runtime_with_mode_and_telemetry(
                     &self.runtime.runtime_support_root_path,
                     &self.runtime.data_root_path,
                     &self.seed_template_path,
                     workspace_path,
                     WorkspaceRuntimeEnsureMode::PassiveReconcile,
+                    Some(&self.telemetry),
                 )
                 .await?;
                 let runtime = self
@@ -166,6 +174,18 @@ impl DesktopRuntimeOwner {
             let ensured_ingress = match step {
                 Ok(ensured_ingress) => ensured_ingress,
                 Err(error) => {
+                    let mut fields = RuntimeTelemetryFields::new();
+                    fields.insert("workspace".to_owned(), workspace.clone());
+                    let mut metrics = RuntimeTelemetryMetrics::new();
+                    metrics.insert("ensured_ingress".to_owned(), 0);
+                    self.telemetry.record_duration(
+                        "runtime_owner.reconcile_workspace",
+                        workspace_started_at,
+                        "error",
+                        fields,
+                        metrics,
+                        Some(error.to_string()),
+                    );
                     self.record_workspace_heartbeat(
                         workspace_path,
                         WorkspaceRuntimeHeartbeat {
@@ -184,9 +204,42 @@ impl DesktopRuntimeOwner {
                     status.last_reconcile_finished_at = Some(finished_at);
                     status.last_error = Some(error.to_string());
                     status.last_report = report.clone();
+                    let mut metrics = RuntimeTelemetryMetrics::new();
+                    metrics.insert(
+                        "scanned_workspaces".to_owned(),
+                        report.scanned_workspaces as u64,
+                    );
+                    metrics.insert(
+                        "ensured_workspaces".to_owned(),
+                        report.ensured_workspaces as u64,
+                    );
+                    metrics.insert(
+                        "ensured_ingresses".to_owned(),
+                        report.ensured_ingresses as u64,
+                    );
+                    self.telemetry.record_duration(
+                        "runtime_owner.reconcile_managed_workspaces",
+                        reconcile_started_at,
+                        "error",
+                        RuntimeTelemetryFields::new(),
+                        metrics,
+                        Some(error.to_string()),
+                    );
                     return Err(error);
                 }
             };
+            let mut fields = RuntimeTelemetryFields::new();
+            fields.insert("workspace".to_owned(), workspace.clone());
+            let mut metrics = RuntimeTelemetryMetrics::new();
+            metrics.insert("ensured_ingress".to_owned(), u64::from(ensured_ingress));
+            self.telemetry.record_duration(
+                "runtime_owner.reconcile_workspace",
+                workspace_started_at,
+                "ok",
+                fields,
+                metrics,
+                None,
+            );
             self.record_workspace_heartbeat(
                 workspace_path,
                 heartbeat_for_workspace(workspace_path).await,
@@ -205,6 +258,27 @@ impl DesktopRuntimeOwner {
         status.last_successful_reconcile_at = Some(finished_at);
         status.last_error = None;
         status.last_report = report.clone();
+        let mut metrics = RuntimeTelemetryMetrics::new();
+        metrics.insert(
+            "scanned_workspaces".to_owned(),
+            report.scanned_workspaces as u64,
+        );
+        metrics.insert(
+            "ensured_workspaces".to_owned(),
+            report.ensured_workspaces as u64,
+        );
+        metrics.insert(
+            "ensured_ingresses".to_owned(),
+            report.ensured_ingresses as u64,
+        );
+        self.telemetry.record_duration(
+            "runtime_owner.reconcile_managed_workspaces",
+            reconcile_started_at,
+            "ok",
+            RuntimeTelemetryFields::new(),
+            metrics,
+            None,
+        );
         Ok(report)
     }
 

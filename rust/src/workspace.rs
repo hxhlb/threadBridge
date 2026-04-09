@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use tokio::fs;
 
 use crate::execution_mode::ensure_workspace_execution_config;
+use crate::telemetry::{RuntimeTelemetryFields, RuntimeTelemetryHandle, RuntimeTelemetryMetrics};
 use crate::workspace_status::ensure_workspace_status_surface;
 
 pub const THREADBRIDGE_RUNTIME_DIR: &str = ".threadbridge";
@@ -22,6 +24,33 @@ enum CodexSourcePreference {
 pub enum WorkspaceRuntimeEnsureMode {
     ExplicitSync,
     PassiveReconcile,
+}
+
+#[derive(Default)]
+struct WorkspaceEnsureStats {
+    files_written: u64,
+    files_skipped: u64,
+    mode_changes: u64,
+    mode_unchanged: u64,
+    managed_codex_copied: u64,
+}
+
+impl WorkspaceEnsureStats {
+    fn record_write(&mut self, changed: bool) {
+        if changed {
+            self.files_written += 1;
+        } else {
+            self.files_skipped += 1;
+        }
+    }
+
+    fn record_mode_change(&mut self, changed: bool) {
+        if changed {
+            self.mode_changes += 1;
+        } else {
+            self.mode_unchanged += 1;
+        }
+    }
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -259,10 +288,6 @@ fn sync_managed_appendix(existing: &str, appendix: &str) -> String {
     format!("{}\n\n{}", existing.trim_end(), block)
 }
 
-async fn write_text_file(path: &Path, contents: &str) -> Result<()> {
-    write_text_file_if_changed(path, contents).await.map(|_| ())
-}
-
 async fn write_text_file_if_changed(path: &Path, contents: &str) -> Result<bool> {
     match fs::read_to_string(path).await {
         Ok(existing) if existing == contents => return Ok(false),
@@ -277,10 +302,6 @@ async fn write_text_file_if_changed(path: &Path, contents: &str) -> Result<bool>
         .await
         .map_err(|error| anyhow!("failed to write {}: {}", path.display(), error))?;
     Ok(true)
-}
-
-async fn set_mode(path: &Path, mode: u32) -> Result<()> {
-    set_mode_if_changed(path, mode).await.map(|_| ())
 }
 
 async fn set_mode_if_changed(path: &Path, mode: u32) -> Result<bool> {
@@ -310,12 +331,13 @@ pub async fn ensure_workspace_runtime(
     seed_template_path: &Path,
     workspace_path: &Path,
 ) -> Result<PathBuf> {
-    ensure_workspace_runtime_with_mode(
+    ensure_workspace_runtime_with_mode_and_telemetry(
         runtime_support_root,
         data_root,
         seed_template_path,
         workspace_path,
         WorkspaceRuntimeEnsureMode::ExplicitSync,
+        None,
     )
     .await
 }
@@ -327,127 +349,205 @@ pub async fn ensure_workspace_runtime_with_mode(
     workspace_path: &Path,
     ensure_mode: WorkspaceRuntimeEnsureMode,
 ) -> Result<PathBuf> {
-    let codex_source_preference = read_codex_source_preference(data_root).await?;
-    let config_env_path = data_root.join("config.env.local");
-    let threadbridge_executable = std::env::current_exe()
-        .context("failed to resolve current threadBridge executable path")?;
-    fs::create_dir_all(workspace_path).await.with_context(|| {
-        format!(
-            "failed to create workspace directory: {}",
-            workspace_path.display()
-        )
-    })?;
+    ensure_workspace_runtime_with_mode_and_telemetry(
+        runtime_support_root,
+        data_root,
+        seed_template_path,
+        workspace_path,
+        ensure_mode,
+        None,
+    )
+    .await
+}
 
-    let appendix = fs::read_to_string(seed_template_path)
-        .await
-        .with_context(|| {
+pub async fn ensure_workspace_runtime_with_mode_and_telemetry(
+    runtime_support_root: &Path,
+    data_root: &Path,
+    seed_template_path: &Path,
+    workspace_path: &Path,
+    ensure_mode: WorkspaceRuntimeEnsureMode,
+    telemetry: Option<&RuntimeTelemetryHandle>,
+) -> Result<PathBuf> {
+    let started_at = Instant::now();
+    let mut stats = WorkspaceEnsureStats::default();
+    let result = async {
+        let codex_source_preference = read_codex_source_preference(data_root).await?;
+        let config_env_path = data_root.join("config.env.local");
+        let threadbridge_executable = std::env::current_exe()
+            .context("failed to resolve current threadBridge executable path")?;
+        fs::create_dir_all(workspace_path).await.with_context(|| {
             format!(
-                "failed to read threadBridge appendix template: {}",
-                seed_template_path.display()
+                "failed to create workspace directory: {}",
+                workspace_path.display()
             )
         })?;
 
-    let agents_path = workspace_path.join("AGENTS.md");
-    match fs::read_to_string(&agents_path).await {
-        Ok(existing) => {
-            let updated = sync_managed_appendix(&existing, &appendix);
-            if updated != existing {
-                write_text_file(&agents_path, &updated).await?;
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let initial_content = managed_appendix_block(&appendix);
-            write_text_file(&agents_path, &initial_content).await?;
-        }
-        Err(error) => {
-            return Err(anyhow!(
-                "failed to read {}: {}",
-                agents_path.display(),
-                error
-            ));
-        }
-    }
-
-    let runtime_root = workspace_path.join(THREADBRIDGE_RUNTIME_DIR);
-    let bin_dir = runtime_root.join("bin");
-    let shell_dir = runtime_root.join("shell");
-    let tool_requests_dir = runtime_root.join("tool_requests");
-    let tool_results_dir = runtime_root.join("tool_results");
-    fs::create_dir_all(&bin_dir).await?;
-    fs::create_dir_all(&shell_dir).await?;
-    fs::create_dir_all(&tool_requests_dir).await?;
-    fs::create_dir_all(&tool_results_dir).await?;
-    write_text_file(&runtime_root.join(".gitignore"), build_runtime_gitignore()).await?;
-    ensure_workspace_status_surface(workspace_path).await?;
-    ensure_workspace_execution_config(workspace_path).await?;
-
-    for (tool, filename) in [
-        ("build_prompt_config.py", "build_prompt_config"),
-        ("generate_image.py", "generate_image"),
-        ("send_telegram_media.py", "send_telegram_media"),
-    ] {
-        let wrapper_path = bin_dir.join(filename);
-        let wrapper = build_wrapper_script(tool, runtime_support_root, &config_env_path);
-        write_text_file(&wrapper_path, &wrapper).await?;
-        set_mode(&wrapper_path, 0o755).await?;
-    }
-
-    let hcodex_path = bin_dir.join("hcodex");
-    write_text_file(
-        &hcodex_path,
-        &build_hcodex_launcher_script(
-            workspace_path,
-            data_root,
-            &threadbridge_executable,
-            codex_source_preference,
-        ),
-    )
-    .await?;
-    set_mode(&hcodex_path, 0o755).await?;
-
-    let shell_snippet_path = shell_dir.join("codex-sync.bash");
-    write_text_file(
-        &shell_snippet_path,
-        &build_hcodex_shell_compat_script(workspace_path),
-    )
-    .await?;
-    set_mode(&shell_snippet_path, 0o644).await?;
-
-    if codex_source_preference == CodexSourcePreference::Brew {
-        let managed_codex_source = data_root.join(MANAGED_CODEX_CACHE_BINARY);
-        if fs::try_exists(&managed_codex_source)
+        let appendix = fs::read_to_string(seed_template_path)
             .await
             .with_context(|| {
                 format!(
-                    "failed to inspect managed Codex binary: {}",
-                    managed_codex_source.display()
+                    "failed to read threadBridge appendix template: {}",
+                    seed_template_path.display()
                 )
-            })?
-        {
-            let managed_codex_dest = bin_dir.join("codex");
-            let should_copy = ensure_mode == WorkspaceRuntimeEnsureMode::ExplicitSync
-                || !fs::try_exists(&managed_codex_dest).await.with_context(|| {
+            })?;
+
+        let agents_path = workspace_path.join("AGENTS.md");
+        match fs::read_to_string(&agents_path).await {
+            Ok(existing) => {
+                let updated = sync_managed_appendix(&existing, &appendix);
+                if updated != existing {
+                    stats.record_write(write_text_file_if_changed(&agents_path, &updated).await?);
+                } else {
+                    stats.record_write(false);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let initial_content = managed_appendix_block(&appendix);
+                stats.record_write(
+                    write_text_file_if_changed(&agents_path, &initial_content).await?,
+                );
+            }
+            Err(error) => {
+                return Err(anyhow!(
+                    "failed to read {}: {}",
+                    agents_path.display(),
+                    error
+                ));
+            }
+        }
+
+        let runtime_root = workspace_path.join(THREADBRIDGE_RUNTIME_DIR);
+        let bin_dir = runtime_root.join("bin");
+        let shell_dir = runtime_root.join("shell");
+        let tool_requests_dir = runtime_root.join("tool_requests");
+        let tool_results_dir = runtime_root.join("tool_results");
+        fs::create_dir_all(&bin_dir).await?;
+        fs::create_dir_all(&shell_dir).await?;
+        fs::create_dir_all(&tool_requests_dir).await?;
+        fs::create_dir_all(&tool_results_dir).await?;
+        stats.record_write(
+            write_text_file_if_changed(&runtime_root.join(".gitignore"), build_runtime_gitignore())
+                .await?,
+        );
+        ensure_workspace_status_surface(workspace_path).await?;
+        ensure_workspace_execution_config(workspace_path).await?;
+
+        for (tool, filename) in [
+            ("build_prompt_config.py", "build_prompt_config"),
+            ("generate_image.py", "generate_image"),
+            ("send_telegram_media.py", "send_telegram_media"),
+        ] {
+            let wrapper_path = bin_dir.join(filename);
+            let wrapper = build_wrapper_script(tool, runtime_support_root, &config_env_path);
+            stats.record_write(write_text_file_if_changed(&wrapper_path, &wrapper).await?);
+            stats.record_mode_change(set_mode_if_changed(&wrapper_path, 0o755).await?);
+        }
+
+        let hcodex_path = bin_dir.join("hcodex");
+        stats.record_write(
+            write_text_file_if_changed(
+                &hcodex_path,
+                &build_hcodex_launcher_script(
+                    workspace_path,
+                    data_root,
+                    &threadbridge_executable,
+                    codex_source_preference,
+                ),
+            )
+            .await?,
+        );
+        stats.record_mode_change(set_mode_if_changed(&hcodex_path, 0o755).await?);
+
+        let shell_snippet_path = shell_dir.join("codex-sync.bash");
+        stats.record_write(
+            write_text_file_if_changed(
+                &shell_snippet_path,
+                &build_hcodex_shell_compat_script(workspace_path),
+            )
+            .await?,
+        );
+        stats.record_mode_change(set_mode_if_changed(&shell_snippet_path, 0o644).await?);
+
+        if codex_source_preference == CodexSourcePreference::Brew {
+            let managed_codex_source = data_root.join(MANAGED_CODEX_CACHE_BINARY);
+            if fs::try_exists(&managed_codex_source)
+                .await
+                .with_context(|| {
                     format!(
-                        "failed to inspect workspace managed Codex binary: {}",
-                        managed_codex_dest.display()
+                        "failed to inspect managed Codex binary: {}",
+                        managed_codex_source.display()
                     )
-                })?;
-            if should_copy {
-                fs::copy(&managed_codex_source, &managed_codex_dest)
-                    .await
-                    .with_context(|| {
+                })?
+            {
+                let managed_codex_dest = bin_dir.join("codex");
+                let should_copy = ensure_mode == WorkspaceRuntimeEnsureMode::ExplicitSync
+                    || !fs::try_exists(&managed_codex_dest).await.with_context(|| {
                         format!(
-                            "failed to copy managed Codex binary from {} to {}",
-                            managed_codex_source.display(),
+                            "failed to inspect workspace managed Codex binary: {}",
                             managed_codex_dest.display()
                         )
                     })?;
+                if should_copy {
+                    fs::copy(&managed_codex_source, &managed_codex_dest)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to copy managed Codex binary from {} to {}",
+                                managed_codex_source.display(),
+                                managed_codex_dest.display()
+                            )
+                        })?;
+                    stats.managed_codex_copied += 1;
+                }
+                stats.record_mode_change(set_mode_if_changed(&managed_codex_dest, 0o755).await?);
             }
-            set_mode(&managed_codex_dest, 0o755).await?;
+        }
+
+        Ok::<PathBuf, anyhow::Error>(runtime_root)
+    }
+    .await;
+
+    if let Some(telemetry) = telemetry {
+        let mut fields = RuntimeTelemetryFields::new();
+        fields.insert("workspace".to_owned(), workspace_path.display().to_string());
+        fields.insert(
+            "ensure_mode".to_owned(),
+            match ensure_mode {
+                WorkspaceRuntimeEnsureMode::ExplicitSync => "explicit_sync",
+                WorkspaceRuntimeEnsureMode::PassiveReconcile => "passive_reconcile",
+            }
+            .to_owned(),
+        );
+        let mut metrics = RuntimeTelemetryMetrics::new();
+        metrics.insert("files_written".to_owned(), stats.files_written);
+        metrics.insert("files_skipped".to_owned(), stats.files_skipped);
+        metrics.insert("mode_changes".to_owned(), stats.mode_changes);
+        metrics.insert("mode_unchanged".to_owned(), stats.mode_unchanged);
+        metrics.insert(
+            "managed_codex_copied".to_owned(),
+            stats.managed_codex_copied,
+        );
+        match &result {
+            Ok(_) => telemetry.record_duration(
+                "workspace.ensure_runtime",
+                started_at,
+                "ok",
+                fields,
+                metrics,
+                None,
+            ),
+            Err(error) => telemetry.record_duration(
+                "workspace.ensure_runtime",
+                started_at,
+                "error",
+                fields,
+                metrics,
+                Some(error.to_string()),
+            ),
         }
     }
 
-    Ok(runtime_root)
+    result
 }
 
 pub fn validate_seed_template(seed_template_path: &Path) -> Result<PathBuf> {

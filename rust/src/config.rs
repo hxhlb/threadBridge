@@ -36,6 +36,13 @@ impl RuntimeConfig {
             .join("AGENTS.md")
     }
 
+    pub fn runtime_telemetry_path(&self) -> PathBuf {
+        self.debug_log_path
+            .parent()
+            .unwrap_or(self.data_root_path.as_path())
+            .join("runtime-telemetry.jsonl")
+    }
+
     pub fn supports_runtime_support_rebuild(&self) -> bool {
         self.runtime_support_root_path != self.runtime_support_seed_root_path
     }

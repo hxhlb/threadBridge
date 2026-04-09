@@ -50,7 +50,14 @@ use crate::runtime_protocol::{
     build_working_session_mirror_debug_events, build_working_session_records,
     build_working_session_summaries, build_workspace_views,
 };
-use crate::workspace::{ensure_workspace_runtime, validate_seed_template};
+use crate::telemetry::{
+    RuntimeTelemetryFields, RuntimeTelemetryHandle, RuntimeTelemetryMetrics,
+    RuntimeTelemetrySnapshot,
+};
+use crate::workspace::{
+    WorkspaceRuntimeEnsureMode, ensure_workspace_runtime_with_mode_and_telemetry,
+    validate_seed_template,
+};
 
 const MANAGED_CODEX_SOURCE_FILE: &str = ".threadbridge/codex/source.txt";
 const MANAGED_CODEX_CACHE_BINARY: &str = ".threadbridge/codex/codex";
@@ -119,6 +126,14 @@ impl ManagementApiHandle {
 
     pub async fn runtime_overview(&self) -> Result<ManagementRuntimeOverview> {
         self.state.runtime_overview().await
+    }
+
+    pub fn runtime_telemetry_handle(&self) -> RuntimeTelemetryHandle {
+        self.state.runtime_telemetry.clone()
+    }
+
+    pub fn runtime_telemetry_snapshot(&self, limit: usize) -> RuntimeTelemetrySnapshot {
+        self.state.runtime_telemetry.snapshot(limit)
     }
 
     pub async fn thread_views(&self) -> Result<Vec<ThreadStateView>> {
@@ -198,6 +213,7 @@ struct ManagementApiState {
     native_workspace_picker_available: Arc<RwLock<bool>>,
     bot_identity: Arc<RwLock<CachedTelegramBotIdentity>>,
     managed_codex_version_cache: Arc<RwLock<Option<ManagedCodexVersionCacheEntry>>>,
+    runtime_telemetry: RuntimeTelemetryHandle,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +300,12 @@ struct TranscriptQuery {
     #[serde(default)]
     delivery: Option<TranscriptMirrorDelivery>,
     #[serde(default = "default_transcript_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeTelemetryQuery {
+    #[serde(default = "default_runtime_telemetry_limit")]
     limit: usize,
 }
 
@@ -389,8 +411,13 @@ fn default_transcript_limit() -> usize {
     40
 }
 
+fn default_runtime_telemetry_limit() -> usize {
+    200
+}
+
 pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementApiHandle> {
     let repository = ThreadRepository::open(&runtime.data_root_path).await?;
+    let runtime_telemetry = RuntimeTelemetryHandle::new(runtime.runtime_telemetry_path());
     let state = Arc::new(ManagementApiState {
         runtime: runtime.clone(),
         repository,
@@ -401,6 +428,7 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
         native_workspace_picker_available: Arc::new(RwLock::new(false)),
         bot_identity: Arc::new(RwLock::new(CachedTelegramBotIdentity::default())),
         managed_codex_version_cache: Arc::new(RwLock::new(None)),
+        runtime_telemetry,
     });
     state.refresh_cached_bot_identity().await?;
     let bind_addr = runtime.management_bind_addr;
@@ -435,6 +463,7 @@ pub async fn spawn_management_api(runtime: RuntimeConfig) -> Result<ManagementAp
             post(post_update_managed_codex_build_defaults),
         )
         .route("/api/runtime-health", get(get_runtime_health))
+        .route("/api/runtime-telemetry", get(get_runtime_telemetry))
         .route(
             "/api/runtime-owner/reconcile",
             post(post_reconcile_runtime_owner),
@@ -613,6 +642,13 @@ async fn get_runtime_health(
     State(state): State<Arc<ManagementApiState>>,
 ) -> Result<Json<RuntimeHealthView>, ManagementApiError> {
     Ok(Json(state.runtime_health().await?))
+}
+
+async fn get_runtime_telemetry(
+    State(state): State<Arc<ManagementApiState>>,
+    Query(query): Query<RuntimeTelemetryQuery>,
+) -> Result<Json<RuntimeTelemetrySnapshot>, ManagementApiError> {
+    Ok(Json(state.runtime_telemetry.snapshot(query.limit)))
 }
 
 async fn get_threads(
@@ -1009,8 +1045,13 @@ impl ManagementApiState {
         *cache = None;
     }
 
-    async fn cached_managed_codex_version(&self, binary_path: Option<&Path>) -> Option<String> {
-        let binary_path = binary_path.filter(|path| path.exists())?;
+    async fn cached_managed_codex_version(
+        &self,
+        binary_path: Option<&Path>,
+    ) -> (Option<String>, bool) {
+        let Some(binary_path) = binary_path.filter(|path| path.exists()) else {
+            return (None, false);
+        };
         let metadata = tokio::fs::metadata(binary_path).await.ok();
         let modified_at = metadata.as_ref().and_then(|value| value.modified().ok());
         let binary_path_string = binary_path.display().to_string();
@@ -1021,7 +1062,7 @@ impl ManagementApiState {
             if let Some(entry) = cache.as_ref()
                 && managed_codex_version_cache_hit(entry, &binary_path_string, modified_at, now)
             {
-                return entry.version.clone();
+                return (entry.version.clone(), true);
             }
         }
 
@@ -1033,7 +1074,7 @@ impl ManagementApiState {
             expires_at: Instant::now() + Duration::from_secs(300),
             version: version.clone(),
         });
-        version
+        (version, false)
     }
 
     async fn refresh_cached_bot_identity(&self) -> Result<()> {
@@ -1132,52 +1173,142 @@ impl ManagementApiState {
     }
 
     async fn runtime_overview(&self) -> Result<ManagementRuntimeOverview> {
-        let workspaces = self.workspace_views().await?;
-        let runtime_owner = match self.runtime_owner.read().await.clone() {
-            Some(owner) => owner.status().await,
-            None => RuntimeOwnerStatus::inactive(),
-        };
-        let health = build_runtime_health(
-            self.runtime.management_bind_addr.to_string(),
-            &workspaces,
-            runtime_owner,
-            self.managed_codex_view().await?,
-        );
-        Ok(ManagementRuntimeOverview { health, workspaces })
+        let started_at = Instant::now();
+        let result = async {
+            let workspaces = self.workspace_views().await?;
+            let runtime_owner = match self.runtime_owner.read().await.clone() {
+                Some(owner) => owner.status().await,
+                None => RuntimeOwnerStatus::inactive(),
+            };
+            let health = build_runtime_health(
+                self.runtime.management_bind_addr.to_string(),
+                &workspaces,
+                runtime_owner,
+                self.managed_codex_view().await?,
+            );
+            Ok::<ManagementRuntimeOverview, anyhow::Error>(ManagementRuntimeOverview {
+                health,
+                workspaces,
+            })
+        }
+        .await;
+
+        let mut metrics = RuntimeTelemetryMetrics::new();
+        match &result {
+            Ok(overview) => {
+                metrics.insert(
+                    "workspace_count".to_owned(),
+                    overview.workspaces.len() as u64,
+                );
+                metrics.insert(
+                    "running_workspaces".to_owned(),
+                    overview.health.running_workspaces as u64,
+                );
+                metrics.insert(
+                    "ready_workspaces".to_owned(),
+                    overview.health.ready_workspaces as u64,
+                );
+                metrics.insert(
+                    "broken_threads".to_owned(),
+                    overview.health.broken_threads as u64,
+                );
+                self.runtime_telemetry.record_duration(
+                    "management.runtime_overview",
+                    started_at,
+                    "ok",
+                    RuntimeTelemetryFields::new(),
+                    metrics,
+                    None,
+                );
+            }
+            Err(error) => {
+                self.runtime_telemetry.record_duration(
+                    "management.runtime_overview",
+                    started_at,
+                    "error",
+                    RuntimeTelemetryFields::new(),
+                    metrics,
+                    Some(error.to_string()),
+                );
+            }
+        }
+
+        result
     }
 
     async fn managed_codex_view(&self) -> Result<ManagedCodexView> {
-        let data_root = &self.runtime.data_root_path;
-        let source = read_managed_codex_source_preference(data_root).await?;
-        let binary_path = resolve_managed_codex_binary_path(data_root, source).await?;
-        let binary_ready = binary_path.as_ref().is_some_and(|path| path.exists());
-        let build_config_path = data_root.join(MANAGED_CODEX_BUILD_CONFIG_FILE);
-        let build_info_path = data_root.join(MANAGED_CODEX_BUILD_INFO_FILE);
-        let build_defaults = resolve_managed_codex_build_defaults(data_root).await?;
-        let version = self
-            .cached_managed_codex_version(binary_path.as_deref())
-            .await;
-        Ok(ManagedCodexView {
-            source: source.as_str(),
-            source_file_path: data_root
-                .join(MANAGED_CODEX_SOURCE_FILE)
-                .display()
-                .to_string(),
-            build_config_file_path: build_config_path.display().to_string(),
-            build_info_file_path: build_info_path.display().to_string(),
-            binary_path: binary_path
-                .unwrap_or_else(|| data_root.join(MANAGED_CODEX_CACHE_BINARY))
-                .display()
-                .to_string(),
-            binary_ready,
-            version,
-            build_defaults: ManagedCodexBuildDefaultsView {
-                source_repo: build_defaults.source_repo.display().to_string(),
-                source_rs_dir: build_defaults.source_rs_dir.display().to_string(),
-                build_profile: build_defaults.build_profile.as_str().to_owned(),
-            },
-            build_info: read_managed_codex_build_info(&build_info_path).await?,
-        })
+        let started_at = Instant::now();
+        let result = async {
+            let data_root = &self.runtime.data_root_path;
+            let source = read_managed_codex_source_preference(data_root).await?;
+            let binary_path = resolve_managed_codex_binary_path(data_root, source).await?;
+            let binary_ready = binary_path.as_ref().is_some_and(|path| path.exists());
+            let build_config_path = data_root.join(MANAGED_CODEX_BUILD_CONFIG_FILE);
+            let build_info_path = data_root.join(MANAGED_CODEX_BUILD_INFO_FILE);
+            let build_defaults = resolve_managed_codex_build_defaults(data_root).await?;
+            let (version, cache_hit) = self
+                .cached_managed_codex_version(binary_path.as_deref())
+                .await;
+            Ok::<(ManagedCodexView, bool), anyhow::Error>((
+                ManagedCodexView {
+                    source: source.as_str(),
+                    source_file_path: data_root
+                        .join(MANAGED_CODEX_SOURCE_FILE)
+                        .display()
+                        .to_string(),
+                    build_config_file_path: build_config_path.display().to_string(),
+                    build_info_file_path: build_info_path.display().to_string(),
+                    binary_path: binary_path
+                        .unwrap_or_else(|| data_root.join(MANAGED_CODEX_CACHE_BINARY))
+                        .display()
+                        .to_string(),
+                    binary_ready,
+                    version,
+                    build_defaults: ManagedCodexBuildDefaultsView {
+                        source_repo: build_defaults.source_repo.display().to_string(),
+                        source_rs_dir: build_defaults.source_rs_dir.display().to_string(),
+                        build_profile: build_defaults.build_profile.as_str().to_owned(),
+                    },
+                    build_info: read_managed_codex_build_info(&build_info_path).await?,
+                },
+                cache_hit,
+            ))
+        }
+        .await;
+
+        let mut fields = RuntimeTelemetryFields::new();
+        let mut metrics = RuntimeTelemetryMetrics::new();
+        match &result {
+            Ok((view, cache_hit)) => {
+                fields.insert("source".to_owned(), view.source.to_owned());
+                fields.insert("cache_hit".to_owned(), cache_hit.to_string());
+                metrics.insert("binary_ready".to_owned(), u64::from(view.binary_ready));
+                metrics.insert(
+                    "version_present".to_owned(),
+                    u64::from(view.version.is_some()),
+                );
+                self.runtime_telemetry.record_duration(
+                    "management.managed_codex_view",
+                    started_at,
+                    "ok",
+                    fields,
+                    metrics,
+                    None,
+                );
+            }
+            Err(error) => {
+                self.runtime_telemetry.record_duration(
+                    "management.managed_codex_view",
+                    started_at,
+                    "error",
+                    fields,
+                    metrics,
+                    Some(error.to_string()),
+                );
+            }
+        }
+
+        result.map(|(view, _cache_hit)| view)
     }
 
     async fn update_managed_codex_preference(
@@ -1200,11 +1331,13 @@ impl ManagementApiState {
             if seen.contains_key(&workspace_cwd) {
                 continue;
             }
-            ensure_workspace_runtime(
+            ensure_workspace_runtime_with_mode_and_telemetry(
                 &self.runtime.runtime_support_root_path,
                 &self.runtime.data_root_path,
                 &seed_template_path,
                 Path::new(&workspace_cwd),
+                WorkspaceRuntimeEnsureMode::ExplicitSync,
+                Some(&self.runtime_telemetry),
             )
             .await?;
             seen.insert(workspace_cwd, true);
@@ -1399,8 +1532,62 @@ impl ManagementApiState {
     }
 
     async fn workspace_views(&self) -> Result<Vec<ManagedWorkspaceView>> {
+        let started_at = Instant::now();
         let runtime_owner = self.runtime_owner.read().await.clone();
-        build_workspace_views(&self.repository, runtime_owner.as_ref()).await
+        let result = build_workspace_views(&self.repository, runtime_owner.as_ref()).await;
+
+        let mut metrics = RuntimeTelemetryMetrics::new();
+        match &result {
+            Ok(workspaces) => {
+                metrics.insert("workspace_count".to_owned(), workspaces.len() as u64);
+                metrics.insert(
+                    "conflicted_workspaces".to_owned(),
+                    workspaces
+                        .iter()
+                        .filter(|workspace| workspace.conflict)
+                        .count() as u64,
+                );
+                metrics.insert(
+                    "running_workspaces".to_owned(),
+                    workspaces
+                        .iter()
+                        .filter(|workspace| workspace.run_status == "running")
+                        .count() as u64,
+                );
+                metrics.insert(
+                    "degraded_workspaces".to_owned(),
+                    workspaces
+                        .iter()
+                        .filter(|workspace| {
+                            matches!(
+                                workspace.runtime_readiness,
+                                "degraded" | "pending_adoption" | "unavailable"
+                            )
+                        })
+                        .count() as u64,
+                );
+                self.runtime_telemetry.record_duration(
+                    "management.workspace_views",
+                    started_at,
+                    "ok",
+                    RuntimeTelemetryFields::new(),
+                    metrics,
+                    None,
+                );
+            }
+            Err(error) => {
+                self.runtime_telemetry.record_duration(
+                    "management.workspace_views",
+                    started_at,
+                    "error",
+                    RuntimeTelemetryFields::new(),
+                    metrics,
+                    Some(error.to_string()),
+                );
+            }
+        }
+
+        result
     }
 
     async fn thread_views(&self) -> Result<Vec<ThreadStateView>> {
@@ -2424,11 +2611,10 @@ impl IntoResponse for ManagementApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MANAGEMENT_UI_JS, ManagementApiHandle, ManagementEventSnapshot,
-        ManagedCodexVersionCacheEntry, MirrorPreviewDebugEventView,
-        UpdateTelegramSetupRequest, WorkingSessionRecordView, WorkingSessionSummaryView,
-        diff_management_event_snapshots, managed_codex_version_cache_hit,
-        spawn_management_api, write_env_file,
+        MANAGEMENT_UI_JS, ManagedCodexVersionCacheEntry, ManagementApiHandle,
+        ManagementEventSnapshot, MirrorPreviewDebugEventView, UpdateTelegramSetupRequest,
+        WorkingSessionRecordView, WorkingSessionSummaryView, diff_management_event_snapshots,
+        managed_codex_version_cache_hit, spawn_management_api, write_env_file,
     };
     use crate::app_server_runtime::WorkspaceRuntimeManager;
     use crate::collaboration_mode::CollaborationMode;
